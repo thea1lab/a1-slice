@@ -74,23 +74,28 @@ export default function ClipCard({
 
   return (
     <div
-      className={`bg-bg-card border rounded-2xl overflow-hidden transition-colors ${
+      className={`flex flex-row bg-bg-card border rounded-2xl overflow-hidden transition-colors ${
         clip.approved ? 'border-accent/30' : 'border-white/7 opacity-60'
       }`}
     >
-      <VideoPreview
-        videoPath={videoPath}
-        startMs={clip.startMs}
-        endMs={clip.endMs}
-      />
-      <div className="p-4 space-y-3">
-        <div className="flex items-start justify-between gap-2">
+      <div className="w-[280px] shrink-0">
+        <VideoPreview
+          videoPath={videoPath}
+          startMs={clip.startMs}
+          endMs={clip.endMs}
+        />
+      </div>
+      <div className="flex-1 p-4 flex flex-col justify-center gap-2 min-w-0">
+        <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="text-sm font-medium text-neutral-200 truncate">
+            <h3 className="text-sm font-medium text-neutral-200">
               {clip.title}
             </h3>
-            <p className="text-xs text-neutral-500 mt-0.5">
-              {formatDuration(clip.startMs, clip.endMs)}
+            <p className="text-xs text-neutral-400 font-mono mt-1">
+              {msToMMSSs(clip.startMs)} — {msToMMSSs(clip.endMs)}
+              <span className="text-neutral-500 ml-2">
+                ({formatDuration(clip.startMs, clip.endMs)})
+              </span>
             </p>
           </div>
           <button
@@ -115,7 +120,7 @@ export default function ClipCard({
               onBlur={handleStartBlur}
               className="w-20 bg-bg-input border border-white/12 rounded px-2 py-1 text-neutral-300 text-center font-mono"
             />
-            <span className="text-neutral-500">-</span>
+            <span className="text-neutral-500">—</span>
             <input
               type="text"
               value={endInput}

@@ -21,9 +21,10 @@ contextBridge.exposeInMainWorld('api', {
   analyzeTranscript: (
     videoPath: string,
     segments: TranscriptSegment[],
-    settings: AppSettings
+    settings: AppSettings,
+    userHint?: string
   ): Promise<AnalyzeResult> =>
-    ipcRenderer.invoke('analyze-transcript', videoPath, segments, settings),
+    ipcRenderer.invoke('analyze-transcript', videoPath, segments, settings, userHint),
 
   checkTranscript: (videoPath: string): Promise<CheckTranscriptResult> =>
     ipcRenderer.invoke('check-transcript', videoPath),

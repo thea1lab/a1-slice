@@ -252,7 +252,8 @@ ipcMain.handle(
     _event,
     videoPath: string,
     segments: TranscriptSegment[],
-    settings: AppSettings
+    settings: AppSettings,
+    userHint?: string
   ) => {
     cancelled = false
 
@@ -267,7 +268,8 @@ ipcMain.handle(
         segments,
         settings.provider,
         settings.model,
-        settings.apiKey
+        settings.apiKey,
+        userHint
       )
 
       if (cancelled) throw new Error('Cancelled')

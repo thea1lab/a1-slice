@@ -20,7 +20,8 @@ declare global {
       analyzeTranscript(
         videoPath: string,
         segments: TranscriptSegment[],
-        settings: AppSettings
+        settings: AppSettings,
+        userHint?: string
       ): Promise<AnalyzeResult>
       cutClips(
         videoPath: string,

@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import TranscriptViewer from './TranscriptViewer'
 import ProgressBar from './ProgressBar'
 import type { TranscriptSegment, ClipSegment, LLMProvider } from '../../shared/types'
 
 const DEFAULT_MODELS: Record<LLMProvider, string> = {
-  claude: 'claude-haiku-4-5-20251001',
+  claude: 'claude-sonnet-4-6',
   openai: 'gpt-5-mini-2025-08-07'
 }
 
@@ -14,6 +14,7 @@ interface StepReviewTranscriptProps {
   provider: LLMProvider
   model: string
   apiKey: string
+  userHint: string
   analyzing: boolean
   analyzePercent: number
   analyzeMessage: string
@@ -21,7 +22,8 @@ interface StepReviewTranscriptProps {
   onProviderChange: (provider: LLMProvider) => void
   onModelChange: (model: string) => void
   onApiKeyChange: (apiKey: string) => void
-  onAnalyze: () => void
+  onUserHintChange: (userHint: string) => void
+  onAnalyze: (userHint?: string) => void
   onLoadCachedAnalysis?: (clips: ClipSegment[], rawResponse: string) => void
   onCancel: () => void
 }
@@ -32,6 +34,7 @@ export default function StepReviewTranscript({
   provider,
   model,
   apiKey,
+  userHint,
   analyzing,
   analyzePercent,
   analyzeMessage,
@@ -39,11 +42,16 @@ export default function StepReviewTranscript({
   onProviderChange,
   onModelChange,
   onApiKeyChange,
+  onUserHintChange,
   onAnalyze,
   onLoadCachedAnalysis,
   onCancel
 }: StepReviewTranscriptProps): React.JSX.Element {
   const canAnalyze = apiKey.length > 0 && !analyzing
+
+  const handleAnalyze = useCallback(() => {
+    onAnalyze(userHint.trim() || undefined)
+  }, [onAnalyze, userHint]) as React.MouseEventHandler<HTMLButtonElement>
 
   const [cachedAnalysis, setCachedAnalysis] = useState<{
     clips: ClipSegment[]
@@ -120,6 +128,22 @@ export default function StepReviewTranscript({
           />
         </label>
 
+        {/* User suggestions */}
+        <label className="flex flex-col gap-1.5 text-xs text-neutral-400">
+          Suggestions for the AI (optional)
+          <textarea
+            value={userHint}
+            onChange={(e) => onUserHintChange(e.target.value)}
+            disabled={analyzing}
+            placeholder="e.g. &quot;Pick 2 clips focused on the demo moments&quot; or &quot;I want clips about the bug detection feature&quot;"
+            rows={2}
+            className="bg-bg-input border border-white/12 rounded-lg px-3 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors disabled:opacity-40 resize-none"
+          />
+          <span className="text-[11px] text-neutral-500">
+            Suggest themes, number of clips, or what parts to focus on.
+          </span>
+        </label>
+
         {/* Analysis progress or error */}
         {analyzing && (
           <div className="space-y-2">
@@ -152,7 +176,7 @@ export default function StepReviewTranscript({
                 Use Previous Analysis
               </button>
               <button
-                onClick={onAnalyze}
+                onClick={handleAnalyze}
                 disabled={!canAnalyze}
                 className="bg-bg-input border border-white/12 rounded-lg px-4 py-2 text-sm text-neutral-200 hover:border-white/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
@@ -167,7 +191,7 @@ export default function StepReviewTranscript({
           <div className="flex gap-3">
             {!analyzing ? (
               <button
-                onClick={onAnalyze}
+                onClick={handleAnalyze}
                 disabled={!canAnalyze}
                 className="flex-1 bg-accent hover:bg-accent-hover text-black font-semibold rounded-lg py-2.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-accent"
               >

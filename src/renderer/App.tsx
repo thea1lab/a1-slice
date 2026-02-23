@@ -18,7 +18,7 @@ import type {
 // --- Default models per provider ---
 
 const DEFAULT_MODELS: Record<LLMProvider, string> = {
-  claude: 'claude-haiku-4-5-20251001',
+  claude: 'claude-sonnet-4-6',
   openai: 'gpt-5-mini-2025-08-07'
 }
 
@@ -32,6 +32,7 @@ interface WizardState {
   provider: LLMProvider
   model: string
   apiKey: string
+  userHint: string
   settingsLoaded: boolean
 
   // Step 1: Select video
@@ -63,10 +64,11 @@ interface WizardState {
 }
 
 type WizardAction =
-  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string }
+  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string; userHint: string }
   | { type: 'SET_PROVIDER'; provider: LLMProvider }
   | { type: 'SET_MODEL'; model: string }
   | { type: 'SET_API_KEY'; apiKey: string }
+  | { type: 'SET_USER_HINT'; userHint: string }
   | { type: 'SET_VIDEO'; videoPath: string }
   | { type: 'GO_TO_STEP'; step: WizardStep }
   | { type: 'START_TRANSCRIBE' }
@@ -93,6 +95,7 @@ const initialState: WizardState = {
   provider: 'claude',
   model: DEFAULT_MODELS.claude,
   apiKey: '',
+  userHint: '',
   settingsLoaded: false,
 
   videoPath: null,
@@ -130,6 +133,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         provider: action.provider,
         model: action.model,
         apiKey: action.apiKey,
+        userHint: action.userHint,
         settingsLoaded: true
       }
     case 'SET_PROVIDER':
@@ -142,6 +146,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return { ...state, model: action.model }
     case 'SET_API_KEY':
       return { ...state, apiKey: action.apiKey }
+    case 'SET_USER_HINT':
+      return { ...state, userHint: action.userHint }
     case 'SET_VIDEO':
       return { ...state, videoPath: action.videoPath }
     case 'GO_TO_STEP':
@@ -287,6 +293,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         provider: state.provider,
         model: state.model,
         apiKey: state.apiKey,
+        userHint: state.userHint,
         settingsLoaded: state.settingsLoaded
       }
 
@@ -307,7 +314,8 @@ export default function App(): React.JSX.Element {
         type: 'LOAD_SETTINGS',
         provider: s.provider,
         model: s.model,
-        apiKey: s.apiKey
+        apiKey: s.apiKey,
+        userHint: s.userHint
       })
     })
   }, [])
@@ -318,9 +326,10 @@ export default function App(): React.JSX.Element {
     window.api.saveSettings({
       provider: state.provider,
       model: state.model,
-      apiKey: state.apiKey
+      apiKey: state.apiKey,
+      userHint: state.userHint
     })
-  }, [state.provider, state.model, state.apiKey, state.settingsLoaded])
+  }, [state.provider, state.model, state.apiKey, state.userHint, state.settingsLoaded])
 
   // Listen for pipeline progress — route to the correct step
   useEffect(() => {
@@ -381,14 +390,15 @@ export default function App(): React.JSX.Element {
     [state.segments]
   )
 
-  const handleAnalyze = useCallback(async () => {
+  const handleAnalyze = useCallback(async (userHint?: string) => {
     if (!state.videoPath) return
     dispatch({ type: 'START_ANALYZE' })
     const result = await window.api.analyzeTranscript(state.videoPath, state.segments, {
       provider: state.provider,
       model: state.model,
-      apiKey: state.apiKey
-    })
+      apiKey: state.apiKey,
+      userHint: state.userHint
+    }, userHint)
     if (result.success && result.clips) {
       clampClips(result.clips, result.rawResponse || '')
     } else {
@@ -487,6 +497,7 @@ export default function App(): React.JSX.Element {
             provider={state.provider}
             model={state.model}
             apiKey={state.apiKey}
+            userHint={state.userHint}
             analyzing={state.analyzing}
             analyzePercent={state.analyzePercent}
             analyzeMessage={state.analyzeMessage}
@@ -497,6 +508,9 @@ export default function App(): React.JSX.Element {
             onModelChange={(m) => dispatch({ type: 'SET_MODEL', model: m })}
             onApiKeyChange={(k) =>
               dispatch({ type: 'SET_API_KEY', apiKey: k })
+            }
+            onUserHintChange={(h) =>
+              dispatch({ type: 'SET_USER_HINT', userHint: h })
             }
             onAnalyze={handleAnalyze}
             onLoadCachedAnalysis={handleLoadCachedAnalysis}

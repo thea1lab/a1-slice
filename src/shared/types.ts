@@ -33,6 +33,7 @@ export interface AppSettings {
   provider: LLMProvider
   model: string
   apiKey: string
+  userHint: string
 }
 
 // --- Wizard types ---

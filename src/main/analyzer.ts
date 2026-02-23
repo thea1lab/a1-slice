@@ -69,10 +69,14 @@ export async function analyzeTranscript(
   segments: TranscriptSegment[],
   provider: LLMProvider,
   model: string,
-  apiKey: string
+  apiKey: string,
+  userHint?: string
 ): Promise<{ clips: ClipSegment[]; rawResponse: string }> {
   const formattedTranscript = formatTranscriptForLLM(segments)
-  const userMessage = `Here is the transcript:\n\n${formattedTranscript}\n\nIdentify the best clips from this transcript. Return only a JSON array.`
+  let userMessage = `Here is the transcript:\n\n${formattedTranscript}\n\nIdentify the best clips from this transcript. Return only a JSON array.`
+  if (userHint?.trim()) {
+    userMessage += `\n\nUser instructions: ${userHint.trim()}`
+  }
 
   let responseText: string
 

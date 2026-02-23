@@ -39,7 +39,7 @@ function makeState(
     currentStep: 'select' as WizardStep,
     completedSteps: [] as WizardStep[],
     provider: 'claude' as LLMProvider,
-    model: 'claude-haiku-4-5-20251001',
+    model: 'claude-sonnet-4-6',
     apiKey: '',
     settingsLoaded: false,
     videoPath: null,
@@ -79,7 +79,7 @@ describe('wizardReducer', () => {
       { type: 'SET_PROVIDER', provider: 'claude' }
     )
     expect(state.provider).toBe('claude')
-    expect(state.model).toBe('claude-haiku-4-5-20251001')
+    expect(state.model).toBe('claude-sonnet-4-6')
   })
 
   it('sets model', () => {
@@ -111,11 +111,13 @@ describe('wizardReducer', () => {
       type: 'LOAD_SETTINGS',
       provider: 'openai',
       model: 'gpt-5-mini-2025-08-07',
-      apiKey: 'sk-persisted'
+      apiKey: 'sk-persisted',
+      userHint: 'focus on demos'
     })
     expect(state.provider).toBe('openai')
     expect(state.model).toBe('gpt-5-mini-2025-08-07')
     expect(state.apiKey).toBe('sk-persisted')
+    expect(state.userHint).toBe('focus on demos')
     expect(state.settingsLoaded).toBe(true)
   })
 
