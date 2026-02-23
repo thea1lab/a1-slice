@@ -1,0 +1,17 @@
+appId: com.a1lab.a1slice
+productName: A1 Slice
+directories:
+  buildResources: resources
+  output: release
+files:
+  - out/**/*
+  - resources/**/*
+asarUnpack:
+  - resources/bin/**
+  - node_modules/ffmpeg-static/**
+win:
+  target: nsis
+mac:
+  target: dmg
+linux:
+  target: AppImage

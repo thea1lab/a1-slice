@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+release/
+*.tsbuildinfo
+.env
+
+# Whisper models (too large for git)
+resources/bin/*.exe
+resources/bin/whisper-cli-*
+!resources/bin/.gitkeep
