@@ -9,7 +9,7 @@ import {
 } from 'electron'
 import { join, basename, dirname } from 'path'
 import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync } from 'fs'
-import { extractAudio, cutClipWithSubtitles, getVideoDurationMs } from './ffmpeg'
+import { extractAudio, cutClip, getVideoDurationMs } from './ffmpeg'
 import { downloadWhisperBinary, downloadModel, transcribe } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
@@ -329,7 +329,7 @@ ipcMain.handle(
           percent: overallPercent
         })
 
-        await cutClipWithSubtitles(
+        await cutClip(
           videoPath,
           outputPath,
           clampedStartMs,

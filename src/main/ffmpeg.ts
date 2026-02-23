@@ -3,7 +3,7 @@ import { spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import { writeFileSync, unlinkSync } from 'fs'
+import { writeFileSync } from 'fs'
 import type { TranscriptSegment } from '../shared/types'
 
 const FFMPEG = ffmpegPath as string
@@ -109,7 +109,7 @@ export function getVideoDurationMs(videoPath: string): Promise<number> {
   })
 }
 
-export async function cutClipWithSubtitles(
+export async function cutClip(
   videoPath: string,
   outputPath: string,
   startMs: number,
@@ -117,7 +117,23 @@ export async function cutClipWithSubtitles(
   subtitles: TranscriptSegment[],
   onProgress?: (percent: number) => void
 ): Promise<string> {
-  // Shift subtitle times relative to clip start
+  const startSec = startMs / 1000
+  const durationSec = (endMs - startMs) / 1000
+
+  // Stream-copy (no re-encoding) for speed
+  await spawnFfmpeg(
+    [
+      '-ss', String(startSec),
+      '-i', videoPath,
+      '-t', String(durationSec),
+      '-c', 'copy',
+      '-y', outputPath
+    ],
+    durationSec,
+    onProgress
+  )
+
+  // Save SRT with subtitles shifted relative to clip start
   const shifted = subtitles
     .filter((s) => s.endMs > startMs && s.startMs < endMs)
     .map((s) => ({
@@ -125,44 +141,8 @@ export async function cutClipWithSubtitles(
       endMs: Math.min(endMs - startMs, s.endMs - startMs),
       text: s.text
     }))
-
-  // Write temp SRT to system temp dir for reliable access
-  const srtPath = join(tmpdir(), `a1slice-sub-${randomUUID()}.srt`)
+  const srtPath = outputPath.replace(/\.[^.]+$/, '.srt')
   writeFileSync(srtPath, generateSrt(shifted), 'utf-8')
-
-  const startSec = startMs / 1000
-  const durationSec = (endMs - startMs) / 1000
-
-  // Escape the srt path for the subtitles filter (: and \ are special in filter syntax)
-  const escapedSrt = srtPath
-    .replace(/\\/g, '\\\\\\\\')
-    .replace(/:/g, '\\:')
-    .replace(/'/g, "'\\''")
-  const subFilter =
-    `subtitles='${escapedSrt}'` +
-    `:force_style='FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2'`
-
-  try {
-    await spawnFfmpeg(
-      [
-        '-ss', String(startSec),
-        '-i', videoPath,
-        '-t', String(durationSec),
-        '-vf', subFilter,
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '128k',
-        '-y', outputPath
-      ],
-      durationSec,
-      onProgress
-    )
-
-    // Save SRT alongside the output clip
-    const outputSrtPath = outputPath.replace(/\.[^.]+$/, '.srt')
-    writeFileSync(outputSrtPath, generateSrt(shifted), 'utf-8')
-  } finally {
-    try { unlinkSync(srtPath) } catch {}
-  }
 
   return outputPath
 }
