@@ -52,6 +52,7 @@ interface WizardState {
 
   // Step 4: Review slices
   clips: ClipSegmentWithStatus[]
+  rawResponse: string
 
   // Step 5: Export
   exportStage: PipelineStage
@@ -74,9 +75,11 @@ type WizardAction =
   | { type: 'TRANSCRIBE_ERROR'; error: string }
   | { type: 'START_ANALYZE' }
   | { type: 'ANALYZE_PROGRESS'; update: ProgressUpdate }
-  | { type: 'ANALYZE_DONE'; clips: ClipSegmentWithStatus[] }
+  | { type: 'ANALYZE_DONE'; clips: ClipSegmentWithStatus[]; rawResponse: string }
   | { type: 'ANALYZE_ERROR'; error: string }
   | { type: 'TOGGLE_CLIP'; id: string }
+  | { type: 'UPDATE_CLIP_TIMES'; id: string; startMs: number; endMs: number }
+  | { type: 'LOAD_CACHED_TRANSCRIPT'; segments: TranscriptSegment[] }
   | { type: 'START_EXPORT' }
   | { type: 'EXPORT_PROGRESS'; update: ProgressUpdate }
   | { type: 'EXPORT_DONE'; outputDir: string }
@@ -106,6 +109,7 @@ const initialState: WizardState = {
   analyzeError: null,
 
   clips: [],
+  rawResponse: '',
 
   exportStage: 'idle',
   exportMessage: '',
@@ -199,7 +203,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         completedSteps: addCompleted(state.completedSteps, 'review-transcript'),
         analyzing: false,
         analyzePercent: 100,
-        clips: action.clips
+        clips: action.clips,
+        rawResponse: action.rawResponse
       }
     case 'ANALYZE_ERROR':
       return {
@@ -215,6 +220,31 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         clips: state.clips.map((c) =>
           c.id === action.id ? { ...c, approved: !c.approved } : c
         )
+      }
+
+    // Clip time editing
+    case 'UPDATE_CLIP_TIMES':
+      return {
+        ...state,
+        clips: state.clips.map((c) =>
+          c.id === action.id
+            ? { ...c, startMs: action.startMs, endMs: action.endMs }
+            : c
+        )
+      }
+
+    // Load cached transcript (skip transcription)
+    case 'LOAD_CACHED_TRANSCRIPT':
+      return {
+        ...state,
+        currentStep: 'review-transcript',
+        completedSteps: addCompleted(
+          addCompleted(state.completedSteps, 'select'),
+          'transcribe'
+        ),
+        transcribeStage: 'done',
+        transcribePercent: 100,
+        segments: action.segments
       }
 
     // Export
@@ -345,7 +375,7 @@ export default function App(): React.JSX.Element {
         id: String(i),
         approved: true
       }))
-      dispatch({ type: 'ANALYZE_DONE', clips: clipsWithStatus })
+      dispatch({ type: 'ANALYZE_DONE', clips: clipsWithStatus, rawResponse: result.rawResponse || '' })
     } else {
       dispatch({
         type: 'ANALYZE_ERROR',
@@ -389,6 +419,20 @@ export default function App(): React.JSX.Element {
     dispatch({ type: 'GO_TO_STEP', step })
   }, [])
 
+  const handleLoadCachedTranscript = useCallback(
+    (segments: TranscriptSegment[]) => {
+      dispatch({ type: 'LOAD_CACHED_TRANSCRIPT', segments })
+    },
+    []
+  )
+
+  const handleUpdateClipTimes = useCallback(
+    (id: string, startMs: number, endMs: number) => {
+      dispatch({ type: 'UPDATE_CLIP_TIMES', id, startMs, endMs })
+    },
+    []
+  )
+
   // --- Render current step ---
 
   function renderStep(): React.JSX.Element {
@@ -399,6 +443,7 @@ export default function App(): React.JSX.Element {
             videoPath={state.videoPath}
             onSelectVideo={handleSelectVideo}
             onNext={handleStartTranscribe}
+            onLoadCachedTranscript={handleLoadCachedTranscript}
           />
         )
       case 'transcribe':
@@ -439,7 +484,9 @@ export default function App(): React.JSX.Element {
           <StepReviewSlices
             clips={state.clips}
             videoPath={state.videoPath!}
+            rawResponse={state.rawResponse}
             onToggle={(id) => dispatch({ type: 'TOGGLE_CLIP', id })}
+            onUpdateClipTimes={handleUpdateClipTimes}
             onSlice={handleSlice}
           />
         )

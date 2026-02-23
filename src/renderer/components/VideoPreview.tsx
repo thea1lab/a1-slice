@@ -13,7 +13,9 @@ export default function VideoPreview({
 }: VideoPreviewProps): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
 
-  const src = `a1slice://video?path=${encodeURIComponent(videoPath)}`
+  const startSec = startMs / 1000
+  const endSec = endMs / 1000
+  const src = `a1slice://video?path=${encodeURIComponent(videoPath)}#t=${startSec},${endSec}`
 
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current

@@ -4,7 +4,8 @@ import type {
   WizardStep,
   PipelineStage,
   LLMProvider,
-  ClipSegmentWithStatus
+  ClipSegmentWithStatus,
+  TranscriptSegment
 } from '../../shared/types'
 
 function makeState(
@@ -26,6 +27,7 @@ function makeState(
     analyzeMessage: string
     analyzeError: string | null
     clips: ClipSegmentWithStatus[]
+    rawResponse: string
     exportStage: PipelineStage
     exportMessage: string
     exportPercent: number
@@ -51,13 +53,14 @@ function makeState(
     analyzeMessage: '',
     analyzeError: null,
     clips: [],
+    rawResponse: '',
     exportStage: 'idle' as PipelineStage,
     exportMessage: '',
     exportPercent: 0,
     exportError: null,
     outputDir: null,
     ...overrides
-  }
+  } as ReturnType<typeof wizardReducer>
 }
 
 describe('wizardReducer', () => {
@@ -183,7 +186,7 @@ describe('wizardReducer', () => {
     ]
     const state = wizardReducer(
       makeState({ currentStep: 'review-transcript', analyzing: true }),
-      { type: 'ANALYZE_DONE', clips }
+      { type: 'ANALYZE_DONE', clips, rawResponse: '[{"title":"Clip 1"}]' }
     )
     expect(state.currentStep).toBe('review-slices')
     expect(state.completedSteps).toContain('review-transcript')
@@ -268,6 +271,45 @@ describe('wizardReducer', () => {
     expect(state.segments).toEqual([])
   })
 
+  it('stores rawResponse on ANALYZE_DONE', () => {
+    const clips: ClipSegmentWithStatus[] = [
+      { id: '0', title: 'Clip 1', startMs: 0, endMs: 30000, approved: true }
+    ]
+    const state = wizardReducer(
+      makeState({ currentStep: 'review-transcript', analyzing: true }),
+      { type: 'ANALYZE_DONE', clips, rawResponse: '{"raw":"data"}' }
+    )
+    expect(state.rawResponse).toBe('{"raw":"data"}')
+  })
+
+  it('updates clip times', () => {
+    const clips: ClipSegmentWithStatus[] = [
+      { id: '0', title: 'A', startMs: 0, endMs: 10000, approved: true },
+      { id: '1', title: 'B', startMs: 20000, endMs: 30000, approved: true }
+    ]
+    const state = wizardReducer(
+      makeState({ clips }),
+      { type: 'UPDATE_CLIP_TIMES', id: '0', startMs: 1000, endMs: 9000 }
+    )
+    expect(state.clips[0].startMs).toBe(1000)
+    expect(state.clips[0].endMs).toBe(9000)
+    expect(state.clips[1].startMs).toBe(20000)
+  })
+
+  it('loads cached transcript and jumps to review-transcript', () => {
+    const segments: TranscriptSegment[] = [
+      { startMs: 0, endMs: 5000, text: 'Cached' }
+    ]
+    const state = wizardReducer(
+      makeState({ videoPath: '/video.mp4' }),
+      { type: 'LOAD_CACHED_TRANSCRIPT', segments }
+    )
+    expect(state.currentStep).toBe('review-transcript')
+    expect(state.completedSteps).toContain('select')
+    expect(state.completedSteps).toContain('transcribe')
+    expect(state.segments).toEqual(segments)
+  })
+
   it('transitions through the full wizard flow', () => {
     let state = makeState()
 
@@ -291,7 +333,7 @@ describe('wizardReducer', () => {
     const clips: ClipSegmentWithStatus[] = [
       { id: '0', title: 'Clip', startMs: 0, endMs: 5000, approved: true }
     ]
-    state = wizardReducer(state, { type: 'ANALYZE_DONE', clips })
+    state = wizardReducer(state, { type: 'ANALYZE_DONE', clips, rawResponse: '[]' })
     expect(state.currentStep).toBe('review-slices')
 
     // Start export

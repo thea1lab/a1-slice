@@ -5,13 +5,15 @@ import type {
   ClipSegment,
   TranscribeResult,
   AnalyzeResult,
-  CutResult
+  CutResult,
+  CheckTranscriptResult
 } from '../shared/types'
 
 declare global {
   interface Window {
     api: {
       selectVideo(): Promise<string | null>
+      checkTranscript(videoPath: string): Promise<CheckTranscriptResult>
       transcribeVideo(videoPath: string): Promise<TranscribeResult>
       analyzeTranscript(
         segments: TranscriptSegment[],

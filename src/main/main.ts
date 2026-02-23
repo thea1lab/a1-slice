@@ -7,11 +7,11 @@ import {
   protocol,
   net
 } from 'electron'
-import { join, basename } from 'path'
-import { mkdirSync, existsSync, unlinkSync } from 'fs'
+import { join, basename, dirname } from 'path'
+import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync } from 'fs'
 import { extractAudio, cutClipWithSubtitles } from './ffmpeg'
 import { downloadWhisperBinary, downloadModel, transcribe } from './whisper'
-import { analyzeTranscript } from './analyzer'
+import { analyzeTranscript, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
 import type {
   AppSettings,
@@ -185,6 +185,13 @@ ipcMain.handle(
 
       if (cancelled) throw new Error('Cancelled')
 
+      // Cache transcript next to source video
+      try {
+        const vName = basename(videoPath).replace(/\.[^.]+$/, '')
+        const cachePath = join(dirname(videoPath), `${vName}.a1slice.json`)
+        writeFileSync(cachePath, JSON.stringify(segments), 'utf-8')
+      } catch {}
+
       sendProgress({ stage: 'done', message: '', percent: 100 })
       return { success: true, segments }
     } catch (err) {
@@ -195,6 +202,20 @@ ipcMain.handle(
     }
   }
 )
+
+// IPC: Check for cached transcript
+ipcMain.handle('check-transcript', (_event, videoPath: string) => {
+  try {
+    const vName = basename(videoPath).replace(/\.[^.]+$/, '')
+    const cachePath = join(dirname(videoPath), `${vName}.a1slice.json`)
+    if (existsSync(cachePath)) {
+      const data = readFileSync(cachePath, 'utf-8')
+      const segments = JSON.parse(data)
+      return { found: true, segments }
+    }
+  } catch {}
+  return { found: false }
+})
 
 // IPC: Analyze transcript with LLM (Step 3)
 ipcMain.handle(
@@ -213,7 +234,7 @@ ipcMain.handle(
         percent: 0
       })
 
-      const clips = await analyzeTranscript(
+      const { clips, rawResponse } = await analyzeTranscript(
         segments,
         settings.provider,
         settings.model,
@@ -223,7 +244,7 @@ ipcMain.handle(
       if (cancelled) throw new Error('Cancelled')
 
       sendProgress({ stage: 'done', message: '', percent: 100 })
-      return { success: true, clips }
+      return { success: true, clips, rawResponse }
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Unknown error occurred'
@@ -245,12 +266,16 @@ ipcMain.handle(
     cancelled = false
 
     try {
-      const videoName = basename(videoPath, '.mp4').replace(/\.[^.]+$/, '')
+      const videoName = basename(videoPath).replace(/\.[^.]+$/, '')
       const outputDir = join(
-        app.getPath('videos'),
+        dirname(videoPath),
         `a1slice-${videoName}-${Date.now()}`
       )
       if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true })
+
+      // Save transcript as a text file in the output directory
+      const transcriptPath = join(outputDir, 'transcript.txt')
+      writeFileSync(transcriptPath, formatTranscriptForLLM(segments), 'utf-8')
 
       for (let i = 0; i < clips.length; i++) {
         if (cancelled) throw new Error('Cancelled')

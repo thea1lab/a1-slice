@@ -64,7 +64,7 @@ export async function analyzeTranscript(
   provider: LLMProvider,
   model: string,
   apiKey: string
-): Promise<ClipSegment[]> {
+): Promise<{ clips: ClipSegment[]; rawResponse: string }> {
   const formattedTranscript = formatTranscriptForLLM(segments)
   const userMessage = `Here is the transcript:\n\n${formattedTranscript}\n\nIdentify the best clips from this transcript. Return only a JSON array.`
 
@@ -93,5 +93,5 @@ export async function analyzeTranscript(
     responseText = response.choices[0]?.message?.content ?? ''
   }
 
-  return parseLLMResponse(responseText)
+  return { clips: parseLLMResponse(responseText), rawResponse: responseText }
 }

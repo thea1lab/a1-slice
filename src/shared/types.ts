@@ -53,7 +53,13 @@ export interface TranscribeResult {
 export interface AnalyzeResult {
   success: boolean
   clips?: ClipSegment[]
+  rawResponse?: string
   error?: string
+}
+
+export interface CheckTranscriptResult {
+  found: boolean
+  segments?: TranscriptSegment[]
 }
 
 export interface CutResult {

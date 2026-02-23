@@ -1,7 +1,7 @@
 import ffmpegPath from 'ffmpeg-static'
 import { spawn } from 'child_process'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { randomUUID } from 'crypto'
 import { writeFileSync, unlinkSync } from 'fs'
 import type { TranscriptSegment } from '../shared/types'
@@ -104,14 +104,14 @@ export async function cutClipWithSubtitles(
       text: s.text
     }))
 
-  const srtPath = join(tmpdir(), `a1slice-sub-${randomUUID()}.srt`)
+  const srtPath = join(dirname(outputPath), `a1slice-sub-${randomUUID()}.srt`)
   writeFileSync(srtPath, generateSrt(shifted), 'utf-8')
 
   const startSec = startMs / 1000
   const durationSec = (endMs - startMs) / 1000
 
   // Escape the srt path for the subtitles filter
-  const escapedSrt = srtPath.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "'\\''")
+  const escapedSrt = srtPath.replace(/\\/g, '\\\\').replace(/'/g, "'\\''")
   const subFilter =
     `subtitles='${escapedSrt}'` +
     `:force_style='FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2'`

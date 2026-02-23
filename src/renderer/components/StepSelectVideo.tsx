@@ -1,14 +1,37 @@
+import { useState, useEffect } from 'react'
+import type { TranscriptSegment } from '../../shared/types'
+
 interface StepSelectVideoProps {
   videoPath: string | null
   onSelectVideo: () => void
   onNext: () => void
+  onLoadCachedTranscript?: (segments: TranscriptSegment[]) => void
 }
 
 export default function StepSelectVideo({
   videoPath,
   onSelectVideo,
-  onNext
+  onNext,
+  onLoadCachedTranscript
 }: StepSelectVideoProps): React.JSX.Element {
+  const [cachedSegments, setCachedSegments] = useState<TranscriptSegment[] | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  useEffect(() => {
+    if (!videoPath) {
+      setCachedSegments(null)
+      return
+    }
+    setChecking(true)
+    window.api
+      .checkTranscript(videoPath)
+      .then((result) => {
+        setCachedSegments(result.found && result.segments ? result.segments : null)
+      })
+      .catch(() => setCachedSegments(null))
+      .finally(() => setChecking(false))
+  }, [videoPath])
+
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-6 max-w-lg mx-auto w-full">
       {/* Header */}
@@ -52,13 +75,40 @@ export default function StepSelectVideo({
             </span>
           )}
         </div>
-        <button
-          onClick={onNext}
-          disabled={!videoPath}
-          className="w-full bg-accent hover:bg-accent-hover text-black font-semibold rounded-lg py-2.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-accent"
-        >
-          Next
-        </button>
+
+        {/* Cached transcript prompt */}
+        {videoPath && !checking && cachedSegments && onLoadCachedTranscript && (
+          <div className="bg-bg-input border border-accent/20 rounded-lg p-4 space-y-3">
+            <p className="text-sm text-neutral-300">
+              Found an existing transcript for this video ({cachedSegments.length} segments).
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => onLoadCachedTranscript(cachedSegments)}
+                className="bg-accent hover:bg-accent-hover text-black font-semibold rounded-lg px-4 py-2 text-sm transition-colors"
+              >
+                Use Existing Transcript
+              </button>
+              <button
+                onClick={onNext}
+                className="bg-bg-input border border-white/12 rounded-lg px-4 py-2 text-sm text-neutral-200 hover:border-white/25 transition-colors"
+              >
+                Re-transcribe
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Normal next button (hidden when cached transcript is available) */}
+        {(!cachedSegments || !onLoadCachedTranscript) && (
+          <button
+            onClick={onNext}
+            disabled={!videoPath}
+            className="w-full bg-accent hover:bg-accent-hover text-black font-semibold rounded-lg py-2.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-accent"
+          >
+            Next
+          </button>
+        )}
       </div>
     </div>
   )

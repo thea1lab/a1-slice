@@ -4,14 +4,18 @@ import type { ClipSegmentWithStatus } from '../../shared/types'
 interface StepReviewSlicesProps {
   clips: ClipSegmentWithStatus[]
   videoPath: string
+  rawResponse?: string
   onToggle: (id: string) => void
+  onUpdateClipTimes?: (id: string, startMs: number, endMs: number) => void
   onSlice: () => void
 }
 
 export default function StepReviewSlices({
   clips,
   videoPath,
+  rawResponse,
   onToggle,
+  onUpdateClipTimes,
   onSlice
 }: StepReviewSlicesProps): React.JSX.Element {
   const approvedCount = clips.filter((c) => c.approved).length
@@ -40,9 +44,22 @@ export default function StepReviewSlices({
             clip={clip}
             videoPath={videoPath}
             onToggle={onToggle}
+            onUpdateTimes={onUpdateClipTimes}
           />
         ))}
       </div>
+
+      {/* Raw LLM response */}
+      {rawResponse && (
+        <details className="px-2">
+          <summary className="text-xs text-neutral-500 cursor-pointer hover:text-neutral-400 transition-colors">
+            View raw LLM response
+          </summary>
+          <pre className="mt-2 p-3 bg-bg-input border border-white/7 rounded-lg text-xs text-neutral-400 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap break-words">
+            {rawResponse}
+          </pre>
+        </details>
+      )}
     </div>
   )
 }

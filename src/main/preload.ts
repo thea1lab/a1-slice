@@ -6,7 +6,8 @@ import type {
   ClipSegment,
   TranscribeResult,
   AnalyzeResult,
-  CutResult
+  CutResult,
+  CheckTranscriptResult
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
@@ -21,6 +22,9 @@ contextBridge.exposeInMainWorld('api', {
     settings: AppSettings
   ): Promise<AnalyzeResult> =>
     ipcRenderer.invoke('analyze-transcript', segments, settings),
+
+  checkTranscript: (videoPath: string): Promise<CheckTranscriptResult> =>
+    ipcRenderer.invoke('check-transcript', videoPath),
 
   cutClips: (
     videoPath: string,
