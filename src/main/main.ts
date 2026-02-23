@@ -8,7 +8,8 @@ import {
   net
 } from 'electron'
 import { join, basename, dirname } from 'path'
-import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync } from 'fs'
+import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync, statSync, createReadStream } from 'fs'
+import { Readable } from 'stream'
 import { extractAudio, cutClip, getVideoDurationMs } from './ffmpeg'
 import { downloadWhisperBinary, downloadModel, transcribe } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
@@ -350,15 +351,51 @@ ipcMain.handle(
 )
 
 app.whenReady().then(() => {
-  // Handle a1slice:// protocol for video preview
+  // Handle a1slice:// protocol for video preview (with range request support for seeking)
   protocol.handle('a1slice', (req) => {
     const url = new URL(req.url)
-    // a1slice://video?path=/path/to/file.mp4
     const filePath = decodeURIComponent(url.searchParams.get('path') || '')
-    if (!filePath) {
-      return new Response('Missing path', { status: 400 })
+    if (!filePath) return new Response('Missing path', { status: 400 })
+
+    let size: number
+    try {
+      size = statSync(filePath).size
+    } catch {
+      return new Response('File not found', { status: 404 })
     }
-    return net.fetch(`file://${filePath}`)
+
+    const range = req.headers.get('range')
+
+    if (range) {
+      const m = range.match(/bytes=(\d+)-(\d*)/)
+      if (m) {
+        const start = parseInt(m[1], 10)
+        const end = m[2] ? parseInt(m[2], 10) : size - 1
+        return new Response(
+          Readable.toWeb(createReadStream(filePath, { start, end })) as ReadableStream,
+          {
+            status: 206,
+            headers: {
+              'Content-Range': `bytes ${start}-${end}/${size}`,
+              'Accept-Ranges': 'bytes',
+              'Content-Length': String(end - start + 1),
+              'Content-Type': 'video/mp4'
+            }
+          }
+        )
+      }
+    }
+
+    return new Response(
+      Readable.toWeb(createReadStream(filePath)) as ReadableStream,
+      {
+        headers: {
+          'Accept-Ranges': 'bytes',
+          'Content-Length': String(size),
+          'Content-Type': 'video/mp4'
+        }
+      }
+    )
   })
 
   createWindow()

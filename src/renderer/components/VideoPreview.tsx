@@ -1,4 +1,7 @@
-import { useRef, useCallback, useEffect } from 'react'
+import { useRef, useEffect } from 'react'
+import videojs from 'video.js'
+import Player from 'video.js/dist/types/player'
+import 'video.js/dist/video-js.css'
 
 interface VideoPreviewProps {
   videoPath: string
@@ -11,53 +14,90 @@ export default function VideoPreview({
   startMs,
   endMs
 }: VideoPreviewProps): React.JSX.Element {
-  const videoRef = useRef<HTMLVideoElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const playerRef = useRef<Player | null>(null)
 
   const src = `a1slice://video?path=${encodeURIComponent(videoPath)}`
 
-  const handleTimeUpdate = useCallback(() => {
-    const video = videoRef.current
-    if (!video) return
-    if (video.currentTime >= endMs / 1000) {
-      video.pause()
-      video.currentTime = startMs / 1000
-    }
-  }, [startMs, endMs])
-
-  const handlePlay = useCallback(() => {
-    const video = videoRef.current
-    if (!video) return
-    if (video.currentTime < startMs / 1000 || video.currentTime >= endMs / 1000) {
-      video.currentTime = startMs / 1000
-    }
-  }, [startMs, endMs])
-
+  // Init / dispose player when src changes
   useEffect(() => {
-    const video = videoRef.current
-    if (!video) return
+    const container = containerRef.current
+    if (!container) return
+
+    // Create <video-js> element inside the container
+    const videoEl = document.createElement('video-js')
+    videoEl.classList.add('vjs-big-play-centered')
+    container.appendChild(videoEl)
+
+    const player = videojs(videoEl, {
+      controls: true,
+      muted: true,
+      preload: 'auto',
+      sources: [{ src, type: 'video/mp4' }]
+    })
+
+    playerRef.current = player
+
+    return () => {
+      if (playerRef.current) {
+        playerRef.current.dispose()
+        playerRef.current = null
+      }
+    }
+  }, [src])
+
+  // Time-boundary effect: seek to start, pause at end
+  useEffect(() => {
+    const player = playerRef.current
+    if (!player) return
+
+    const startSec = startMs / 1000
+    const endSec = endMs / 1000
 
     const seekToStart = (): void => {
-      video.currentTime = startMs / 1000
+      player.currentTime(startSec)
     }
 
-    if (video.readyState >= 1) {
+    const onLoadedData = (): void => {
       seekToStart()
-    } else {
-      video.addEventListener('loadedmetadata', seekToStart, { once: true })
-      return () => video.removeEventListener('loadedmetadata', seekToStart)
     }
-  }, [startMs])
+
+    const onTimeUpdate = (): void => {
+      const current = player.currentTime()
+      if (current !== undefined && current >= endSec) {
+        player.pause()
+        player.currentTime(startSec)
+      }
+    }
+
+    const onPlay = (): void => {
+      const current = player.currentTime()
+      if (current !== undefined && (current < startSec || current >= endSec)) {
+        player.currentTime(startSec)
+      }
+    }
+
+    player.on('loadeddata', onLoadedData)
+    player.on('timeupdate', onTimeUpdate)
+    player.on('play', onPlay)
+
+    // If video data is already loaded (e.g. startMs/endMs changed after load), seek now
+    if (player.readyState() >= 2) {
+      seekToStart()
+    }
+
+    return () => {
+      player.off('loadeddata', onLoadedData)
+      player.off('timeupdate', onTimeUpdate)
+      player.off('play', onPlay)
+    }
+  }, [startMs, endMs])
 
   return (
-    <video
-      ref={videoRef}
-      src={src}
-      onTimeUpdate={handleTimeUpdate}
-      onPlay={handlePlay}
-      controls
-      muted
-      preload="metadata"
-      className="w-full rounded-lg bg-black aspect-video"
+    <div
+      ref={containerRef}
+      data-vjs-player
+      className="w-full rounded-lg bg-black aspect-video overflow-hidden"
     />
   )
 }
