@@ -7,9 +7,21 @@ import {
   protocol,
   net
 } from 'electron'
-import { join, basename, dirname } from 'path'
+import { join, basename, dirname, extname } from 'path'
 import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync, statSync, createReadStream } from 'fs'
 import { Readable } from 'stream'
+
+function mimeForVideo(filePath: string): string {
+  const ext = extname(filePath).toLowerCase()
+  const map: Record<string, string> = {
+    '.mp4': 'video/mp4',
+    '.mov': 'video/quicktime',
+    '.mkv': 'video/x-matroska',
+    '.avi': 'video/x-msvideo',
+    '.webm': 'video/webm'
+  }
+  return map[ext] || 'video/mp4'
+}
 import { extractAudio, cutClip, getVideoDurationMs } from './ffmpeg'
 import { downloadWhisperBinary, downloadModel, transcribe } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
@@ -364,6 +376,7 @@ app.whenReady().then(() => {
       return new Response('File not found', { status: 404 })
     }
 
+    const mime = mimeForVideo(filePath)
     const range = req.headers.get('range')
 
     if (range) {
@@ -372,14 +385,14 @@ app.whenReady().then(() => {
         const start = parseInt(m[1], 10)
         const end = m[2] ? parseInt(m[2], 10) : size - 1
         return new Response(
-          Readable.toWeb(createReadStream(filePath, { start, end })) as ReadableStream,
+          Readable.toWeb(createReadStream(filePath, { start, end, highWaterMark: 256 * 1024 })) as ReadableStream,
           {
             status: 206,
             headers: {
               'Content-Range': `bytes ${start}-${end}/${size}`,
               'Accept-Ranges': 'bytes',
               'Content-Length': String(end - start + 1),
-              'Content-Type': 'video/mp4'
+              'Content-Type': mime
             }
           }
         )
@@ -387,12 +400,12 @@ app.whenReady().then(() => {
     }
 
     return new Response(
-      Readable.toWeb(createReadStream(filePath)) as ReadableStream,
+      Readable.toWeb(createReadStream(filePath, { highWaterMark: 256 * 1024 })) as ReadableStream,
       {
         headers: {
           'Accept-Ranges': 'bytes',
           'Content-Length': String(size),
-          'Content-Type': 'video/mp4'
+          'Content-Type': mime
         }
       }
     )

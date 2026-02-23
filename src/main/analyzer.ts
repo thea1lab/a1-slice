@@ -18,7 +18,7 @@ export function formatTranscriptForLLM(segments: TranscriptSegment[]): string {
   return segments
     .map(
       (seg) =>
-        `[${msToTimecode(seg.startMs)} -> ${msToTimecode(seg.endMs)}] ${seg.text.trim()}`
+        `[${seg.startMs}ms -> ${seg.endMs}ms] ${seg.text.trim()}`
     )
     .join('\n')
 }
@@ -40,18 +40,24 @@ export function parseLLMResponse(text: string): ClipSegment[] {
   )
 }
 
-const SYSTEM_PROMPT = `You are a video editor AI. You will receive a timestamped transcript of a long video. Your job is to identify the best self-contained segments that would work as short-form clips (30 seconds to 3 minutes each).
+const SYSTEM_PROMPT = `You are a video editor AI. You will receive a timestamped transcript of a video. Your job is to pick ONLY the most impactful, high-value moments — the parts that hit hardest and would perform well as standalone short-form clips.
 
-Pick segments that:
+CRITICAL RULES:
+- The transcript uses millisecond timestamps (e.g. "13000ms -> 30000ms"). Your start_ms and end_ms values MUST use these exact millisecond values from the transcript. Do NOT convert or calculate — just copy the numbers directly.
+- Be selective. Not every part of the video deserves a clip. It's better to return 1-2 great clips than 4 mediocre ones.
+- Clips should be 20 seconds to 2 minutes each.
+- You do NOT need to cover the entire video. Skip boring, repetitive, or low-energy sections.
+
+Pick moments that:
+- Have a clear "wow" factor — a key insight, demo payoff, or compelling statement
 - Tell a complete story or make a complete point
-- Are engaging, funny, insightful, or emotionally compelling
 - Have clean start and end points (not mid-sentence)
 - Would work as standalone clips without additional context
 
 Return a JSON array (no other text) where each element has:
 - "title": a short, catchy title for the clip
-- "start_ms": start time in milliseconds
-- "end_ms": end time in milliseconds
+- "start_ms": start time in milliseconds (must be a timestamp that appears in the transcript)
+- "end_ms": end time in milliseconds (must be a timestamp that appears in the transcript)
 
 Example:
 [

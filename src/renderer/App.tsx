@@ -367,13 +367,15 @@ export default function App(): React.JSX.Element {
       const maxMs = state.segments.length > 0
         ? state.segments[state.segments.length - 1].endMs
         : Infinity
-      const clipsWithStatus = clips.map((clip, i) => ({
-        ...clip,
-        startMs: Math.max(0, Math.min(clip.startMs, maxMs)),
-        endMs: Math.max(0, Math.min(clip.endMs, maxMs)),
-        id: String(i),
-        approved: true
-      }))
+      const clipsWithStatus = clips
+        .map((clip, i) => ({
+          ...clip,
+          startMs: Math.max(0, Math.min(clip.startMs, maxMs)),
+          endMs: Math.max(0, Math.min(clip.endMs, maxMs)),
+          id: String(i),
+          approved: true
+        }))
+        .filter((clip) => clip.endMs > clip.startMs)
       dispatch({ type: 'ANALYZE_DONE', clips: clipsWithStatus, rawResponse })
     },
     [state.segments]

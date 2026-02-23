@@ -31,7 +31,7 @@ export default function VideoPreview({
 
     const player = videojs(videoEl, {
       controls: true,
-      muted: true,
+      muted: false,
       preload: 'auto',
       sources: [{ src, type: 'video/mp4' }]
     })
@@ -65,7 +65,6 @@ export default function VideoPreview({
     const onTimeUpdate = (): void => {
       const current = player.currentTime()
       if (current !== undefined && current >= endSec) {
-        player.pause()
         player.currentTime(startSec)
       }
     }
