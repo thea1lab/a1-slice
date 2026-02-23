@@ -1,7 +1,7 @@
 import ffmpegPath from 'ffmpeg-static'
 import { spawn } from 'child_process'
 import { tmpdir } from 'os'
-import { join, dirname } from 'path'
+import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { writeFileSync, unlinkSync } from 'fs'
 import type { TranscriptSegment } from '../shared/types'
@@ -87,6 +87,28 @@ export async function extractAudio(
   return outPath
 }
 
+export function getVideoDurationMs(videoPath: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    // ffmpeg -i with no output prints metadata (including Duration) then exits
+    const proc = spawn(FFMPEG, ['-i', videoPath])
+    let stderr = ''
+    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+    proc.on('close', () => {
+      const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/)
+      if (match) {
+        const ms =
+          parseInt(match[1], 10) * 3600000 +
+          parseInt(match[2], 10) * 60000 +
+          parseInt(match[3], 10) * 1000 +
+          parseInt(match[4], 10) * 10
+        return resolve(ms)
+      }
+      reject(new Error('Could not read video duration'))
+    })
+    proc.on('error', reject)
+  })
+}
+
 export async function cutClipWithSubtitles(
   videoPath: string,
   outputPath: string,
@@ -104,14 +126,18 @@ export async function cutClipWithSubtitles(
       text: s.text
     }))
 
-  const srtPath = join(dirname(outputPath), `a1slice-sub-${randomUUID()}.srt`)
+  // Write temp SRT to system temp dir for reliable access
+  const srtPath = join(tmpdir(), `a1slice-sub-${randomUUID()}.srt`)
   writeFileSync(srtPath, generateSrt(shifted), 'utf-8')
 
   const startSec = startMs / 1000
   const durationSec = (endMs - startMs) / 1000
 
-  // Escape the srt path for the subtitles filter
-  const escapedSrt = srtPath.replace(/\\/g, '\\\\').replace(/'/g, "'\\''")
+  // Escape the srt path for the subtitles filter (: and \ are special in filter syntax)
+  const escapedSrt = srtPath
+    .replace(/\\/g, '\\\\\\\\')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "'\\''")
   const subFilter =
     `subtitles='${escapedSrt}'` +
     `:force_style='FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2'`

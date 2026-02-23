@@ -23,17 +23,22 @@ export default function StepExport({
   onCancel
 }: StepExportProps): React.JSX.Element {
   const isDone = stage === 'done' && outputDir
+  const folderName = outputDir ? outputDir.split(/[/\\]/).pop() : ''
 
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-6 max-w-lg mx-auto w-full">
       {isDone ? (
-        <div className="w-full bg-bg-card border border-emerald-800 rounded-2xl p-6 space-y-4 shadow-lg">
-          <div className="flex items-center gap-2">
+        <div className="w-full bg-bg-card border border-emerald-800 rounded-2xl p-6 space-y-5 shadow-lg">
+          <div className="flex items-center gap-2.5">
             <span className="w-2 h-2 rounded-full bg-emerald-400" />
             <span className="text-sm text-emerald-300 font-medium">
-              Clips are ready
+              Export complete
             </span>
           </div>
+          <p className="text-sm text-neutral-400 leading-relaxed">
+            Your clips have been saved next to the original video in{' '}
+            <span className="text-neutral-200 font-medium">{folderName}</span>
+          </p>
           <div className="flex gap-3">
             <button
               onClick={onOpenFolder}

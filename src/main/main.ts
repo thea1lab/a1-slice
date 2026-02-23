@@ -9,7 +9,7 @@ import {
 } from 'electron'
 import { join, basename, dirname } from 'path'
 import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync } from 'fs'
-import { extractAudio, cutClipWithSubtitles } from './ffmpeg'
+import { extractAudio, cutClipWithSubtitles, getVideoDurationMs } from './ffmpeg'
 import { downloadWhisperBinary, downloadModel, transcribe } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
@@ -102,7 +102,7 @@ ipcMain.handle('select-video', async () => {
 
 // IPC: Open folder in native file manager
 ipcMain.handle('open-folder', async (_event, folderPath: string) => {
-  await shell.openPath(folderPath)
+  shell.showItemInFolder(folderPath)
 })
 
 // IPC: Cancel pipeline
@@ -296,6 +296,12 @@ ipcMain.handle(
       )
       if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true })
 
+      // Get video duration to clamp clip times
+      let videoDurationMs = Infinity
+      try {
+        videoDurationMs = await getVideoDurationMs(videoPath)
+      } catch {}
+
       // Save transcript as a text file in the output directory
       const transcriptPath = join(outputDir, 'transcript.txt')
       writeFileSync(transcriptPath, formatTranscriptForLLM(segments), 'utf-8')
@@ -304,6 +310,10 @@ ipcMain.handle(
         if (cancelled) throw new Error('Cancelled')
 
         const clip = clips[i]
+        const clampedStartMs = Math.min(clip.startMs, videoDurationMs)
+        const clampedEndMs = Math.min(clip.endMs, videoDurationMs)
+        if (clampedEndMs <= clampedStartMs) continue
+
         const safeTitle = clip.title
           .replace(/[^a-zA-Z0-9 _-]/g, '')
           .slice(0, 50)
@@ -322,8 +332,8 @@ ipcMain.handle(
         await cutClipWithSubtitles(
           videoPath,
           outputPath,
-          clip.startMs,
-          clip.endMs,
+          clampedStartMs,
+          clampedEndMs,
           segments
         )
       }
