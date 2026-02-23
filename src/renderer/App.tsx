@@ -362,27 +362,47 @@ export default function App(): React.JSX.Element {
     }
   }, [state.videoPath])
 
+  const clampClips = useCallback(
+    (clips: { title: string; startMs: number; endMs: number }[], rawResponse: string) => {
+      const maxMs = state.segments.length > 0
+        ? state.segments[state.segments.length - 1].endMs
+        : Infinity
+      const clipsWithStatus = clips.map((clip, i) => ({
+        ...clip,
+        startMs: Math.max(0, Math.min(clip.startMs, maxMs)),
+        endMs: Math.max(0, Math.min(clip.endMs, maxMs)),
+        id: String(i),
+        approved: true
+      }))
+      dispatch({ type: 'ANALYZE_DONE', clips: clipsWithStatus, rawResponse })
+    },
+    [state.segments]
+  )
+
   const handleAnalyze = useCallback(async () => {
+    if (!state.videoPath) return
     dispatch({ type: 'START_ANALYZE' })
-    const result = await window.api.analyzeTranscript(state.segments, {
+    const result = await window.api.analyzeTranscript(state.videoPath, state.segments, {
       provider: state.provider,
       model: state.model,
       apiKey: state.apiKey
     })
     if (result.success && result.clips) {
-      const clipsWithStatus = result.clips.map((clip, i) => ({
-        ...clip,
-        id: String(i),
-        approved: true
-      }))
-      dispatch({ type: 'ANALYZE_DONE', clips: clipsWithStatus, rawResponse: result.rawResponse || '' })
+      clampClips(result.clips, result.rawResponse || '')
     } else {
       dispatch({
         type: 'ANALYZE_ERROR',
         error: result.error || 'Analysis failed'
       })
     }
-  }, [state.segments, state.provider, state.model, state.apiKey])
+  }, [state.videoPath, state.segments, state.provider, state.model, state.apiKey, clampClips])
+
+  const handleLoadCachedAnalysis = useCallback(
+    (clips: { title: string; startMs: number; endMs: number }[], rawResponse: string) => {
+      clampClips(clips, rawResponse)
+    },
+    [clampClips]
+  )
 
   const handleSlice = useCallback(async () => {
     if (!state.videoPath) return
@@ -461,6 +481,7 @@ export default function App(): React.JSX.Element {
         return (
           <StepReviewTranscript
             segments={state.segments}
+            videoPath={state.videoPath}
             provider={state.provider}
             model={state.model}
             apiKey={state.apiKey}
@@ -476,6 +497,7 @@ export default function App(): React.JSX.Element {
               dispatch({ type: 'SET_API_KEY', apiKey: k })
             }
             onAnalyze={handleAnalyze}
+            onLoadCachedAnalysis={handleLoadCachedAnalysis}
             onCancel={handleCancel}
           />
         )
@@ -485,6 +507,7 @@ export default function App(): React.JSX.Element {
             clips={state.clips}
             videoPath={state.videoPath!}
             rawResponse={state.rawResponse}
+            videoDurationMs={state.segments.length > 0 ? state.segments[state.segments.length - 1].endMs : 0}
             onToggle={(id) => dispatch({ type: 'TOGGLE_CLIP', id })}
             onUpdateClipTimes={handleUpdateClipTimes}
             onSlice={handleSlice}

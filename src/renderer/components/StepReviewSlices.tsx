@@ -5,6 +5,7 @@ interface StepReviewSlicesProps {
   clips: ClipSegmentWithStatus[]
   videoPath: string
   rawResponse?: string
+  videoDurationMs?: number
   onToggle: (id: string) => void
   onUpdateClipTimes?: (id: string, startMs: number, endMs: number) => void
   onSlice: () => void
@@ -14,6 +15,7 @@ export default function StepReviewSlices({
   clips,
   videoPath,
   rawResponse,
+  videoDurationMs,
   onToggle,
   onUpdateClipTimes,
   onSlice
@@ -43,6 +45,7 @@ export default function StepReviewSlices({
             key={clip.id}
             clip={clip}
             videoPath={videoPath}
+            videoDurationMs={videoDurationMs}
             onToggle={onToggle}
             onUpdateTimes={onUpdateClipTimes}
           />

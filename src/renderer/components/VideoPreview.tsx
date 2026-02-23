@@ -13,9 +13,7 @@ export default function VideoPreview({
 }: VideoPreviewProps): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
 
-  const startSec = startMs / 1000
-  const endSec = endMs / 1000
-  const src = `a1slice://video?path=${encodeURIComponent(videoPath)}#t=${startSec},${endSec}`
+  const src = `a1slice://video?path=${encodeURIComponent(videoPath)}`
 
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current
@@ -37,7 +35,17 @@ export default function VideoPreview({
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    video.currentTime = startMs / 1000
+
+    const seekToStart = (): void => {
+      video.currentTime = startMs / 1000
+    }
+
+    if (video.readyState >= 1) {
+      seekToStart()
+    } else {
+      video.addEventListener('loadedmetadata', seekToStart, { once: true })
+      return () => video.removeEventListener('loadedmetadata', seekToStart)
+    }
   }, [startMs])
 
   return (

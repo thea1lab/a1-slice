@@ -6,7 +6,8 @@ import type {
   TranscribeResult,
   AnalyzeResult,
   CutResult,
-  CheckTranscriptResult
+  CheckTranscriptResult,
+  CheckAnalysisResult
 } from '../shared/types'
 
 declare global {
@@ -14,8 +15,10 @@ declare global {
     api: {
       selectVideo(): Promise<string | null>
       checkTranscript(videoPath: string): Promise<CheckTranscriptResult>
+      checkAnalysis(videoPath: string): Promise<CheckAnalysisResult>
       transcribeVideo(videoPath: string): Promise<TranscribeResult>
       analyzeTranscript(
+        videoPath: string,
         segments: TranscriptSegment[],
         settings: AppSettings
       ): Promise<AnalyzeResult>

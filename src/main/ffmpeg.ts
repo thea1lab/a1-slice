@@ -123,12 +123,17 @@ export async function cutClipWithSubtitles(
         '-i', videoPath,
         '-t', String(durationSec),
         '-vf', subFilter,
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
         '-c:a', 'aac', '-b:a', '128k',
         '-y', outputPath
       ],
       durationSec,
       onProgress
     )
+
+    // Save SRT alongside the output clip
+    const outputSrtPath = outputPath.replace(/\.[^.]+$/, '.srt')
+    writeFileSync(outputSrtPath, generateSrt(shifted), 'utf-8')
   } finally {
     try { unlinkSync(srtPath) } catch {}
   }

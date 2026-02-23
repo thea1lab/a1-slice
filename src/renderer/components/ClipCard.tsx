@@ -29,6 +29,7 @@ function parseMMSSs(value: string): number | null {
 interface ClipCardProps {
   clip: ClipSegmentWithStatus
   videoPath: string
+  videoDurationMs?: number
   onToggle: (id: string) => void
   onUpdateTimes?: (id: string, startMs: number, endMs: number) => void
 }
@@ -36,6 +37,7 @@ interface ClipCardProps {
 export default function ClipCard({
   clip,
   videoPath,
+  videoDurationMs,
   onToggle,
   onUpdateTimes
 }: ClipCardProps): React.JSX.Element {
@@ -52,7 +54,8 @@ export default function ClipCard({
 
   const handleStartBlur = (): void => {
     const ms = parseMMSSs(startInput)
-    if (ms !== null && ms < clip.endMs && onUpdateTimes) {
+    const maxMs = videoDurationMs ?? Infinity
+    if (ms !== null && ms < clip.endMs && ms <= maxMs && onUpdateTimes) {
       onUpdateTimes(clip.id, ms, clip.endMs)
     } else {
       setStartInput(msToMMSSs(clip.startMs))
@@ -61,7 +64,8 @@ export default function ClipCard({
 
   const handleEndBlur = (): void => {
     const ms = parseMMSSs(endInput)
-    if (ms !== null && ms > clip.startMs && onUpdateTimes) {
+    const maxMs = videoDurationMs ?? Infinity
+    if (ms !== null && ms > clip.startMs && ms <= maxMs && onUpdateTimes) {
       onUpdateTimes(clip.id, clip.startMs, ms)
     } else {
       setEndInput(msToMMSSs(clip.endMs))

@@ -11,7 +11,7 @@ import { join, basename, dirname } from 'path'
 import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync } from 'fs'
 import { extractAudio, cutClipWithSubtitles } from './ffmpeg'
 import { downloadWhisperBinary, downloadModel, transcribe } from './whisper'
-import { analyzeTranscript, formatTranscriptForLLM } from './analyzer'
+import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
 import type {
   AppSettings,
@@ -21,6 +21,7 @@ import type {
 } from '../shared/types'
 
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
+app.commandLine.appendSwitch('log-level', '3')
 
 // Register custom protocol before app is ready
 protocol.registerSchemesAsPrivileged([
@@ -217,11 +218,26 @@ ipcMain.handle('check-transcript', (_event, videoPath: string) => {
   return { found: false }
 })
 
+// IPC: Check for cached analysis
+ipcMain.handle('check-analysis', (_event, videoPath: string) => {
+  try {
+    const vName = basename(videoPath).replace(/\.[^.]+$/, '')
+    const cachePath = join(dirname(videoPath), `${vName}.a1slice-analysis.txt`)
+    if (existsSync(cachePath)) {
+      const rawResponse = readFileSync(cachePath, 'utf-8')
+      const clips = parseLLMResponse(rawResponse)
+      return { found: true, clips, rawResponse }
+    }
+  } catch {}
+  return { found: false }
+})
+
 // IPC: Analyze transcript with LLM (Step 3)
 ipcMain.handle(
   'analyze-transcript',
   async (
     _event,
+    videoPath: string,
     segments: TranscriptSegment[],
     settings: AppSettings
   ) => {
@@ -242,6 +258,13 @@ ipcMain.handle(
       )
 
       if (cancelled) throw new Error('Cancelled')
+
+      // Cache analysis next to source video
+      try {
+        const vName = basename(videoPath).replace(/\.[^.]+$/, '')
+        const cachePath = join(dirname(videoPath), `${vName}.a1slice-analysis.txt`)
+        writeFileSync(cachePath, rawResponse, 'utf-8')
+      } catch {}
 
       sendProgress({ stage: 'done', message: '', percent: 100 })
       return { success: true, clips, rawResponse }

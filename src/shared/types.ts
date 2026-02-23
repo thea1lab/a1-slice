@@ -62,6 +62,12 @@ export interface CheckTranscriptResult {
   segments?: TranscriptSegment[]
 }
 
+export interface CheckAnalysisResult {
+  found: boolean
+  clips?: ClipSegment[]
+  rawResponse?: string
+}
+
 export interface CutResult {
   success: boolean
   outputDir?: string
