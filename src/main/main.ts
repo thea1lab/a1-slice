@@ -1,13 +1,39 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  shell,
+  protocol,
+  net
+} from 'electron'
 import { join, basename } from 'path'
 import { mkdirSync, existsSync, unlinkSync } from 'fs'
 import { extractAudio, cutClipWithSubtitles } from './ffmpeg'
-import { downloadModel, transcribe } from './whisper'
+import { downloadWhisperBinary, downloadModel, transcribe } from './whisper'
 import { analyzeTranscript } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
-import type { AppSettings, ProgressUpdate } from '../shared/types'
+import type {
+  AppSettings,
+  ProgressUpdate,
+  TranscriptSegment,
+  ClipSegment
+} from '../shared/types'
 
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
+
+// Register custom protocol before app is ready
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'a1slice',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true
+    }
+  }
+])
 
 let mainWindow: BrowserWindow | null = null
 let cancelled = false
@@ -20,15 +46,16 @@ function createWindow(): void {
   const isMac = process.platform === 'darwin'
 
   mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
-    minWidth: 600,
-    minHeight: 400,
+    width: 1200,
+    height: 800,
+    minWidth: 900,
+    minHeight: 600,
+    resizable: true,
     frame: isMac,
     titleBarStyle: isMac ? 'hiddenInset' : undefined,
     trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
     backgroundColor: '#0f0f1a',
-    maximizable: false,
+    maximizable: true,
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
       sandbox: false
@@ -82,14 +109,14 @@ ipcMain.on('cancel-pipeline', () => {
   cancelled = true
 })
 
-// IPC: Run full pipeline
+// IPC: Transcribe video (Step 2)
 ipcMain.handle(
-  'run-pipeline',
-  async (_event, videoPath: string, settings: AppSettings) => {
+  'transcribe-video',
+  async (_event, videoPath: string) => {
     cancelled = false
 
     try {
-      // Step 1: Extract audio
+      // Extract audio
       sendProgress({
         stage: 'extracting',
         message: 'Extracting audio from video...',
@@ -105,7 +132,23 @@ ipcMain.handle(
 
       if (cancelled) throw new Error('Cancelled')
 
-      // Step 2: Download whisper model if needed
+      // Download whisper binary if needed
+      sendProgress({
+        stage: 'downloading-binary',
+        message: 'Checking whisper binary...',
+        percent: 0
+      })
+      await downloadWhisperBinary((pct) => {
+        sendProgress({
+          stage: 'downloading-binary',
+          message: 'Downloading whisper binary...',
+          percent: pct
+        })
+      })
+
+      if (cancelled) throw new Error('Cancelled')
+
+      // Download whisper model if needed
       sendProgress({
         stage: 'downloading',
         message: 'Checking whisper model...',
@@ -121,7 +164,7 @@ ipcMain.handle(
 
       if (cancelled) throw new Error('Cancelled')
 
-      // Step 3: Transcribe
+      // Transcribe
       sendProgress({
         stage: 'transcribing',
         message: 'Transcribing audio...',
@@ -142,12 +185,34 @@ ipcMain.handle(
 
       if (cancelled) throw new Error('Cancelled')
 
-      // Step 4: Analyze transcript with LLM
+      sendProgress({ stage: 'done', message: '', percent: 100 })
+      return { success: true, segments }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Unknown error occurred'
+      sendProgress({ stage: 'error', message, percent: 0 })
+      return { success: false, error: message }
+    }
+  }
+)
+
+// IPC: Analyze transcript with LLM (Step 3)
+ipcMain.handle(
+  'analyze-transcript',
+  async (
+    _event,
+    segments: TranscriptSegment[],
+    settings: AppSettings
+  ) => {
+    cancelled = false
+
+    try {
       sendProgress({
         stage: 'analyzing',
         message: 'AI is picking the best clips...',
         percent: 0
       })
+
       const clips = await analyzeTranscript(
         segments,
         settings.provider,
@@ -157,7 +222,29 @@ ipcMain.handle(
 
       if (cancelled) throw new Error('Cancelled')
 
-      // Step 5: Cut clips with subtitles
+      sendProgress({ stage: 'done', message: '', percent: 100 })
+      return { success: true, clips }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Unknown error occurred'
+      sendProgress({ stage: 'error', message, percent: 0 })
+      return { success: false, error: message }
+    }
+  }
+)
+
+// IPC: Cut clips with subtitles (Step 5)
+ipcMain.handle(
+  'cut-clips',
+  async (
+    _event,
+    videoPath: string,
+    clips: ClipSegment[],
+    segments: TranscriptSegment[]
+  ) => {
+    cancelled = false
+
+    try {
       const videoName = basename(videoPath, '.mp4').replace(/\.[^.]+$/, '')
       const outputDir = join(
         app.getPath('videos'),
@@ -169,7 +256,9 @@ ipcMain.handle(
         if (cancelled) throw new Error('Cancelled')
 
         const clip = clips[i]
-        const safeTitle = clip.title.replace(/[^a-zA-Z0-9 _-]/g, '').slice(0, 50)
+        const safeTitle = clip.title
+          .replace(/[^a-zA-Z0-9 _-]/g, '')
+          .slice(0, 50)
         const outputPath = join(
           outputDir,
           `${String(i + 1).padStart(2, '0')}_${safeTitle}.mp4`
@@ -191,24 +280,31 @@ ipcMain.handle(
         )
       }
 
-      sendProgress({
-        stage: 'done',
-        message: outputDir,
-        percent: 100
-      })
+      sendProgress({ stage: 'done', message: outputDir, percent: 100 })
+      return { success: true, outputDir }
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Unknown error occurred'
-      sendProgress({
-        stage: 'error',
-        message,
-        percent: 0
-      })
+      sendProgress({ stage: 'error', message, percent: 0 })
+      return { success: false, error: message }
     }
   }
 )
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  // Handle a1slice:// protocol for video preview
+  protocol.handle('a1slice', (req) => {
+    const url = new URL(req.url)
+    // a1slice://video?path=/path/to/file.mp4
+    const filePath = decodeURIComponent(url.searchParams.get('path') || '')
+    if (!filePath) {
+      return new Response('Missing path', { status: 400 })
+    }
+    return net.fetch(`file://${filePath}`)
+  })
+
+  createWindow()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

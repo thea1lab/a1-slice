@@ -1,6 +1,7 @@
 export type PipelineStage =
   | 'idle'
   | 'extracting'
+  | 'downloading-binary'
   | 'downloading'
   | 'transcribing'
   | 'analyzing'
@@ -32,4 +33,36 @@ export interface AppSettings {
   provider: LLMProvider
   model: string
   apiKey: string
+}
+
+// --- Wizard types ---
+
+export type WizardStep =
+  | 'select'
+  | 'transcribe'
+  | 'review-transcript'
+  | 'review-slices'
+  | 'export'
+
+export interface TranscribeResult {
+  success: boolean
+  segments?: TranscriptSegment[]
+  error?: string
+}
+
+export interface AnalyzeResult {
+  success: boolean
+  clips?: ClipSegment[]
+  error?: string
+}
+
+export interface CutResult {
+  success: boolean
+  outputDir?: string
+  error?: string
+}
+
+export interface ClipSegmentWithStatus extends ClipSegment {
+  id: string
+  approved: boolean
 }

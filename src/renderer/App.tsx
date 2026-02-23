@@ -1,6 +1,19 @@
 import { useReducer, useEffect, useCallback } from 'react'
 import TitleBar from './TitleBar'
-import type { PipelineStage, LLMProvider, ProgressUpdate } from '../shared/types'
+import Stepper from './components/Stepper'
+import StepSelectVideo from './components/StepSelectVideo'
+import StepTranscribe from './components/StepTranscribe'
+import StepReviewTranscript from './components/StepReviewTranscript'
+import StepReviewSlices from './components/StepReviewSlices'
+import StepExport from './components/StepExport'
+import type {
+  WizardStep,
+  PipelineStage,
+  LLMProvider,
+  ProgressUpdate,
+  TranscriptSegment,
+  ClipSegmentWithStatus
+} from '../shared/types'
 
 // --- Default models per provider ---
 
@@ -11,41 +24,110 @@ const DEFAULT_MODELS: Record<LLMProvider, string> = {
 
 // --- State & Reducer ---
 
-interface AppState {
-  stage: PipelineStage
+interface WizardState {
+  currentStep: WizardStep
+  completedSteps: WizardStep[]
+
+  // Settings
   provider: LLMProvider
   model: string
   apiKey: string
-  videoPath: string | null
-  message: string
-  percent: number
-  outputFolder: string | null
   settingsLoaded: boolean
+
+  // Step 1: Select video
+  videoPath: string | null
+
+  // Step 2: Transcribe
+  transcribeStage: PipelineStage
+  transcribeMessage: string
+  transcribePercent: number
+  transcribeError: string | null
+
+  // Step 3: Review transcript
+  segments: TranscriptSegment[]
+  analyzing: boolean
+  analyzePercent: number
+  analyzeMessage: string
+  analyzeError: string | null
+
+  // Step 4: Review slices
+  clips: ClipSegmentWithStatus[]
+
+  // Step 5: Export
+  exportStage: PipelineStage
+  exportMessage: string
+  exportPercent: number
+  exportError: string | null
+  outputDir: string | null
 }
 
-type AppAction =
+type WizardAction =
+  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string }
   | { type: 'SET_PROVIDER'; provider: LLMProvider }
   | { type: 'SET_MODEL'; model: string }
   | { type: 'SET_API_KEY'; apiKey: string }
   | { type: 'SET_VIDEO'; videoPath: string }
-  | { type: 'PROGRESS'; update: ProgressUpdate }
-  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string }
+  | { type: 'GO_TO_STEP'; step: WizardStep }
+  | { type: 'START_TRANSCRIBE' }
+  | { type: 'TRANSCRIBE_PROGRESS'; update: ProgressUpdate }
+  | { type: 'TRANSCRIBE_DONE'; segments: TranscriptSegment[] }
+  | { type: 'TRANSCRIBE_ERROR'; error: string }
+  | { type: 'START_ANALYZE' }
+  | { type: 'ANALYZE_PROGRESS'; update: ProgressUpdate }
+  | { type: 'ANALYZE_DONE'; clips: ClipSegmentWithStatus[] }
+  | { type: 'ANALYZE_ERROR'; error: string }
+  | { type: 'TOGGLE_CLIP'; id: string }
+  | { type: 'START_EXPORT' }
+  | { type: 'EXPORT_PROGRESS'; update: ProgressUpdate }
+  | { type: 'EXPORT_DONE'; outputDir: string }
+  | { type: 'EXPORT_ERROR'; error: string }
   | { type: 'RESET' }
 
-const initialState: AppState = {
-  stage: 'idle',
+const initialState: WizardState = {
+  currentStep: 'select',
+  completedSteps: [],
+
   provider: 'claude',
   model: DEFAULT_MODELS.claude,
   apiKey: '',
+  settingsLoaded: false,
+
   videoPath: null,
-  message: '',
-  percent: 0,
-  outputFolder: null,
-  settingsLoaded: false
+
+  transcribeStage: 'idle',
+  transcribeMessage: '',
+  transcribePercent: 0,
+  transcribeError: null,
+
+  segments: [],
+  analyzing: false,
+  analyzePercent: 0,
+  analyzeMessage: '',
+  analyzeError: null,
+
+  clips: [],
+
+  exportStage: 'idle',
+  exportMessage: '',
+  exportPercent: 0,
+  exportError: null,
+  outputDir: null
 }
 
-export function appReducer(state: AppState, action: AppAction): AppState {
+function addCompleted(steps: WizardStep[], step: WizardStep): WizardStep[] {
+  return steps.includes(step) ? steps : [...steps, step]
+}
+
+export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
+    case 'LOAD_SETTINGS':
+      return {
+        ...state,
+        provider: action.provider,
+        model: action.model,
+        apiKey: action.apiKey,
+        settingsLoaded: true
+      }
     case 'SET_PROVIDER':
       return {
         ...state,
@@ -58,24 +140,117 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, apiKey: action.apiKey }
     case 'SET_VIDEO':
       return { ...state, videoPath: action.videoPath }
-    case 'PROGRESS': {
-      const { stage, message, percent } = action.update
-      if (stage === 'done') {
-        return { ...state, stage: 'done', message: '', percent: 100, outputFolder: message }
-      }
-      if (stage === 'error') {
-        return { ...state, stage: 'error', message, percent: 0 }
-      }
-      return { ...state, stage, message, percent }
-    }
-    case 'LOAD_SETTINGS':
+    case 'GO_TO_STEP':
+      return { ...state, currentStep: action.step }
+
+    // Transcription
+    case 'START_TRANSCRIBE':
       return {
         ...state,
-        provider: action.provider,
-        model: action.model,
-        apiKey: action.apiKey,
-        settingsLoaded: true
+        currentStep: 'transcribe',
+        completedSteps: addCompleted(state.completedSteps, 'select'),
+        transcribeStage: 'extracting',
+        transcribeMessage: '',
+        transcribePercent: 0,
+        transcribeError: null
       }
+    case 'TRANSCRIBE_PROGRESS':
+      return {
+        ...state,
+        transcribeStage: action.update.stage,
+        transcribeMessage: action.update.message,
+        transcribePercent: action.update.percent
+      }
+    case 'TRANSCRIBE_DONE':
+      return {
+        ...state,
+        currentStep: 'review-transcript',
+        completedSteps: addCompleted(state.completedSteps, 'transcribe'),
+        transcribeStage: 'done',
+        transcribePercent: 100,
+        segments: action.segments
+      }
+    case 'TRANSCRIBE_ERROR':
+      return {
+        ...state,
+        transcribeStage: 'error',
+        transcribeError: action.error
+      }
+
+    // Analysis
+    case 'START_ANALYZE':
+      return {
+        ...state,
+        analyzing: true,
+        analyzePercent: 0,
+        analyzeMessage: 'AI is picking the best clips...',
+        analyzeError: null
+      }
+    case 'ANALYZE_PROGRESS':
+      return {
+        ...state,
+        analyzePercent: action.update.percent,
+        analyzeMessage: action.update.message
+      }
+    case 'ANALYZE_DONE':
+      return {
+        ...state,
+        currentStep: 'review-slices',
+        completedSteps: addCompleted(state.completedSteps, 'review-transcript'),
+        analyzing: false,
+        analyzePercent: 100,
+        clips: action.clips
+      }
+    case 'ANALYZE_ERROR':
+      return {
+        ...state,
+        analyzing: false,
+        analyzeError: action.error
+      }
+
+    // Clip toggle
+    case 'TOGGLE_CLIP':
+      return {
+        ...state,
+        clips: state.clips.map((c) =>
+          c.id === action.id ? { ...c, approved: !c.approved } : c
+        )
+      }
+
+    // Export
+    case 'START_EXPORT':
+      return {
+        ...state,
+        currentStep: 'export',
+        completedSteps: addCompleted(state.completedSteps, 'review-slices'),
+        exportStage: 'cutting',
+        exportMessage: '',
+        exportPercent: 0,
+        exportError: null,
+        outputDir: null
+      }
+    case 'EXPORT_PROGRESS':
+      return {
+        ...state,
+        exportStage: action.update.stage,
+        exportMessage: action.update.message,
+        exportPercent: action.update.percent
+      }
+    case 'EXPORT_DONE':
+      return {
+        ...state,
+        exportStage: 'done',
+        exportPercent: 100,
+        outputDir: action.outputDir,
+        completedSteps: addCompleted(state.completedSteps, 'export')
+      }
+    case 'EXPORT_ERROR':
+      return {
+        ...state,
+        exportStage: 'error',
+        exportError: action.error
+      }
+
     case 'RESET':
       return {
         ...initialState,
@@ -84,96 +259,223 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         apiKey: state.apiKey,
         settingsLoaded: state.settingsLoaded
       }
+
     default:
       return state
   }
 }
 
-// --- Stage labels ---
-
-const STAGE_LABELS: Partial<Record<PipelineStage, string>> = {
-  extracting: 'Extracting Audio',
-  downloading: 'Downloading Model',
-  transcribing: 'Transcribing',
-  analyzing: 'Analyzing',
-  cutting: 'Cutting Clips'
-}
-
 // --- Component ---
 
 export default function App(): React.JSX.Element {
-  const [state, dispatch] = useReducer(appReducer, initialState)
-  const { stage, provider, model, apiKey, videoPath, message, percent, outputFolder, settingsLoaded } = state
-
-  const isRunning =
-    stage === 'extracting' ||
-    stage === 'downloading' ||
-    stage === 'transcribing' ||
-    stage === 'analyzing' ||
-    stage === 'cutting'
-
-  const canStart = videoPath && apiKey.length > 0 && !isRunning && stage !== 'done'
+  const [state, dispatch] = useReducer(wizardReducer, initialState)
 
   // Load settings on mount
   useEffect(() => {
     window.api.loadSettings().then((s) => {
-      dispatch({ type: 'LOAD_SETTINGS', provider: s.provider, model: s.model, apiKey: s.apiKey })
+      dispatch({
+        type: 'LOAD_SETTINGS',
+        provider: s.provider,
+        model: s.model,
+        apiKey: s.apiKey
+      })
     })
   }, [])
 
-  // Persist settings when they change (only after initial load)
+  // Persist settings when they change
   useEffect(() => {
-    if (!settingsLoaded) return
-    window.api.saveSettings({ provider, model, apiKey })
-  }, [provider, model, apiKey, settingsLoaded])
+    if (!state.settingsLoaded) return
+    window.api.saveSettings({
+      provider: state.provider,
+      model: state.model,
+      apiKey: state.apiKey
+    })
+  }, [state.provider, state.model, state.apiKey, state.settingsLoaded])
 
-  // Listen for pipeline progress
+  // Listen for pipeline progress — route to the correct step
   useEffect(() => {
     const unsubscribe = window.api.onProgress((update: ProgressUpdate) => {
-      dispatch({ type: 'PROGRESS', update })
+      if (state.currentStep === 'transcribe') {
+        dispatch({ type: 'TRANSCRIBE_PROGRESS', update })
+      } else if (
+        state.currentStep === 'review-transcript' &&
+        state.analyzing
+      ) {
+        dispatch({ type: 'ANALYZE_PROGRESS', update })
+      } else if (state.currentStep === 'export') {
+        dispatch({ type: 'EXPORT_PROGRESS', update })
+      }
     })
     return unsubscribe
-  }, [])
+  }, [state.currentStep, state.analyzing])
+
+  const completedSet = new Set(state.completedSteps)
+
+  // --- Handlers ---
 
   const handleSelectVideo = useCallback(async () => {
     const path = await window.api.selectVideo()
     if (path) dispatch({ type: 'SET_VIDEO', videoPath: path })
   }, [])
 
-  const handleStart = useCallback(async () => {
-    if (!videoPath) return
-    await window.api.runPipeline(videoPath, { provider, model, apiKey })
-  }, [videoPath, provider, model, apiKey])
+  const handleStartTranscribe = useCallback(async () => {
+    if (!state.videoPath) return
+    dispatch({ type: 'START_TRANSCRIBE' })
+    const result = await window.api.transcribeVideo(state.videoPath)
+    if (result.success && result.segments) {
+      dispatch({ type: 'TRANSCRIBE_DONE', segments: result.segments })
+    } else {
+      dispatch({
+        type: 'TRANSCRIBE_ERROR',
+        error: result.error || 'Transcription failed'
+      })
+    }
+  }, [state.videoPath])
+
+  const handleAnalyze = useCallback(async () => {
+    dispatch({ type: 'START_ANALYZE' })
+    const result = await window.api.analyzeTranscript(state.segments, {
+      provider: state.provider,
+      model: state.model,
+      apiKey: state.apiKey
+    })
+    if (result.success && result.clips) {
+      const clipsWithStatus = result.clips.map((clip, i) => ({
+        ...clip,
+        id: String(i),
+        approved: true
+      }))
+      dispatch({ type: 'ANALYZE_DONE', clips: clipsWithStatus })
+    } else {
+      dispatch({
+        type: 'ANALYZE_ERROR',
+        error: result.error || 'Analysis failed'
+      })
+    }
+  }, [state.segments, state.provider, state.model, state.apiKey])
+
+  const handleSlice = useCallback(async () => {
+    if (!state.videoPath) return
+    const approved = state.clips.filter((c) => c.approved)
+    dispatch({ type: 'START_EXPORT' })
+    const result = await window.api.cutClips(
+      state.videoPath,
+      approved.map(({ title, startMs, endMs }) => ({ title, startMs, endMs })),
+      state.segments
+    )
+    if (result.success && result.outputDir) {
+      dispatch({ type: 'EXPORT_DONE', outputDir: result.outputDir })
+    } else {
+      dispatch({
+        type: 'EXPORT_ERROR',
+        error: result.error || 'Export failed'
+      })
+    }
+  }, [state.videoPath, state.clips, state.segments])
 
   const handleCancel = useCallback(() => {
     window.api.cancelPipeline()
   }, [])
 
   const handleOpenFolder = useCallback(() => {
-    if (outputFolder) window.api.openFolder(outputFolder)
-  }, [outputFolder])
+    if (state.outputDir) window.api.openFolder(state.outputDir)
+  }, [state.outputDir])
 
   const handleReset = useCallback(() => {
     dispatch({ type: 'RESET' })
   }, [])
 
+  const handleStepClick = useCallback((step: WizardStep) => {
+    dispatch({ type: 'GO_TO_STEP', step })
+  }, [])
+
+  // --- Render current step ---
+
+  function renderStep(): React.JSX.Element {
+    switch (state.currentStep) {
+      case 'select':
+        return (
+          <StepSelectVideo
+            videoPath={state.videoPath}
+            onSelectVideo={handleSelectVideo}
+            onNext={handleStartTranscribe}
+          />
+        )
+      case 'transcribe':
+        return (
+          <StepTranscribe
+            stage={state.transcribeStage}
+            message={state.transcribeMessage}
+            percent={state.transcribePercent}
+            error={state.transcribeError}
+            onCancel={handleCancel}
+            onRetry={handleStartTranscribe}
+          />
+        )
+      case 'review-transcript':
+        return (
+          <StepReviewTranscript
+            segments={state.segments}
+            provider={state.provider}
+            model={state.model}
+            apiKey={state.apiKey}
+            analyzing={state.analyzing}
+            analyzePercent={state.analyzePercent}
+            analyzeMessage={state.analyzeMessage}
+            error={state.analyzeError}
+            onProviderChange={(p) =>
+              dispatch({ type: 'SET_PROVIDER', provider: p })
+            }
+            onModelChange={(m) => dispatch({ type: 'SET_MODEL', model: m })}
+            onApiKeyChange={(k) =>
+              dispatch({ type: 'SET_API_KEY', apiKey: k })
+            }
+            onAnalyze={handleAnalyze}
+            onCancel={handleCancel}
+          />
+        )
+      case 'review-slices':
+        return (
+          <StepReviewSlices
+            clips={state.clips}
+            videoPath={state.videoPath!}
+            onToggle={(id) => dispatch({ type: 'TOGGLE_CLIP', id })}
+            onSlice={handleSlice}
+          />
+        )
+      case 'export':
+        return (
+          <StepExport
+            stage={state.exportStage}
+            message={state.exportMessage}
+            percent={state.exportPercent}
+            outputDir={state.outputDir}
+            error={state.exportError}
+            onOpenFolder={handleOpenFolder}
+            onStartOver={handleReset}
+            onCancel={handleCancel}
+          />
+        )
+    }
+  }
+
   return (
-    <div className="relative flex flex-col min-h-screen bg-bg-base text-neutral-200 font-sans overflow-hidden"
-      style={{ background: 'radial-gradient(ellipse at top, #12121e 0%, #08080f 60%)' }}
+    <div
+      className="relative flex flex-col min-h-screen bg-bg-base text-neutral-200 font-sans overflow-hidden"
+      style={{
+        background: 'radial-gradient(ellipse at top, #12121e 0%, #08080f 60%)'
+      }}
     >
       {/* Decorative background elements */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        {/* Accent glow — top right */}
         <div
           className="absolute -top-24 -right-24 w-72 h-72 rounded-full opacity-[0.06] blur-3xl"
           style={{ background: 'rgb(240, 154, 62)' }}
         />
-        {/* Secondary glow — bottom left */}
         <div
           className="absolute -bottom-32 -left-32 w-80 h-80 rounded-full opacity-[0.04] blur-3xl"
           style={{ background: 'rgb(240, 154, 62)' }}
         />
-        {/* Grid pattern overlay */}
         <div
           className="absolute inset-0 opacity-[0.03]"
           style={{
@@ -182,13 +484,11 @@ export default function App(): React.JSX.Element {
             backgroundSize: '48px 48px'
           }}
         />
-        {/* Film-strip dashes — left edge */}
         <div className="absolute top-20 left-3 flex flex-col gap-3 opacity-[0.06]">
           {Array.from({ length: 12 }).map((_, i) => (
             <div key={i} className="w-1 h-4 rounded-full bg-white" />
           ))}
         </div>
-        {/* Film-strip dashes — right edge */}
         <div className="absolute top-20 right-3 flex flex-col gap-3 opacity-[0.06]">
           {Array.from({ length: 12 }).map((_, i) => (
             <div key={i} className="w-1 h-4 rounded-full bg-white" />
@@ -198,168 +498,14 @@ export default function App(): React.JSX.Element {
 
       <TitleBar />
 
-      <div className="relative flex flex-col items-center px-6 pb-10 pt-4 gap-6 max-w-lg mx-auto w-full flex-1">
-        {/* Header */}
-        <div className="flex items-center gap-3">
-          {/* Scissors / slice icon */}
-          <svg
-            viewBox="0 0 32 32"
-            fill="none"
-            className="w-9 h-9 shrink-0"
-            aria-hidden="true"
-          >
-            <rect x="2" y="6" width="28" height="20" rx="4" stroke="rgb(240,154,62)" strokeWidth="1.5" opacity="0.5" />
-            <line x1="12" y1="6" x2="12" y2="26" stroke="rgb(240,154,62)" strokeWidth="1.5" strokeDasharray="3 2" />
-            <polygon points="10,14 14,16 10,18" fill="rgb(240,154,62)" opacity="0.8" />
-            <rect x="4" y="10" width="5" height="3" rx="0.5" fill="rgb(240,154,62)" opacity="0.3" />
-            <rect x="4" y="15" width="5" height="3" rx="0.5" fill="rgb(240,154,62)" opacity="0.3" />
-            <rect x="4" y="20" width="5" height="3" rx="0.5" fill="rgb(240,154,62)" opacity="0.3" />
-            <rect x="16" y="12" width="11" height="2" rx="1" fill="white" opacity="0.15" />
-            <rect x="16" y="17" width="8" height="2" rx="1" fill="white" opacity="0.10" />
-          </svg>
-          <div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">
-              A1 <span style={{ color: 'rgb(240, 154, 62)' }}>Slice</span>
-            </h1>
-            <p className="text-xs text-neutral-500">Cut long videos into short reels</p>
-          </div>
-        </div>
+      <Stepper
+        currentStep={state.currentStep}
+        completedSteps={completedSet}
+        onStepClick={handleStepClick}
+      />
 
-        {/* Settings Card */}
-        <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-5 space-y-4 shadow-lg">
-          <div className="flex gap-3">
-            <label className="flex flex-col gap-1.5 text-xs text-neutral-400 w-40">
-              Provider
-              <select
-                value={provider}
-                onChange={(e) =>
-                  dispatch({ type: 'SET_PROVIDER', provider: e.target.value as LLMProvider })
-                }
-                disabled={isRunning}
-                className="appearance-none bg-bg-input border border-white/12 rounded-lg pl-3 pr-8 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors disabled:opacity-40 select-chevron"
-              >
-                <option value="claude">Claude</option>
-                <option value="openai">OpenAI</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1.5 text-xs text-neutral-400 flex-1">
-              Model
-              <input
-                type="text"
-                value={model}
-                onChange={(e) => dispatch({ type: 'SET_MODEL', model: e.target.value })}
-                disabled={isRunning}
-                className="bg-bg-input border border-white/12 rounded-lg px-3 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors disabled:opacity-40"
-              />
-            </label>
-          </div>
-          <label className="flex flex-col gap-1.5 text-xs text-neutral-400">
-            API Key
-            <input
-              type="password"
-              placeholder="sk-..."
-              value={apiKey}
-              onChange={(e) => dispatch({ type: 'SET_API_KEY', apiKey: e.target.value })}
-              disabled={isRunning}
-              className="bg-bg-input border border-white/12 rounded-lg px-3 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors disabled:opacity-40"
-            />
-          </label>
-        </div>
-
-        {/* Video Card */}
-        <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-5 space-y-4 shadow-lg">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleSelectVideo}
-              disabled={isRunning}
-              className="bg-bg-input border border-white/12 rounded-lg px-4 py-2 text-sm text-neutral-200 hover:border-white/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            >
-              Choose File
-            </button>
-            {videoPath && (
-              <span className="text-sm text-neutral-400 truncate">
-                {videoPath.split(/[\\/]/).pop()}
-              </span>
-            )}
-          </div>
-
-          {!isRunning ? (
-            <button
-              onClick={handleStart}
-              disabled={!canStart}
-              className="w-full bg-accent hover:bg-accent-hover text-black font-semibold rounded-lg py-2.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-accent"
-            >
-              Start Processing
-            </button>
-          ) : (
-            <button
-              onClick={handleCancel}
-              className="w-full bg-red-800 hover:bg-red-700 text-white font-medium rounded-lg py-2.5 text-sm transition-colors"
-            >
-              Cancel
-            </button>
-          )}
-        </div>
-
-        {/* Progress Card */}
-        {isRunning && (
-          <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-5 space-y-3 shadow-lg">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-neutral-300 font-medium">
-                {STAGE_LABELS[stage] ?? stage}
-              </span>
-              <span className="text-neutral-500 tabular-nums">{percent}%</span>
-            </div>
-            <div className="w-full h-2 bg-bg-input rounded-full overflow-hidden">
-              <div
-                className="h-full bg-accent rounded-full transition-all duration-500 ease-out"
-                style={{ width: `${percent}%` }}
-              />
-            </div>
-            <p className="text-xs text-neutral-500">{message}</p>
-          </div>
-        )}
-
-        {/* Done Card */}
-        {stage === 'done' && (
-          <div className="w-full bg-bg-card border border-emerald-800 rounded-2xl p-5 space-y-4 shadow-lg">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span className="text-sm text-emerald-300 font-medium">Clips are ready</span>
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={handleOpenFolder}
-                className="flex-1 bg-accent hover:bg-accent-hover text-black font-semibold rounded-lg py-2 text-sm transition-colors"
-              >
-                Open Folder
-              </button>
-              <button
-                onClick={handleReset}
-                className="flex-1 bg-bg-input border border-white/12 hover:border-white/25 text-neutral-200 font-medium rounded-lg py-2 text-sm transition-colors"
-              >
-                Process More
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Error Card */}
-        {stage === 'error' && (
-          <div className="w-full bg-bg-card border border-red-900 rounded-2xl p-5 space-y-4 shadow-lg">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-red-400" />
-              <span className="text-sm text-red-300 font-medium">Error</span>
-            </div>
-            <p className="text-sm text-neutral-400">{message}</p>
-            <button
-              onClick={handleReset}
-              className="w-full bg-bg-input border border-white/12 hover:border-white/25 text-neutral-200 font-medium rounded-lg py-2 text-sm transition-colors"
-            >
-              Try Again
-            </button>
-          </div>
-        )}
+      <div className="relative flex flex-col flex-1 px-6 pb-10 overflow-y-auto custom-scrollbar">
+        {renderStep()}
       </div>
     </div>
   )

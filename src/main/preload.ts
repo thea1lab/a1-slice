@@ -1,12 +1,33 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AppSettings, ProgressUpdate } from '../shared/types'
+import type {
+  AppSettings,
+  ProgressUpdate,
+  TranscriptSegment,
+  ClipSegment,
+  TranscribeResult,
+  AnalyzeResult,
+  CutResult
+} from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
   selectVideo: (): Promise<string | null> =>
     ipcRenderer.invoke('select-video'),
 
-  runPipeline: (videoPath: string, settings: AppSettings): Promise<void> =>
-    ipcRenderer.invoke('run-pipeline', videoPath, settings),
+  transcribeVideo: (videoPath: string): Promise<TranscribeResult> =>
+    ipcRenderer.invoke('transcribe-video', videoPath),
+
+  analyzeTranscript: (
+    segments: TranscriptSegment[],
+    settings: AppSettings
+  ): Promise<AnalyzeResult> =>
+    ipcRenderer.invoke('analyze-transcript', segments, settings),
+
+  cutClips: (
+    videoPath: string,
+    clips: ClipSegment[],
+    segments: TranscriptSegment[]
+  ): Promise<CutResult> =>
+    ipcRenderer.invoke('cut-clips', videoPath, clips, segments),
 
   cancelPipeline: (): void => {
     ipcRenderer.send('cancel-pipeline')
