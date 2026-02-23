@@ -5,8 +5,8 @@ import type { PipelineStage, LLMProvider, ProgressUpdate } from '../shared/types
 // --- Default models per provider ---
 
 const DEFAULT_MODELS: Record<LLMProvider, string> = {
-  claude: 'claude-sonnet-4-20250514',
-  gpt4o: 'gpt-4o'
+  claude: 'claude-haiku-4-5-20251001',
+  openai: 'gpt-5-mini-2025-08-07'
 }
 
 // --- State & Reducer ---
@@ -158,18 +158,75 @@ export default function App(): React.JSX.Element {
   }, [])
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#0f0f1a] text-neutral-200 font-sans">
+    <div className="relative flex flex-col min-h-screen bg-bg-base text-neutral-200 font-sans overflow-hidden"
+      style={{ background: 'radial-gradient(ellipse at top, #12121e 0%, #08080f 60%)' }}
+    >
+      {/* Decorative background elements */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        {/* Accent glow — top right */}
+        <div
+          className="absolute -top-24 -right-24 w-72 h-72 rounded-full opacity-[0.06] blur-3xl"
+          style={{ background: 'rgb(240, 154, 62)' }}
+        />
+        {/* Secondary glow — bottom left */}
+        <div
+          className="absolute -bottom-32 -left-32 w-80 h-80 rounded-full opacity-[0.04] blur-3xl"
+          style={{ background: 'rgb(240, 154, 62)' }}
+        />
+        {/* Grid pattern overlay */}
+        <div
+          className="absolute inset-0 opacity-[0.03]"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px)',
+            backgroundSize: '48px 48px'
+          }}
+        />
+        {/* Film-strip dashes — left edge */}
+        <div className="absolute top-20 left-3 flex flex-col gap-3 opacity-[0.06]">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="w-1 h-4 rounded-full bg-white" />
+          ))}
+        </div>
+        {/* Film-strip dashes — right edge */}
+        <div className="absolute top-20 right-3 flex flex-col gap-3 opacity-[0.06]">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="w-1 h-4 rounded-full bg-white" />
+          ))}
+        </div>
+      </div>
+
       <TitleBar />
 
-      <div className="flex flex-col items-center px-6 pb-10 pt-4 gap-6 max-w-xl mx-auto w-full flex-1">
+      <div className="relative flex flex-col items-center px-6 pb-10 pt-4 gap-6 max-w-lg mx-auto w-full flex-1">
         {/* Header */}
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-white tracking-tight">A1 Slice</h1>
-          <p className="text-sm text-neutral-500 mt-1">Cut long videos into short reels</p>
+        <div className="flex items-center gap-3">
+          {/* Scissors / slice icon */}
+          <svg
+            viewBox="0 0 32 32"
+            fill="none"
+            className="w-9 h-9 shrink-0"
+            aria-hidden="true"
+          >
+            <rect x="2" y="6" width="28" height="20" rx="4" stroke="rgb(240,154,62)" strokeWidth="1.5" opacity="0.5" />
+            <line x1="12" y1="6" x2="12" y2="26" stroke="rgb(240,154,62)" strokeWidth="1.5" strokeDasharray="3 2" />
+            <polygon points="10,14 14,16 10,18" fill="rgb(240,154,62)" opacity="0.8" />
+            <rect x="4" y="10" width="5" height="3" rx="0.5" fill="rgb(240,154,62)" opacity="0.3" />
+            <rect x="4" y="15" width="5" height="3" rx="0.5" fill="rgb(240,154,62)" opacity="0.3" />
+            <rect x="4" y="20" width="5" height="3" rx="0.5" fill="rgb(240,154,62)" opacity="0.3" />
+            <rect x="16" y="12" width="11" height="2" rx="1" fill="white" opacity="0.15" />
+            <rect x="16" y="17" width="8" height="2" rx="1" fill="white" opacity="0.10" />
+          </svg>
+          <div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">
+              A1 <span style={{ color: 'rgb(240, 154, 62)' }}>Slice</span>
+            </h1>
+            <p className="text-xs text-neutral-500">Cut long videos into short reels</p>
+          </div>
         </div>
 
         {/* Settings Card */}
-        <div className="w-full bg-[#16162a] border border-neutral-800 rounded-xl p-5 space-y-4">
+        <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-5 space-y-4 shadow-lg">
           <div className="flex gap-3">
             <label className="flex flex-col gap-1.5 text-xs text-neutral-400 w-40">
               Provider
@@ -179,10 +236,10 @@ export default function App(): React.JSX.Element {
                   dispatch({ type: 'SET_PROVIDER', provider: e.target.value as LLMProvider })
                 }
                 disabled={isRunning}
-                className="bg-[#0f0f1a] border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200 outline-none focus:border-indigo-500 transition-colors disabled:opacity-40"
+                className="appearance-none bg-bg-input border border-white/12 rounded-lg pl-3 pr-8 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors disabled:opacity-40 select-chevron"
               >
                 <option value="claude">Claude</option>
-                <option value="gpt4o">GPT-4o</option>
+                <option value="openai">OpenAI</option>
               </select>
             </label>
             <label className="flex flex-col gap-1.5 text-xs text-neutral-400 flex-1">
@@ -192,7 +249,7 @@ export default function App(): React.JSX.Element {
                 value={model}
                 onChange={(e) => dispatch({ type: 'SET_MODEL', model: e.target.value })}
                 disabled={isRunning}
-                className="bg-[#0f0f1a] border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200 outline-none focus:border-indigo-500 transition-colors disabled:opacity-40"
+                className="bg-bg-input border border-white/12 rounded-lg px-3 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors disabled:opacity-40"
               />
             </label>
           </div>
@@ -204,18 +261,18 @@ export default function App(): React.JSX.Element {
               value={apiKey}
               onChange={(e) => dispatch({ type: 'SET_API_KEY', apiKey: e.target.value })}
               disabled={isRunning}
-              className="bg-[#0f0f1a] border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200 outline-none focus:border-indigo-500 transition-colors disabled:opacity-40"
+              className="bg-bg-input border border-white/12 rounded-lg px-3 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors disabled:opacity-40"
             />
           </label>
         </div>
 
         {/* Video Card */}
-        <div className="w-full bg-[#16162a] border border-neutral-800 rounded-xl p-5 space-y-4">
+        <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-5 space-y-4 shadow-lg">
           <div className="flex items-center gap-3">
             <button
               onClick={handleSelectVideo}
               disabled={isRunning}
-              className="bg-[#0f0f1a] border border-neutral-700 rounded-lg px-4 py-2 text-sm text-neutral-200 hover:border-neutral-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+              className="bg-bg-input border border-white/12 rounded-lg px-4 py-2 text-sm text-neutral-200 hover:border-white/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
             >
               Choose File
             </button>
@@ -230,7 +287,7 @@ export default function App(): React.JSX.Element {
             <button
               onClick={handleStart}
               disabled={!canStart}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg py-2.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-indigo-600"
+              className="w-full bg-accent hover:bg-accent-hover text-black font-semibold rounded-lg py-2.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-accent"
             >
               Start Processing
             </button>
@@ -246,16 +303,16 @@ export default function App(): React.JSX.Element {
 
         {/* Progress Card */}
         {isRunning && (
-          <div className="w-full bg-[#16162a] border border-neutral-800 rounded-xl p-5 space-y-3">
+          <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-5 space-y-3 shadow-lg">
             <div className="flex items-center justify-between text-sm">
               <span className="text-neutral-300 font-medium">
                 {STAGE_LABELS[stage] ?? stage}
               </span>
               <span className="text-neutral-500 tabular-nums">{percent}%</span>
             </div>
-            <div className="w-full h-2 bg-[#0f0f1a] rounded-full overflow-hidden">
+            <div className="w-full h-2 bg-bg-input rounded-full overflow-hidden">
               <div
-                className="h-full bg-indigo-500 rounded-full transition-all duration-500 ease-out"
+                className="h-full bg-accent rounded-full transition-all duration-500 ease-out"
                 style={{ width: `${percent}%` }}
               />
             </div>
@@ -265,7 +322,7 @@ export default function App(): React.JSX.Element {
 
         {/* Done Card */}
         {stage === 'done' && (
-          <div className="w-full bg-[#16162a] border border-emerald-800 rounded-xl p-5 space-y-4">
+          <div className="w-full bg-bg-card border border-emerald-800 rounded-2xl p-5 space-y-4 shadow-lg">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
               <span className="text-sm text-emerald-300 font-medium">Clips are ready</span>
@@ -273,13 +330,13 @@ export default function App(): React.JSX.Element {
             <div className="flex gap-3">
               <button
                 onClick={handleOpenFolder}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg py-2 text-sm transition-colors"
+                className="flex-1 bg-accent hover:bg-accent-hover text-black font-semibold rounded-lg py-2 text-sm transition-colors"
               >
                 Open Folder
               </button>
               <button
                 onClick={handleReset}
-                className="flex-1 bg-[#0f0f1a] border border-neutral-700 hover:border-neutral-500 text-neutral-200 font-medium rounded-lg py-2 text-sm transition-colors"
+                className="flex-1 bg-bg-input border border-white/12 hover:border-white/25 text-neutral-200 font-medium rounded-lg py-2 text-sm transition-colors"
               >
                 Process More
               </button>
@@ -289,7 +346,7 @@ export default function App(): React.JSX.Element {
 
         {/* Error Card */}
         {stage === 'error' && (
-          <div className="w-full bg-[#16162a] border border-red-900 rounded-xl p-5 space-y-4">
+          <div className="w-full bg-bg-card border border-red-900 rounded-2xl p-5 space-y-4 shadow-lg">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-red-400" />
               <span className="text-sm text-red-300 font-medium">Error</span>
@@ -297,7 +354,7 @@ export default function App(): React.JSX.Element {
             <p className="text-sm text-neutral-400">{message}</p>
             <button
               onClick={handleReset}
-              className="w-full bg-[#0f0f1a] border border-neutral-700 hover:border-neutral-500 text-neutral-200 font-medium rounded-lg py-2 text-sm transition-colors"
+              className="w-full bg-bg-input border border-white/12 hover:border-white/25 text-neutral-200 font-medium rounded-lg py-2 text-sm transition-colors"
             >
               Try Again
             </button>

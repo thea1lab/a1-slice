@@ -9,7 +9,7 @@ export default function TitleBar(): React.JSX.Element {
 
   return (
     <div
-      className="flex items-center justify-between w-full h-10 px-3 select-none shrink-0"
+      className="flex items-center justify-between w-full h-10 px-3 select-none shrink-0 bg-bg-base"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       {/* Left spacer — on macOS traffic lights occupy this space */}
@@ -31,13 +31,6 @@ export default function TitleBar(): React.JSX.Element {
             aria-label="Minimize"
           >
             &#x2500;
-          </button>
-          <button
-            onClick={() => window.api.windowMaximize()}
-            className="w-8 h-8 flex items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors"
-            aria-label="Maximize"
-          >
-            &#x25A1;
           </button>
           <button
             onClick={() => window.api.windowClose()}

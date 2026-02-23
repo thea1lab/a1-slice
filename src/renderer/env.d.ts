@@ -11,7 +11,6 @@ declare global {
       loadSettings(): Promise<AppSettings>
       saveSettings(settings: AppSettings): Promise<void>
       windowMinimize(): Promise<void>
-      windowMaximize(): Promise<void>
       windowClose(): Promise<void>
       getPlatform(): string
     }

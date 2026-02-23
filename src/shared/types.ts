@@ -26,7 +26,7 @@ export interface ProgressUpdate {
   percent: number
 }
 
-export type LLMProvider = 'claude' | 'gpt4o'
+export type LLMProvider = 'claude' | 'openai'
 
 export interface AppSettings {
   provider: LLMProvider

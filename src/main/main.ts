@@ -7,6 +7,8 @@ import { analyzeTranscript } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
 import type { AppSettings, ProgressUpdate } from '../shared/types'
 
+app.commandLine.appendSwitch('ignore-gpu-blocklist')
+
 let mainWindow: BrowserWindow | null = null
 let cancelled = false
 
@@ -22,9 +24,11 @@ function createWindow(): void {
     height: 600,
     minWidth: 600,
     minHeight: 400,
-    frame: isMac ? true : false,
+    frame: isMac,
     titleBarStyle: isMac ? 'hiddenInset' : undefined,
     trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
+    backgroundColor: '#0f0f1a',
+    maximizable: false,
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
       sandbox: false
@@ -50,14 +54,6 @@ ipcMain.handle('save-settings', (_event, settings: AppSettings) => {
 // IPC: Window controls
 ipcMain.handle('window-minimize', () => {
   mainWindow?.minimize()
-})
-
-ipcMain.handle('window-maximize', () => {
-  if (mainWindow?.isMaximized()) {
-    mainWindow.unmaximize()
-  } else {
-    mainWindow?.maximize()
-  }
 })
 
 ipcMain.handle('window-close', () => {
