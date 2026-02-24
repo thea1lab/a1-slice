@@ -15,5 +15,11 @@ win:
     publisherName: A1 Lab
 mac:
   target: dmg
+  category: public.app-category.video
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  identity: "-"
 linux:
   target: AppImage

@@ -4,10 +4,9 @@ import {
   ipcMain,
   dialog,
   shell,
-  protocol,
-  net
+  protocol
 } from 'electron'
-import { join, basename, dirname, extname } from 'path'
+import { join, basename, dirname, extname, resolve, normalize } from 'path'
 import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync, statSync, createReadStream } from 'fs'
 import { Readable } from 'stream'
 
@@ -51,6 +50,19 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow: BrowserWindow | null = null
 let cancelled = false
+const allowedVideoPaths = new Set<string>()
+
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.avi', '.webm'])
+
+function secureHandle(
+  channel: string,
+  handler: (event: Electron.IpcMainInvokeEvent, ...args: any[]) => any
+): void {
+  ipcMain.handle(channel, (event, ...args) => {
+    if (event.sender !== mainWindow?.webContents) return undefined
+    return handler(event, ...args)
+  })
+}
 
 function sendProgress(update: ProgressUpdate): void {
   mainWindow?.webContents.send('pipeline-progress', update)
@@ -73,7 +85,8 @@ function createWindow(): void {
     icon: join(__dirname, '../../resources/icon.png'),
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
-      sandbox: false
+      sandbox: true,
+      contextIsolation: true
     }
   })
 
@@ -82,28 +95,52 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  // Content Security Policy
+  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          process.env['ELECTRON_RENDERER_URL']
+            ? "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* ws://localhost:*; media-src 'self' a1slice:; connect-src 'self' a1slice: http://localhost:* ws://localhost:*; img-src 'self' data:"
+            : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' a1slice:; connect-src 'self' a1slice:; img-src 'self' data:; font-src 'self'"
+        ]
+      }
+    })
+  })
+
+  // Block navigation to external URLs
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const devUrl = process.env['ELECTRON_RENDERER_URL']
+    if (devUrl && url.startsWith(devUrl)) return
+    event.preventDefault()
+  })
+
+  // Block popups
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 }
 
 // IPC: Settings
-ipcMain.handle('load-settings', () => {
+secureHandle('load-settings', () => {
   return loadSettings()
 })
 
-ipcMain.handle('save-settings', (_event, settings: AppSettings) => {
+secureHandle('save-settings', (_event, settings: AppSettings) => {
   saveSettings(settings)
 })
 
 // IPC: Window controls
-ipcMain.handle('window-minimize', () => {
+secureHandle('window-minimize', () => {
   mainWindow?.minimize()
 })
 
-ipcMain.handle('window-close', () => {
+secureHandle('window-close', () => {
   mainWindow?.close()
 })
 
 // IPC: Select video file
-ipcMain.handle('select-video', async () => {
+secureHandle('select-video', async () => {
   if (!mainWindow) return null
   const result = await dialog.showOpenDialog(mainWindow, {
     filters: [
@@ -111,21 +148,25 @@ ipcMain.handle('select-video', async () => {
     ],
     properties: ['openFile']
   })
-  return result.canceled ? null : result.filePaths[0]
+  if (result.canceled) return null
+  const selected = result.filePaths[0]
+  allowedVideoPaths.add(normalize(selected))
+  return selected
 })
 
 // IPC: Open folder in native file manager
-ipcMain.handle('open-folder', async (_event, folderPath: string) => {
+secureHandle('open-folder', async (_event, folderPath: string) => {
   shell.showItemInFolder(folderPath)
 })
 
 // IPC: Cancel pipeline
-ipcMain.on('cancel-pipeline', () => {
+ipcMain.on('cancel-pipeline', (event) => {
+  if (event.sender !== mainWindow?.webContents) return
   cancelled = true
 })
 
 // IPC: Transcribe video (Step 2)
-ipcMain.handle(
+secureHandle(
   'transcribe-video',
   async (_event, videoPath: string) => {
     cancelled = false
@@ -203,7 +244,7 @@ ipcMain.handle(
 )
 
 // IPC: Check for cached transcript
-ipcMain.handle('check-transcript', (_event, videoPath: string) => {
+secureHandle('check-transcript', (_event, videoPath: string) => {
   try {
     const vName = basename(videoPath).replace(/\.[^.]+$/, '')
     const cachePath = join(dirname(videoPath), `${vName}.a1slice.json`)
@@ -217,7 +258,7 @@ ipcMain.handle('check-transcript', (_event, videoPath: string) => {
 })
 
 // IPC: Check for cached analysis
-ipcMain.handle('check-analysis', (_event, videoPath: string) => {
+secureHandle('check-analysis', (_event, videoPath: string) => {
   try {
     const vName = basename(videoPath).replace(/\.[^.]+$/, '')
     const cachePath = join(dirname(videoPath), `${vName}.a1slice-analysis.txt`)
@@ -231,7 +272,7 @@ ipcMain.handle('check-analysis', (_event, videoPath: string) => {
 })
 
 // IPC: Analyze transcript with LLM (Step 3)
-ipcMain.handle(
+secureHandle(
   'analyze-transcript',
   async (
     _event,
@@ -278,7 +319,7 @@ ipcMain.handle(
 )
 
 // IPC: Cut clips with subtitles (Step 5)
-ipcMain.handle(
+secureHandle(
   'cut-clips',
   async (
     _event,
@@ -353,8 +394,14 @@ app.whenReady().then(() => {
   // Handle a1slice:// protocol for video preview (with range request support for seeking)
   protocol.handle('a1slice', (req) => {
     const url = new URL(req.url)
-    const filePath = decodeURIComponent(url.searchParams.get('path') || '')
-    if (!filePath) return new Response('Missing path', { status: 400 })
+    const rawPath = decodeURIComponent(url.searchParams.get('path') || '')
+    if (!rawPath) return new Response('Missing path', { status: 400 })
+
+    const filePath = resolve(normalize(rawPath))
+    const ext = extname(filePath).toLowerCase()
+    if (!VIDEO_EXTENSIONS.has(ext) || !allowedVideoPaths.has(normalize(filePath))) {
+      return new Response('Forbidden', { status: 403 })
+    }
 
     let size: number
     try {
