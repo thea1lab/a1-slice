@@ -282,7 +282,8 @@ export function transcribe(
       wavPath,
       '-oj', // JSON output
       '-of',
-      outputBase
+      outputBase,
+      '-pp' // print progress to stderr
     ]
 
     const proc = spawn(binaryPath, args)
