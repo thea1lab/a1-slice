@@ -3,7 +3,6 @@ import type { PipelineStage } from '../../shared/types'
 
 const STAGE_LABELS: Partial<Record<PipelineStage, string>> = {
   extracting: 'Extracting Audio',
-  'downloading-binary': 'Downloading Whisper',
   downloading: 'Downloading Model',
   transcribing: 'Transcribing'
 }

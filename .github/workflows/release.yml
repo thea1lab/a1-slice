@@ -66,6 +66,33 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build whisper-cli
+        run: |
+          git clone --depth 1 --branch v1.8.3 https://github.com/ggerganov/whisper.cpp.git
+          cmake -S whisper.cpp -B whisper.cpp/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+          cmake --build whisper.cpp/build --config Release --target whisper-cli -j$(nproc || echo 4)
+
+      - name: Copy whisper-cli binary (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p resources/bin
+          cp whisper.cpp/build/bin/whisper-cli resources/bin/whisper-cli-linux-x64
+          chmod +x resources/bin/whisper-cli-linux-x64
+
+      - name: Copy whisper-cli binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path resources\bin
+          Copy-Item whisper.cpp\build\bin\Release\whisper-cli.exe resources\bin\whisper-cli-win-x64.exe
+
+      - name: Copy whisper-cli binary (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p resources/bin
+          cp whisper.cpp/build/bin/whisper-cli resources/bin/whisper-cli-mac-arm64
+          chmod +x resources/bin/whisper-cli-mac-arm64
+
       - name: Build & package
         run: npm run ${{ matrix.script }} -- --publish never
 

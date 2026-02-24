@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { homedir, platform, arch } from 'os'
-import { existsSync, mkdirSync, createWriteStream, readFileSync, chmodSync, unlinkSync, renameSync } from 'fs'
+import { existsSync, mkdirSync, createWriteStream, readFileSync } from 'fs'
 import { spawn } from 'child_process'
 import https from 'https'
 import http from 'http'
@@ -10,20 +10,8 @@ const MODEL_FILENAME = 'ggml-large-v3.bin'
 const MODEL_URL =
   'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin'
 
-// Built from whisper.cpp v1.8.3 — rebuild via:
-//   gh workflow run build-whisper.yml -f whisper_ref=<tag> -f release_tag=whisper-<version>
-const WHISPER_BINARY_VERSION = 'v1.0.0'
-const WHISPER_BINARY_BASE_URL =
-  'https://github.com/a1lab/a1-slice/releases/download/whisper-' + WHISPER_BINARY_VERSION
-
 function getModelsDir(): string {
   const dir = join(homedir(), '.a1slice', 'models')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  return dir
-}
-
-function getBinDir(): string {
-  const dir = join(homedir(), '.a1slice', 'bin', `whisper-${WHISPER_BINARY_VERSION}`)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -44,89 +32,13 @@ function getWhisperBinaryName(): string {
 export function getWhisperBinaryPath(): string {
   const name = getWhisperBinaryName()
 
-  // 1. User cache (~/.a1slice/bin/<version>/)
-  const cachedPath = join(getBinDir(), name)
-  if (existsSync(cachedPath)) return cachedPath
-
-  // 2. Production (process.resourcesPath/bin/)
+  // 1. Production (process.resourcesPath/bin/)
   const prodPath = join(process.resourcesPath ?? '', 'bin', name)
   if (existsSync(prodPath)) return prodPath
 
-  // 3. Dev (resources/bin/)
+  // 2. Dev (resources/bin/)
   const devPath = join(__dirname, '../../resources/bin', name)
   return devPath.replace('app.asar', 'app.asar.unpacked')
-}
-
-export function downloadWhisperBinary(
-  onProgress?: (percent: number) => void
-): Promise<string> {
-  const name = getWhisperBinaryName()
-  const binDir = getBinDir()
-  const binaryPath = join(binDir, name)
-
-  if (existsSync(binaryPath)) return Promise.resolve(binaryPath)
-
-  const url = `${WHISPER_BINARY_BASE_URL}/${name}`
-  const partialPath = binaryPath + '.partial'
-
-  return new Promise((resolve, reject) => {
-    function doRequest(reqUrl: string): void {
-      const proto = reqUrl.startsWith('https') ? https : http
-      proto
-        .get(reqUrl, (res) => {
-          if (
-            (res.statusCode === 301 || res.statusCode === 302) &&
-            res.headers.location
-          ) {
-            doRequest(res.headers.location)
-            return
-          }
-
-          if (res.statusCode !== 200) {
-            reject(new Error(`Binary download failed: HTTP ${res.statusCode}`))
-            return
-          }
-
-          const totalBytes = parseInt(res.headers['content-length'] ?? '0', 10)
-          let downloaded = 0
-          const file = createWriteStream(partialPath)
-
-          res.on('data', (chunk: Buffer) => {
-            downloaded += chunk.length
-            if (onProgress && totalBytes > 0) {
-              onProgress(Math.round((downloaded / totalBytes) * 100))
-            }
-          })
-
-          res.pipe(file)
-          file.on('finish', () => {
-            file.close()
-            try {
-              // Rename partial to final
-              renameSync(partialPath, binaryPath)
-              // Make executable on Unix
-              if (platform() !== 'win32') {
-                chmodSync(binaryPath, 0o755)
-              }
-              resolve(binaryPath)
-            } catch (err) {
-              reject(err)
-            }
-          })
-          file.on('error', (err) => {
-            // Clean up partial file on error
-            try { unlinkSync(partialPath) } catch {}
-            reject(err)
-          })
-        })
-        .on('error', (err) => {
-          try { unlinkSync(partialPath) } catch {}
-          reject(err)
-        })
-    }
-
-    doRequest(url)
-  })
 }
 
 export function downloadModel(

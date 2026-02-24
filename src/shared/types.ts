@@ -1,7 +1,6 @@
 export type PipelineStage =
   | 'idle'
   | 'extracting'
-  | 'downloading-binary'
   | 'downloading'
   | 'transcribing'
   | 'analyzing'

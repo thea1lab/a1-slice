@@ -23,7 +23,7 @@ function mimeForVideo(filePath: string): string {
   return map[ext] || 'video/mp4'
 }
 import { extractAudio, cutClip, getVideoDurationMs } from './ffmpeg'
-import { downloadWhisperBinary, downloadModel, transcribe } from './whisper'
+import { downloadModel, transcribe } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
 import type {
@@ -141,22 +141,6 @@ ipcMain.handle(
         sendProgress({
           stage: 'extracting',
           message: 'Extracting audio from video...',
-          percent: pct
-        })
-      })
-
-      if (cancelled) throw new Error('Cancelled')
-
-      // Download whisper binary if needed
-      sendProgress({
-        stage: 'downloading-binary',
-        message: 'Checking whisper binary...',
-        percent: 0
-      })
-      await downloadWhisperBinary((pct) => {
-        sendProgress({
-          stage: 'downloading-binary',
-          message: 'Downloading whisper binary...',
           percent: pct
         })
       })
