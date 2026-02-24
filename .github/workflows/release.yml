@@ -71,14 +71,12 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.19
         with:
           cuda: '12.6.3'
-          method: network
 
       - name: Install CUDA toolkit (Windows)
         if: runner.os == 'Windows'
         uses: Jimver/cuda-toolkit@v0.2.19
         with:
           cuda: '12.6.3'
-          method: network
 
       - name: Clone whisper.cpp
         shell: bash
