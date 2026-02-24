@@ -34,7 +34,7 @@ case "$OS" in
     ;;
   Linux)
     if command -v nvcc &>/dev/null; then
-      GPU_FLAGS+=(-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90")
+      GPU_FLAGS+=(-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90")
     else
       echo "CUDA toolkit not found — skipping GPU build on Linux"
       GPU_FLAGS=("SKIP")
@@ -42,7 +42,7 @@ case "$OS" in
     ;;
   MINGW*|MSYS*|CYGWIN*)
     if command -v nvcc &>/dev/null; then
-      GPU_FLAGS+=(-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90")
+      GPU_FLAGS+=(-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90")
     else
       echo "CUDA toolkit not found — skipping GPU build on Windows"
       GPU_FLAGS=("SKIP")

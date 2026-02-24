@@ -118,7 +118,7 @@ jobs:
         run: |
           cmake -S whisper.cpp -B whisper.cpp/build-gpu \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90"
+            -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90"
           cmake --build whisper.cpp/build-gpu --config Release --target whisper-cli --parallel 2
 
       - name: Build whisper-cli (GPU, CUDA — Windows)
@@ -127,7 +127,7 @@ jobs:
         run: |
           cmake -S whisper.cpp -B whisper.cpp/build-gpu \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90"
+            -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90"
           cmake --build whisper.cpp/build-gpu --config Release --target whisper-cli --parallel 2
 
       - name: Copy whisper-cli binaries (Linux)
