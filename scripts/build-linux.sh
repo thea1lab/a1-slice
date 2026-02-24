@@ -60,7 +60,10 @@ if [[ "$CLEAN" -eq 1 ]]; then
   yellow "==> Clean build requested. Removing caches..."
   docker volume rm a1slice-node-modules a1slice-electron-cache a1slice-eb-cache 2>/dev/null || true
   docker rmi "$DOCKER_IMAGE" 2>/dev/null || true
-  rm -rf "$RELEASE_DIR" "$DIST_DIR"
+  if [[ -d "$RELEASE_DIR" ]]; then
+    docker run --rm -v "$REPO_ROOT":/build alpine rm -rf /build/release
+  fi
+  rm -rf "$DIST_DIR"
   green "  Caches cleared."
 fi
 
@@ -71,7 +74,10 @@ echo "  First run takes a while; subsequent runs use Docker layer cache."
 docker build -t "$DOCKER_IMAGE" "$REPO_ROOT"
 
 # --- Clean release dir to avoid mixing old artifacts ---
-rm -rf "$RELEASE_DIR"
+# Docker runs as root, so release/ may contain root-owned files
+if [[ -d "$RELEASE_DIR" ]]; then
+  docker run --rm -v "$REPO_ROOT":/build alpine rm -rf /build/release
+fi
 
 # --- Run build inside container ---
 cyan "==> Running Electron build inside container (target: linux)..."
