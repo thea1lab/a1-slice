@@ -18,29 +18,30 @@ function getModelsDir(): string {
   return dir
 }
 
-function getWhisperBinaryName(): string {
+function getWhisperBinaryNames(): [string, string] {
   const os = platform()
   const cpu = arch()
+  let base: string
 
-  if (os === 'win32') {
-    return 'whisper-cli-win-x64.exe'
-  } else if (os === 'darwin') {
-    return cpu === 'arm64' ? 'whisper-cli-mac-arm64' : 'whisper-cli-mac-x64'
-  } else {
-    return cpu === 'arm64' ? 'whisper-cli-linux-arm64' : 'whisper-cli-linux-x64'
-  }
+  if (os === 'win32') base = 'whisper-cli-win-x64'
+  else if (os === 'darwin') base = cpu === 'arm64' ? 'whisper-cli-mac-arm64' : 'whisper-cli-mac-x64'
+  else base = cpu === 'arm64' ? 'whisper-cli-linux-arm64' : 'whisper-cli-linux-x64'
+
+  const ext = os === 'win32' ? '.exe' : ''
+  return [`${base}-gpu${ext}`, `${base}${ext}`]
+}
+
+function findBinaryPath(name: string): string | null {
+  const prodPath = join(process.resourcesPath ?? '', 'bin', name)
+  if (existsSync(prodPath)) return prodPath
+  const devPath = join(__dirname, '../../resources/bin', name).replace('app.asar', 'app.asar.unpacked')
+  if (existsSync(devPath)) return devPath
+  return null
 }
 
 export function getWhisperBinaryPath(): string {
-  const name = getWhisperBinaryName()
-
-  // 1. Production (process.resourcesPath/bin/)
-  const prodPath = join(process.resourcesPath ?? '', 'bin', name)
-  if (existsSync(prodPath)) return prodPath
-
-  // 2. Dev (resources/bin/)
-  const devPath = join(__dirname, '../../resources/bin', name)
-  return devPath.replace('app.asar', 'app.asar.unpacked')
+  const [gpuName, cpuName] = getWhisperBinaryNames()
+  return findBinaryPath(gpuName) ?? findBinaryPath(cpuName) ?? join(__dirname, '../../resources/bin', cpuName).replace('app.asar', 'app.asar.unpacked')
 }
 
 const RETRYABLE_CODES = new Set([
@@ -262,18 +263,13 @@ export function parseWhisperJson(
   return results
 }
 
-export function transcribe(
+function runWhisper(
+  binaryPath: string,
   wavPath: string,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptSegment[]> {
   return new Promise((resolve, reject) => {
     const modelPath = join(getModelsDir(), MODEL_FILENAME)
-    if (!existsSync(modelPath)) {
-      reject(new Error('Whisper model not found. Download it first.'))
-      return
-    }
-
-    const binaryPath = getWhisperBinaryPath()
     const outputBase = wavPath.replace(/\.wav$/, '')
     const args = [
       '-m',
@@ -316,4 +312,29 @@ export function transcribe(
 
     proc.on('error', (err) => reject(err))
   })
+}
+
+export function transcribe(
+  wavPath: string,
+  onProgress?: (percent: number) => void
+): Promise<TranscriptSegment[]> {
+  const modelPath = join(getModelsDir(), MODEL_FILENAME)
+  if (!existsSync(modelPath)) {
+    return Promise.reject(new Error('Whisper model not found. Download it first.'))
+  }
+
+  const [gpuName, cpuName] = getWhisperBinaryNames()
+  const gpuPath = findBinaryPath(gpuName)
+  const cpuPath = findBinaryPath(cpuName)
+
+  const tryBinary = (binaryPath: string) => runWhisper(binaryPath, wavPath, onProgress)
+
+  if (gpuPath) {
+    return tryBinary(gpuPath).catch(() => {
+      if (cpuPath) return tryBinary(cpuPath)
+      throw new Error('No whisper binary available')
+    })
+  }
+  if (cpuPath) return tryBinary(cpuPath)
+  return Promise.reject(new Error('No whisper binary found'))
 }
