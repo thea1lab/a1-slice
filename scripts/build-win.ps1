@@ -71,10 +71,14 @@ if (-not (Get-Command "cl" -ErrorAction SilentlyContinue)) {
             [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
         }
     }
-    $clVersion = (cl 2>&1 | Select-Object -First 1) -replace '.*Compiler Version\s+', 'MSVC '
+    $ErrorActionPreference = "Continue"
+    $clVersion = (cl 2>&1 | ForEach-Object { "$_" } | Select-Object -First 1) -replace '.*Compiler Version\s+', 'MSVC '
+    $ErrorActionPreference = "Stop"
     Write-Host "  cl    : $clVersion"
 } else {
-    $clVersion = (cl 2>&1 | Select-Object -First 1) -replace '.*Compiler Version\s+', 'MSVC '
+    $ErrorActionPreference = "Continue"
+    $clVersion = (cl 2>&1 | ForEach-Object { "$_" } | Select-Object -First 1) -replace '.*Compiler Version\s+', 'MSVC '
+    $ErrorActionPreference = "Stop"
     Write-Host "  cl    : $clVersion"
 }
 
@@ -142,7 +146,8 @@ if ($needBuild) {
         cmake -S $CacheDir -B $gpuBuildDir -G "$cmakeGenerator" `
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF `
             -DGGML_METAL=OFF -DGGML_CUDA=ON `
-            -DCMAKE_CUDA_ARCHITECTURES="$CudaArchitectures"
+            -DCMAKE_CUDA_ARCHITECTURES="$CudaArchitectures" `
+            -DCMAKE_CUDA_FLAGS="--allow-unsupported-compiler"
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: cmake configure (GPU) failed" -ForegroundColor Red; exit 1 }
 
         cmake --build $gpuBuildDir --config Release --target whisper-cli --parallel
