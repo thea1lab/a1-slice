@@ -9,6 +9,8 @@ import type { TranscriptSegment } from '../shared/types'
 const MODEL_FILENAME = 'ggml-large-v3.bin'
 const MODEL_URL =
   'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin'
+const EXPECTED_MODEL_BYTES = 3_094_623_232 // ggml-large-v3.bin known size
+const MODEL_SIZE_TOLERANCE = 0.99 // accept if >= 99% of expected
 
 function getModelsDir(): string {
   const dir = join(homedir(), '.a1slice', 'models')
@@ -99,20 +101,19 @@ function attemptDownload(
           return
         }
 
-        // 416 Range Not Satisfiable — partial file may already be complete
+        // 416 Range Not Satisfiable — range exceeds file size
         if (sc === 416) {
           res.resume()
-          // Check if partial file is actually the full file
           try {
             const partialSize = statSync(partialPath).size
-            // If there's a meaningful file, assume it's complete
-            if (partialSize > 0) {
+            // Only treat as complete if size matches expected model size
+            if (partialSize >= EXPECTED_MODEL_BYTES * MODEL_SIZE_TOLERANCE) {
               renameSync(partialPath, modelPath)
               if (!settled) { settled = true; resolve(modelPath) }
               return
             }
           } catch { /* ignore */ }
-          // Otherwise delete and let outer loop retry from scratch
+          // Partial file is wrong size — delete and retry from scratch
           try { unlinkSync(partialPath) } catch { /* ignore */ }
           fail(new Error('Range not satisfiable, restarting download'))
           return
@@ -195,7 +196,20 @@ export async function downloadModel(
   onProgress?: (percent: number) => void
 ): Promise<string> {
   const modelPath = join(getModelsDir(), MODEL_FILENAME)
-  if (existsSync(modelPath)) return modelPath
+
+  // Validate existing model — delete if truncated/corrupt
+  if (existsSync(modelPath)) {
+    try {
+      const size = statSync(modelPath).size
+      if (size >= EXPECTED_MODEL_BYTES * MODEL_SIZE_TOLERANCE) {
+        return modelPath
+      }
+      // Too small — corrupted download, remove and re-download
+      unlinkSync(modelPath)
+    } catch {
+      try { unlinkSync(modelPath) } catch { /* ignore */ }
+    }
+  }
 
   const partialPath = modelPath + '.partial'
 

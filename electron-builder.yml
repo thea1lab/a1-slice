@@ -11,6 +11,7 @@ asarUnpack:
   - node_modules/ffmpeg-static/**
 win:
   target: nsis
+  publisherName: A1 Lab
 mac:
   target: dmg
 linux:
