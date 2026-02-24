@@ -20,8 +20,8 @@ $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $RepoRoot
 
 $WhisperTag = "v1.8.3"
-$CacheDir = Join-Path $RepoRoot ".cache" "whisper.cpp"
-$BinDir = Join-Path $RepoRoot "resources" "bin"
+$CacheDir = Join-Path (Join-Path $RepoRoot ".cache") "whisper.cpp"
+$BinDir = Join-Path (Join-Path $RepoRoot "resources") "bin"
 $DistDir = Join-Path $RepoRoot "dist"
 $CpuBinary = Join-Path $BinDir "whisper-cli-win-x64.exe"
 $GpuBinary = Join-Path $BinDir "whisper-cli-win-x64-gpu.exe"
@@ -84,7 +84,7 @@ if ($needBuild) {
         cmake --build $cpuBuildDir --config Release --target whisper-cli --parallel
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: cmake build (CPU) failed" -ForegroundColor Red; exit 1 }
 
-        Copy-Item (Join-Path $cpuBuildDir "bin" "Release" "whisper-cli.exe") $CpuBinary
+        Copy-Item (Join-Path (Join-Path (Join-Path $cpuBuildDir "bin") "Release") "whisper-cli.exe") $CpuBinary
         Write-Host "  -> $CpuBinary" -ForegroundColor Green
     } else {
         Write-Host "==> CPU binary already exists, skipping build." -ForegroundColor Cyan
@@ -103,7 +103,7 @@ if ($needBuild) {
         cmake --build $gpuBuildDir --config Release --target whisper-cli --parallel
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: cmake build (GPU) failed" -ForegroundColor Red; exit 1 }
 
-        Copy-Item (Join-Path $gpuBuildDir "bin" "Release" "whisper-cli.exe") $GpuBinary
+        Copy-Item (Join-Path (Join-Path (Join-Path $gpuBuildDir "bin") "Release") "whisper-cli.exe") $GpuBinary
         Write-Host "  -> $GpuBinary" -ForegroundColor Green
     } else {
         Write-Host "==> GPU binary already exists, skipping build." -ForegroundColor Cyan
