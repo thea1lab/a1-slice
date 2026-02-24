@@ -6,7 +6,7 @@ import { randomUUID } from 'crypto'
 import { writeFileSync } from 'fs'
 import type { TranscriptSegment } from '../shared/types'
 
-const FFMPEG = ffmpegPath as string
+const FFMPEG = (ffmpegPath as string).replace('app.asar', 'app.asar.unpacked')
 
 export function formatSrtTime(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000)

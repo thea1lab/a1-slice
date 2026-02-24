@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="bg-gradient" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1A1A2E"/>
+      <stop offset="1" stop-color="#101018"/>
+    </linearGradient>
+
+    <linearGradient id="orange-gradient" x1="320" y1="448" x2="448" y2="576" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFB050"/>
+      <stop offset="1" stop-color="rgb(240,154,62)"/>
+    </linearGradient>
+
+    <filter id="inner-shadow">
+      <feOffset dx="0" dy="2"/>
+      <feGaussianBlur stdDeviation="2" result="offset-blur"/>
+      <feComposite operator="out" in="SourceGraphic" in2="offset-blur" result="inverse"/>
+      <feFlood flood-color="black" flood-opacity="0.2" result="color"/>
+      <feComposite operator="in" in="color" in2="inverse" result="shadow"/>
+      <feComposite operator="over" in="shadow" in2="SourceGraphic"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="228" fill="url(#bg-gradient)"/>
+
+  <rect x="128" y="256" width="768" height="512" rx="80" stroke="rgb(240,154,62)" stroke-width="24"/>
+
+  <line x1="384" y1="290" x2="384" y2="735" stroke="url(#orange-gradient)" stroke-width="24" stroke-dasharray="64 40" stroke-linecap="round"/>
+
+  <path d="M328,456 L440,512 L328,568 Z" fill="url(#orange-gradient)" stroke="url(#orange-gradient)" stroke-width="16" stroke-linejoin="round"/>
+
+  <g fill="#3E3E4E">
+    <rect x="160" y="320" width="48" height="32" rx="8"/>
+    <rect x="160" y="384" width="48" height="32" rx="8"/>
+    <rect x="160" y="448" width="48" height="32" rx="8"/>
+    <rect x="160" y="512" width="48" height="32" rx="8"/>
+    <rect x="160" y="576" width="48" height="32" rx="8"/>
+    <rect x="160" y="640" width="48" height="32" rx="8"/>
+  </g>
+
+  <rect x="480" y="376" width="336" height="40" rx="20" fill="#34343B" filter="url(#inner-shadow)"/>
+  <rect x="480" y="488" width="240" height="40" rx="20" fill="#28282F" filter="url(#inner-shadow)"/>
+  <rect x="480" y="600" width="160" height="40" rx="20" fill="#28282F" opacity="0.7" filter="url(#inner-shadow)"/>
+</svg>

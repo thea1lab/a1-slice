@@ -54,7 +54,7 @@ export function getWhisperBinaryPath(): string {
 
   // 3. Dev (resources/bin/)
   const devPath = join(__dirname, '../../resources/bin', name)
-  return devPath
+  return devPath.replace('app.asar', 'app.asar.unpacked')
 }
 
 export function downloadWhisperBinary(

@@ -70,6 +70,7 @@ function createWindow(): void {
     trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
     backgroundColor: '#0f0f1a',
     maximizable: true,
+    icon: join(__dirname, '../../resources/icon.png'),
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
       sandbox: false
