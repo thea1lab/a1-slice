@@ -36,25 +36,8 @@ jobs:
   build:
     needs: check-version
     if: needs.check-version.outputs.changed == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            script: dist:linux
-            artifact_glob: "release/*.AppImage"
-            artifact_name: linux
-          - os: windows-latest
-            script: dist:win
-            artifact_glob: "release/*.exe"
-            artifact_name: windows
-          - os: macos-latest
-            script: dist:mac
-            artifact_glob: "release/*.dmg"
-            artifact_name: macos
-
-    runs-on: ${{ matrix.os }}
-    name: Build (${{ matrix.os }})
+    runs-on: macos-latest
+    name: Build (macOS)
 
     steps:
       - name: Checkout
@@ -75,59 +58,30 @@ jobs:
         uses: actions/cache@v4
         with:
           path: resources/bin
-          key: whisper-${{ env.WHISPER_TAG }}-${{ runner.os }}
+          key: whisper-${{ env.WHISPER_TAG }}-macOS
 
       # --- Build whisper (only on cache miss) ---
       - name: Clone whisper.cpp
         if: steps.whisper-cache.outputs.cache-hit != 'true'
-        shell: bash
         run: git clone --depth 1 --branch ${{ env.WHISPER_TAG }} https://github.com/ggerganov/whisper.cpp.git
 
-      # CPU-only build for Linux & Windows
-      - name: Build whisper-cli (Linux/Windows)
-        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os != 'macOS'
-        shell: bash
-        run: |
-          cmake -S whisper.cpp -B whisper.cpp/build \
-            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_METAL=OFF -DGGML_CUDA=OFF
-          cmake --build whisper.cpp/build --config Release --target whisper-cli --parallel
-
-      # macOS: CPU build + GPU build (Metal)
-      - name: Build whisper-cli (CPU — macOS)
-        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
-        shell: bash
+      - name: Build whisper-cli (CPU)
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
         run: |
           cmake -S whisper.cpp -B whisper.cpp/build-cpu \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
             -DGGML_METAL=OFF
           cmake --build whisper.cpp/build-cpu --config Release --target whisper-cli --parallel
 
-      - name: Build whisper-cli (GPU, Metal — macOS)
-        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
-        shell: bash
+      - name: Build whisper-cli (GPU, Metal)
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
         run: |
           cmake -S whisper.cpp -B whisper.cpp/build-gpu \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
           cmake --build whisper.cpp/build-gpu --config Release --target whisper-cli --parallel
 
-      # --- Copy binaries ---
-      - name: Copy whisper-cli binary (Linux)
-        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
-        run: |
-          mkdir -p resources/bin
-          cp whisper.cpp/build/bin/whisper-cli resources/bin/whisper-cli-linux-x64
-          chmod +x resources/bin/whisper-cli-linux-x64
-
-      - name: Copy whisper-cli binary (Windows)
-        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path resources\bin
-          Copy-Item whisper.cpp\build\bin\Release\whisper-cli.exe resources\bin\whisper-cli-win-x64.exe
-
-      - name: Copy whisper-cli binaries (macOS)
-        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
+      - name: Copy whisper-cli binaries
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p resources/bin
           cp whisper.cpp/build-cpu/bin/whisper-cli resources/bin/whisper-cli-mac-arm64
@@ -136,13 +90,13 @@ jobs:
 
       # --- Package & upload ---
       - name: Build & package
-        run: npm run ${{ matrix.script }} -- --publish never
+        run: npm run dist:mac -- --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_glob }}
+          name: macos
+          path: "release/*.dmg"
           if-no-files-found: error
 
   release:
