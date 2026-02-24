@@ -56,17 +56,17 @@ TAG="v${VERSION}"
 
 cyan "==> Version: $VERSION (tag: $TAG)"
 
-# --- Find artifacts to upload ---
+# --- Find artifacts matching current version ---
 ARTIFACTS=()
-for pattern in "*.AppImage" "*.dmg" "*.exe"; do
+for pattern in "*${VERSION}*.AppImage" "*${VERSION}*.dmg" "*${VERSION}*.exe"; do
   while IFS= read -r -d '' file; do
     ARTIFACTS+=("$file")
   done < <(find "$SOURCE_DIR" -maxdepth 1 -name "$pattern" -print0 2>/dev/null)
 done
 
 if [[ ${#ARTIFACTS[@]} -eq 0 ]]; then
-  red "ERROR: No release artifacts found in $SOURCE_DIR"
-  red "  Looked for: *.AppImage, *.dmg, *.exe"
+  red "ERROR: No release artifacts for version $VERSION found in $SOURCE_DIR"
+  red "  Looked for: *${VERSION}*.AppImage, *${VERSION}*.dmg, *${VERSION}*.exe"
   exit 1
 fi
 

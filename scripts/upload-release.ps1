@@ -1,19 +1,17 @@
 #
-# Upload local release artifacts to the GitHub release tagged v{version}.
+# Upload the release artifact for the current version to GitHub.
 #
-# Reads the version from package.json, creates the release if it doesn't
-# exist yet, and uploads all matching artifacts (.AppImage, .dmg, .exe).
+# Reads the version from package.json, finds the matching artifact in dist\,
+# creates the GitHub release if needed, and uploads it.
 #
 # Requires: gh (GitHub CLI, authenticated), node
 #
 # Usage:
-#   .\scripts\upload-release.ps1              # upload artifacts from release\
-#   .\scripts\upload-release.ps1 -Dist        # upload artifacts from dist\ instead
-#   .\scripts\upload-release.ps1 -Overwrite   # replace existing assets
+#   .\scripts\upload-release.ps1              # upload from dist\
+#   .\scripts\upload-release.ps1 -Overwrite   # replace existing asset
 #
 
 param(
-    [switch]$Dist,
     [switch]$Overwrite,
     [switch]$Help
 )
@@ -26,9 +24,8 @@ if (-not $RepoRoot) {
 }
 
 if ($Help) {
-    Write-Host "Usage: .\scripts\upload-release.ps1 [-Dist] [-Overwrite]"
-    Write-Host "  -Dist        Upload from dist\ instead of release\"
-    Write-Host "  -Overwrite   Replace existing assets on the release"
+    Write-Host "Usage: .\scripts\upload-release.ps1 [-Overwrite]"
+    Write-Host "  -Overwrite   Replace existing asset on the release"
     exit 0
 }
 
@@ -37,12 +34,7 @@ function Write-Cyan   { param($Msg) Write-Host $Msg -ForegroundColor Cyan }
 function Write-Green  { param($Msg) Write-Host $Msg -ForegroundColor Green }
 function Write-Red    { param($Msg) Write-Host $Msg -ForegroundColor Red }
 
-# --- Source directories (search both by default) ---
-if ($Dist) {
-    $SourceDirs = @(Join-Path $RepoRoot "dist")
-} else {
-    $SourceDirs = @(Join-Path $RepoRoot "release"), (Join-Path $RepoRoot "dist")
-}
+$DistDir = Join-Path $RepoRoot "dist"
 
 # --- Prerequisite checks ---
 if (-not (Get-Command "gh" -ErrorAction SilentlyContinue)) {
@@ -66,22 +58,18 @@ $Tag = "v$Version"
 
 Write-Cyan "==> Version: $Version (tag: $Tag)"
 
-# --- Find artifacts to upload ---
+# --- Find artifact matching current version in dist/ ---
 $Artifacts = @()
-foreach ($dir in $SourceDirs) {
-    if (Test-Path $dir) {
-        foreach ($pattern in @("*.AppImage", "*.dmg", "*.exe")) {
-            $found = Get-ChildItem -Path $dir -Filter $pattern -File -ErrorAction SilentlyContinue
-            if ($found) {
-                $Artifacts += $found
-            }
-        }
+foreach ($pattern in @("*$Version*.AppImage", "*$Version*.dmg", "*$Version*.exe")) {
+    $found = Get-ChildItem -Path $DistDir -Filter $pattern -File -ErrorAction SilentlyContinue
+    if ($found) {
+        $Artifacts += $found
     }
 }
 
 if ($Artifacts.Count -eq 0) {
-    Write-Red "ERROR: No release artifacts found in: $($SourceDirs -join ', ')"
-    Write-Red "  Looked for: *.AppImage, *.dmg, *.exe"
+    Write-Red "ERROR: No artifacts for version $Version found in $DistDir"
+    Write-Red "  Looked for: *$Version*.AppImage, *$Version*.dmg, *$Version*.exe"
     exit 1
 }
 
