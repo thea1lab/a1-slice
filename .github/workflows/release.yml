@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths: [package.json]
 
+env:
+  WHISPER_TAG: v1.8.3
+
 jobs:
   check-version:
     runs-on: ubuntu-latest
@@ -66,24 +69,34 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # --- Whisper binary cache ---
+      - name: Cache whisper-cli binaries
+        id: whisper-cache
+        uses: actions/cache@v4
+        with:
+          path: resources/bin
+          key: whisper-${{ env.WHISPER_TAG }}-${{ runner.os }}
+
+      # --- Build whisper (only on cache miss) ---
       - name: Install CUDA toolkit (Linux)
-        if: runner.os == 'Linux'
+        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
         uses: Jimver/cuda-toolkit@v0.2.30
         with:
           cuda: '12.6.3'
 
       - name: Install CUDA toolkit (Windows)
-        if: runner.os == 'Windows'
+        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
         uses: Jimver/cuda-toolkit@v0.2.30
         with:
           cuda: '12.6.3'
 
       - name: Clone whisper.cpp
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
         shell: bash
-        run: git clone --depth 1 --branch v1.8.3 https://github.com/ggerganov/whisper.cpp.git
+        run: git clone --depth 1 --branch ${{ env.WHISPER_TAG }} https://github.com/ggerganov/whisper.cpp.git
 
-      # --- CPU build (GPU explicitly disabled) ---
       - name: Build whisper-cli (CPU)
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           cmake -S whisper.cpp -B whisper.cpp/build-cpu \
@@ -91,9 +104,8 @@ jobs:
             -DGGML_METAL=OFF -DGGML_CUDA=OFF
           cmake --build whisper.cpp/build-cpu --config Release --target whisper-cli --parallel
 
-      # --- GPU build ---
       - name: Build whisper-cli (GPU, Metal — macOS)
-        if: runner.os == 'macOS'
+        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
         shell: bash
         run: |
           cmake -S whisper.cpp -B whisper.cpp/build-gpu \
@@ -101,26 +113,25 @@ jobs:
           cmake --build whisper.cpp/build-gpu --config Release --target whisper-cli --parallel
 
       - name: Build whisper-cli (GPU, CUDA — Linux)
-        if: runner.os == 'Linux'
+        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
         shell: bash
         run: |
           cmake -S whisper.cpp -B whisper.cpp/build-gpu \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90"
-          cmake --build whisper.cpp/build-gpu --config Release --target whisper-cli --parallel
+            -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90"
+          cmake --build whisper.cpp/build-gpu --config Release --target whisper-cli --parallel 2
 
       - name: Build whisper-cli (GPU, CUDA — Windows)
-        if: runner.os == 'Windows'
+        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
         shell: bash
         run: |
           cmake -S whisper.cpp -B whisper.cpp/build-gpu \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90"
-          cmake --build whisper.cpp/build-gpu --config Release --target whisper-cli --parallel
+            -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="80;86;89;90"
+          cmake --build whisper.cpp/build-gpu --config Release --target whisper-cli --parallel 2
 
-      # --- Copy binaries ---
       - name: Copy whisper-cli binaries (Linux)
-        if: runner.os == 'Linux'
+        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'Linux'
         run: |
           mkdir -p resources/bin
           cp whisper.cpp/build-cpu/bin/whisper-cli resources/bin/whisper-cli-linux-x64
@@ -128,7 +139,7 @@ jobs:
           chmod +x resources/bin/whisper-cli-linux-x64 resources/bin/whisper-cli-linux-x64-gpu
 
       - name: Copy whisper-cli binaries (Windows)
-        if: runner.os == 'Windows'
+        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path resources\bin
@@ -136,13 +147,14 @@ jobs:
           Copy-Item whisper.cpp\build-gpu\bin\Release\whisper-cli.exe resources\bin\whisper-cli-win-x64-gpu.exe
 
       - name: Copy whisper-cli binaries (macOS)
-        if: runner.os == 'macOS'
+        if: steps.whisper-cache.outputs.cache-hit != 'true' && runner.os == 'macOS'
         run: |
           mkdir -p resources/bin
           cp whisper.cpp/build-cpu/bin/whisper-cli resources/bin/whisper-cli-mac-arm64
           cp whisper.cpp/build-gpu/bin/whisper-cli resources/bin/whisper-cli-mac-arm64-gpu
           chmod +x resources/bin/whisper-cli-mac-arm64 resources/bin/whisper-cli-mac-arm64-gpu
 
+      # --- Package & upload ---
       - name: Build & package
         run: npm run ${{ matrix.script }} -- --publish never
 
