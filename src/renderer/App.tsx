@@ -10,6 +10,7 @@ import type {
   WizardStep,
   PipelineStage,
   LLMProvider,
+  VideoLanguage,
   ProgressUpdate,
   TranscriptSegment,
   ClipSegmentWithStatus
@@ -33,6 +34,7 @@ interface WizardState {
   model: string
   apiKey: string
   userHint: string
+  language: VideoLanguage
   settingsLoaded: boolean
 
   // Step 1: Select video
@@ -64,11 +66,12 @@ interface WizardState {
 }
 
 type WizardAction =
-  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string; userHint: string }
+  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string; userHint: string; language: VideoLanguage }
   | { type: 'SET_PROVIDER'; provider: LLMProvider }
   | { type: 'SET_MODEL'; model: string }
   | { type: 'SET_API_KEY'; apiKey: string }
   | { type: 'SET_USER_HINT'; userHint: string }
+  | { type: 'SET_LANGUAGE'; language: VideoLanguage }
   | { type: 'SET_VIDEO'; videoPath: string }
   | { type: 'GO_TO_STEP'; step: WizardStep }
   | { type: 'START_TRANSCRIBE' }
@@ -96,6 +99,7 @@ const initialState: WizardState = {
   model: DEFAULT_MODELS.claude,
   apiKey: '',
   userHint: '',
+  language: 'auto',
   settingsLoaded: false,
 
   videoPath: null,
@@ -134,6 +138,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         model: action.model,
         apiKey: action.apiKey,
         userHint: action.userHint,
+        language: action.language,
         settingsLoaded: true
       }
     case 'SET_PROVIDER':
@@ -148,6 +153,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return { ...state, apiKey: action.apiKey }
     case 'SET_USER_HINT':
       return { ...state, userHint: action.userHint }
+    case 'SET_LANGUAGE':
+      return { ...state, language: action.language }
     case 'SET_VIDEO':
       return { ...state, videoPath: action.videoPath }
     case 'GO_TO_STEP':
@@ -294,6 +301,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         model: state.model,
         apiKey: state.apiKey,
         userHint: state.userHint,
+        language: state.language,
         settingsLoaded: state.settingsLoaded
       }
 
@@ -315,7 +323,8 @@ export default function App(): React.JSX.Element {
         provider: s.provider,
         model: s.model,
         apiKey: s.apiKey,
-        userHint: s.userHint
+        userHint: s.userHint,
+        language: s.language
       })
     })
   }, [])
@@ -327,9 +336,10 @@ export default function App(): React.JSX.Element {
       provider: state.provider,
       model: state.model,
       apiKey: state.apiKey,
-      userHint: state.userHint
+      userHint: state.userHint,
+      language: state.language
     })
-  }, [state.provider, state.model, state.apiKey, state.userHint, state.settingsLoaded])
+  }, [state.provider, state.model, state.apiKey, state.userHint, state.language, state.settingsLoaded])
 
   // Listen for pipeline progress — route to the correct step
   useEffect(() => {
@@ -360,7 +370,7 @@ export default function App(): React.JSX.Element {
   const handleStartTranscribe = useCallback(async () => {
     if (!state.videoPath) return
     dispatch({ type: 'START_TRANSCRIBE' })
-    const result = await window.api.transcribeVideo(state.videoPath)
+    const result = await window.api.transcribeVideo(state.videoPath, state.language)
     if (result.success && result.segments) {
       dispatch({ type: 'TRANSCRIBE_DONE', segments: result.segments })
     } else {
@@ -369,7 +379,7 @@ export default function App(): React.JSX.Element {
         error: result.error || 'Transcription failed'
       })
     }
-  }, [state.videoPath])
+  }, [state.videoPath, state.language])
 
   const clampClips = useCallback(
     (clips: { title: string; startMs: number; endMs: number }[], rawResponse: string) => {
@@ -385,6 +395,13 @@ export default function App(): React.JSX.Element {
           approved: true
         }))
         .filter((clip) => clip.endMs > clip.startMs)
+      if (clipsWithStatus.length === 0) {
+        dispatch({
+          type: 'ANALYZE_ERROR',
+          error: 'No clips found. Try different suggestions or a different video.'
+        })
+        return
+      }
       dispatch({ type: 'ANALYZE_DONE', clips: clipsWithStatus, rawResponse })
     },
     [state.segments]
@@ -397,7 +414,8 @@ export default function App(): React.JSX.Element {
       provider: state.provider,
       model: state.model,
       apiKey: state.apiKey,
-      userHint: state.userHint
+      userHint: state.userHint,
+      language: state.language
     }, userHint)
     if (result.success && result.clips) {
       clampClips(result.clips, result.rawResponse || '')
@@ -473,6 +491,8 @@ export default function App(): React.JSX.Element {
         return (
           <StepSelectVideo
             videoPath={state.videoPath}
+            language={state.language}
+            onLanguageChange={(l) => dispatch({ type: 'SET_LANGUAGE', language: l })}
             onSelectVideo={handleSelectVideo}
             onNext={handleStartTranscribe}
             onLoadCachedTranscript={handleLoadCachedTranscript}

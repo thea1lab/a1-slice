@@ -266,6 +266,7 @@ export function parseWhisperJson(
 function runWhisper(
   binaryPath: string,
   wavPath: string,
+  language?: string,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptSegment[]> {
   return new Promise((resolve, reject) => {
@@ -281,6 +282,10 @@ function runWhisper(
       outputBase,
       '-pp' // print progress to stderr
     ]
+
+    if (language && language !== 'auto') {
+      args.push('-l', language)
+    }
 
     const proc = spawn(binaryPath, args)
     let stderr = ''
@@ -316,6 +321,7 @@ function runWhisper(
 
 export function transcribe(
   wavPath: string,
+  language?: string,
   onProgress?: (percent: number) => void
 ): Promise<TranscriptSegment[]> {
   const modelPath = join(getModelsDir(), MODEL_FILENAME)
@@ -327,7 +333,7 @@ export function transcribe(
   const gpuPath = findBinaryPath(gpuName)
   const cpuPath = findBinaryPath(cpuName)
 
-  const tryBinary = (binaryPath: string) => runWhisper(binaryPath, wavPath, onProgress)
+  const tryBinary = (binaryPath: string) => runWhisper(binaryPath, wavPath, language, onProgress)
 
   if (gpuPath) {
     return tryBinary(gpuPath).catch(() => {

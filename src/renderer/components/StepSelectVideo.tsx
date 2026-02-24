@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
-import type { TranscriptSegment } from '../../shared/types'
+import type { TranscriptSegment, VideoLanguage } from '../../shared/types'
 
 interface StepSelectVideoProps {
   videoPath: string | null
+  language: VideoLanguage
+  onLanguageChange: (language: VideoLanguage) => void
   onSelectVideo: () => void
   onNext: () => void
   onLoadCachedTranscript?: (segments: TranscriptSegment[]) => void
@@ -10,6 +12,8 @@ interface StepSelectVideoProps {
 
 export default function StepSelectVideo({
   videoPath,
+  language,
+  onLanguageChange,
   onSelectVideo,
   onNext,
   onLoadCachedTranscript
@@ -75,6 +79,23 @@ export default function StepSelectVideo({
             </span>
           )}
         </div>
+
+        {/* Language selector */}
+        {videoPath && (
+          <label className="flex flex-col gap-1.5 text-xs text-neutral-400">
+            Video language
+            <select
+              value={language}
+              onChange={(e) => onLanguageChange(e.target.value as VideoLanguage)}
+              className="appearance-none bg-bg-input border border-white/12 rounded-lg pl-3 pr-8 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors select-chevron w-48"
+            >
+              <option value="auto">Auto-detect</option>
+              <option value="en">English</option>
+              <option value="pt">Portuguese</option>
+              <option value="es">Spanish</option>
+            </select>
+          </label>
+        )}
 
         {/* Cached transcript prompt */}
         {videoPath && !checking && cachedSegments && onLoadCachedTranscript && (

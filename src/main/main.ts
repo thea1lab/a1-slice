@@ -168,7 +168,7 @@ ipcMain.on('cancel-pipeline', (event) => {
 // IPC: Transcribe video (Step 2)
 secureHandle(
   'transcribe-video',
-  async (_event, videoPath: string) => {
+  async (_event, videoPath: string, language?: string) => {
     cancelled = false
 
     try {
@@ -210,7 +210,7 @@ secureHandle(
         message: 'Transcribing audio...',
         percent: 0
       })
-      const segments = await transcribe(wavPath, (pct) => {
+      const segments = await transcribe(wavPath, language, (pct) => {
         sendProgress({
           stage: 'transcribing',
           message: 'Transcribing audio...',

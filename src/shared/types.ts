@@ -28,11 +28,14 @@ export interface ProgressUpdate {
 
 export type LLMProvider = 'claude' | 'openai'
 
+export type VideoLanguage = 'auto' | 'en' | 'pt' | 'es'
+
 export interface AppSettings {
   provider: LLMProvider
   model: string
   apiKey: string
   userHint: string
+  language: VideoLanguage
 }
 
 // --- Wizard types ---

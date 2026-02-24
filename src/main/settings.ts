@@ -10,7 +10,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   provider: 'claude',
   model: 'claude-sonnet-4-6',
   apiKey: '',
-  userHint: ''
+  userHint: '',
+  language: 'auto'
 }
 
 export function loadSettings(): AppSettings {
