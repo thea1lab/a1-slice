@@ -18,6 +18,7 @@ export interface ClipSegment {
   title: string
   startMs: number
   endMs: number
+  category?: 'related' | 'standalone'
 }
 
 export interface ProgressUpdate {

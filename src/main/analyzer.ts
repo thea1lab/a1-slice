@@ -18,7 +18,7 @@ export function formatTranscriptForLLM(segments: TranscriptSegment[]): string {
   return segments
     .map(
       (seg) =>
-        `[${seg.startMs}ms -> ${seg.endMs}ms] ${seg.text.trim()}`
+        `[${msToTimecode(seg.startMs)} -> ${msToTimecode(seg.endMs)} | ${seg.startMs} -> ${seg.endMs}] ${seg.text.trim()}`
     )
     .join('\n')
 }
@@ -32,37 +32,111 @@ export function parseLLMResponse(text: string): ClipSegment[] {
   if (!Array.isArray(parsed)) throw new Error('LLM response is not an array')
 
   return parsed.map(
-    (item: { title: string; start_ms: number; end_ms: number }) => ({
-      title: item.title,
-      startMs: item.start_ms,
-      endMs: item.end_ms
-    })
+    (item: { title: string; start_ms: number; end_ms: number; category?: string }) => {
+      const clip: ClipSegment = {
+        title: item.title,
+        startMs: item.start_ms,
+        endMs: item.end_ms
+      }
+      if (item.category === 'related' || item.category === 'standalone') {
+        clip.category = item.category
+      }
+      return clip
+    }
   )
 }
 
-const SYSTEM_PROMPT = `You are a video editor AI. You will receive a timestamped transcript of a video. Your job is to pick ONLY the most impactful, high-value moments — the parts that hit hardest and would perform well as standalone short-form clips.
+async function callLLM(
+  provider: LLMProvider,
+  model: string,
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string
+): Promise<string> {
+  if (provider === 'claude') {
+    const client = new Anthropic({ apiKey })
+    const response = await client.messages.create({
+      model,
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }]
+    })
+    const block = response.content[0]
+    return block.type === 'text' ? block.text : ''
+  } else {
+    const client = new OpenAI({ apiKey })
+    const response = await client.chat.completions.create({
+      model,
+      max_tokens: 4096,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage }
+      ]
+    })
+    return response.choices[0]?.message?.content ?? ''
+  }
+}
 
-CRITICAL RULES:
-- The transcript uses millisecond timestamps (e.g. "13000ms -> 30000ms"). Your start_ms and end_ms values MUST use these exact millisecond values from the transcript. Do NOT convert or calculate — just copy the numbers directly.
-- Be selective. Not every part of the video deserves a clip. It's better to return 1-2 great clips than 4 mediocre ones.
-- Clips should be 20 seconds to 2 minutes each.
-- You do NOT need to cover the entire video. Skip boring, repetitive, or low-energy sections.
+const ANALYSIS_SYSTEM_PROMPT = `You are a video content analyst. You will receive a timestamped transcript of a video. Your job is to thoroughly analyze the video content to prepare for clip selection.
 
-Pick moments that:
-- Have a clear "wow" factor — a key insight, demo payoff, or compelling statement
-- Tell a complete story or make a complete point
-- Have clean start and end points (not mid-sentence)
-- Would work as standalone clips without additional context
+Produce a structured analysis with the following sections:
+
+## SUMMARY
+What is this video about? Who is speaking? What is the overall value/quality of the content?
+
+## MAIN TOPIC
+One sentence describing the core subject.
+
+## SECTION BREAKDOWN
+Break the video into logical sections. For each section:
+- Time range (use the timecodes from the transcript)
+- Brief description of content
+- Value rating: HIGH / MEDIUM / LOW
+- Standalone potential: YES / NO (could this section make sense without the rest of the video?)
+
+## KEY MOMENTS
+List specific timestamps where something notable happens — a great insight, a compelling statement, an emotional moment, a demonstration payoff, a surprising reveal, humor, etc.
+
+## DEAD ZONES
+List any sections that should be avoided for clips — low-energy filler, repetitive content, off-topic tangents, poor audio/speaking quality, or segments that only make sense with extensive context.
+
+Be thorough. Cover the ENTIRE video. Your analysis will be used to select the best clips, so missing a great moment means it won't become a clip.`
+
+const CLIP_SYSTEM_PROMPT = `You are a video editor AI. You will receive:
+1. A structured analysis of a video (from a previous analysis phase)
+2. The original timestamped transcript
+
+Your job is to select the best clips from this video for social media.
+
+CLIP GUIDELINES:
+- Target duration: 30-90 seconds per clip. ~60 seconds is ideal.
+- Identify ALL high-value content worth clipping. Don't limit yourself to just 1-2 clips — if there are 5 great moments, return 5 clips.
+- If a great section is longer than 90 seconds, split it into multiple clips.
+- Each clip must have clean start and end points (not mid-sentence).
+- Each clip must tell a complete story or make a complete point.
+
+STRATEGY:
+- Use the KEY MOMENTS and HIGH-value sections from the analysis as your primary sources.
+- Avoid DEAD ZONES identified in the analysis.
+- Prioritize sections with standalone potential.
+
+CATEGORIES — assign each clip one of:
+- "related": This clip is about the video's main topic. It works well for promoting the full video.
+- "standalone": This clip delivers value entirely on its own. It works without any context about the source video.
+
+TIMESTAMPS:
+- The transcript includes millisecond values after the pipe (|) character. Use these exact values for start_ms and end_ms. Do NOT convert or calculate — just copy the numbers directly.
 
 Return a JSON array (no other text) where each element has:
 - "title": a short, catchy title for the clip
-- "start_ms": start time in milliseconds (must be a timestamp that appears in the transcript)
-- "end_ms": end time in milliseconds (must be a timestamp that appears in the transcript)
+- "start_ms": start time in milliseconds (must match a value from the transcript)
+- "end_ms": end time in milliseconds (must match a value from the transcript)
+- "category": either "related" or "standalone"
 
 Example:
 [
-  {"title": "The moment everything changed", "start_ms": 45000, "end_ms": 120000},
-  {"title": "Best advice for beginners", "start_ms": 300000, "end_ms": 420000}
+  {"title": "The moment everything changed", "start_ms": 45000, "end_ms": 105000, "category": "standalone"},
+  {"title": "Best advice for beginners", "start_ms": 300000, "end_ms": 360000, "category": "related"}
 ]`
 
 export async function analyzeTranscript(
@@ -70,38 +144,38 @@ export async function analyzeTranscript(
   provider: LLMProvider,
   model: string,
   apiKey: string,
-  userHint?: string
+  userHint?: string,
+  onProgress?: (message: string, percent: number) => void
 ): Promise<{ clips: ClipSegment[]; rawResponse: string }> {
   const formattedTranscript = formatTranscriptForLLM(segments)
-  let userMessage = `Here is the transcript:\n\n${formattedTranscript}\n\nIdentify the best clips from this transcript. Return only a JSON array.`
+
+  // Phase 1: Video analysis
+  onProgress?.('Understanding video content...', 10)
+
+  let analysisUserMessage = `Here is the transcript:\n\n${formattedTranscript}\n\nAnalyze this video thoroughly.`
   if (userHint?.trim()) {
-    userMessage += `\n\nUser instructions: ${userHint.trim()}`
+    analysisUserMessage += `\n\nAdditional context from the user: ${userHint.trim()}`
   }
 
-  let responseText: string
+  const videoAnalysis = await callLLM(
+    provider, model, apiKey,
+    ANALYSIS_SYSTEM_PROMPT, analysisUserMessage
+  )
 
-  if (provider === 'claude') {
-    const client = new Anthropic({ apiKey })
-    const response = await client.messages.create({
-      model,
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }]
-    })
-    const block = response.content[0]
-    responseText = block.type === 'text' ? block.text : ''
-  } else {
-    const client = new OpenAI({ apiKey })
-    const response = await client.chat.completions.create({
-      model,
-      max_tokens: 4096,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userMessage }
-      ]
-    })
-    responseText = response.choices[0]?.message?.content ?? ''
+  // Phase 2: Clip selection
+  onProgress?.('Selecting best clips...', 55)
+
+  let clipUserMessage = `## VIDEO ANALYSIS\n\n${videoAnalysis}\n\n## ORIGINAL TRANSCRIPT\n\n${formattedTranscript}\n\nBased on the analysis above, select the best clips. Return only a JSON array.`
+  if (userHint?.trim()) {
+    clipUserMessage += `\n\nUser preferences: ${userHint.trim()}`
   }
 
-  return { clips: parseLLMResponse(responseText), rawResponse: responseText }
+  const clipResponse = await callLLM(
+    provider, model, apiKey,
+    CLIP_SYSTEM_PROMPT, clipUserMessage
+  )
+
+  onProgress?.('Processing results...', 95)
+
+  return { clips: parseLLMResponse(clipResponse), rawResponse: clipResponse }
 }

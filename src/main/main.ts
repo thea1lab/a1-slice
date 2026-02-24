@@ -103,8 +103,8 @@ function createWindow(): void {
         ...details.responseHeaders,
         'Content-Security-Policy': [
           process.env['ELECTRON_RENDERER_URL']
-            ? "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* ws://localhost:*; media-src 'self' a1slice:; connect-src 'self' a1slice: http://localhost:* ws://localhost:*; img-src 'self' data:"
-            : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' a1slice:; connect-src 'self' a1slice:; img-src 'self' data:; font-src 'self'"
+            ? "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* ws://localhost:*; media-src 'self' a1slice:; connect-src 'self' a1slice: http://localhost:* ws://localhost:*; img-src 'self' data:; font-src 'self' data:"
+            : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' a1slice:; connect-src 'self' a1slice:; img-src 'self' data:; font-src 'self' data:"
         ]
       }
     })
@@ -295,7 +295,8 @@ secureHandle(
         settings.provider,
         settings.model,
         settings.apiKey,
-        userHint
+        userHint,
+        (message, percent) => sendProgress({ stage: 'analyzing', message, percent })
       )
 
       if (cancelled) throw new Error('Cancelled')

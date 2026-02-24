@@ -28,13 +28,13 @@ describe('msToTimecode', () => {
 })
 
 describe('formatTranscriptForLLM', () => {
-  it('formats segments with timestamps', () => {
+  it('formats segments with timecodes and milliseconds', () => {
     const result = formatTranscriptForLLM([
       { startMs: 0, endMs: 5000, text: 'Hello' },
       { startMs: 5000, endMs: 10000, text: 'World' }
     ])
     expect(result).toBe(
-      '[00:00:00 -> 00:00:05] Hello\n[00:00:05 -> 00:00:10] World'
+      '[00:00:00 -> 00:00:05 | 0 -> 5000] Hello\n[00:00:05 -> 00:00:10 | 5000 -> 10000] World'
     )
   })
 
@@ -46,7 +46,7 @@ describe('formatTranscriptForLLM', () => {
     const result = formatTranscriptForLLM([
       { startMs: 0, endMs: 1000, text: '  spaced  ' }
     ])
-    expect(result).toBe('[00:00:00 -> 00:00:01] spaced')
+    expect(result).toBe('[00:00:00 -> 00:00:01 | 0 -> 1000] spaced')
   })
 })
 
@@ -85,5 +85,33 @@ describe('parseLLMResponse', () => {
     expect(() => parseLLMResponse('No clips found')).toThrow(
       'No JSON array found'
     )
+  })
+
+  it('parses category field when present', () => {
+    const text = JSON.stringify([
+      { title: 'Main topic clip', start_ms: 0, end_ms: 60000, category: 'related' },
+      { title: 'Self-contained insight', start_ms: 120000, end_ms: 180000, category: 'standalone' }
+    ])
+    const result = parseLLMResponse(text)
+    expect(result).toEqual([
+      { title: 'Main topic clip', startMs: 0, endMs: 60000, category: 'related' },
+      { title: 'Self-contained insight', startMs: 120000, endMs: 180000, category: 'standalone' }
+    ])
+  })
+
+  it('omits category when not present in response', () => {
+    const text = JSON.stringify([
+      { title: 'No category', start_ms: 0, end_ms: 30000 }
+    ])
+    const result = parseLLMResponse(text)
+    expect(result[0].category).toBeUndefined()
+  })
+
+  it('ignores invalid category values', () => {
+    const text = JSON.stringify([
+      { title: 'Bad category', start_ms: 0, end_ms: 30000, category: 'invalid' }
+    ])
+    const result = parseLLMResponse(text)
+    expect(result[0].category).toBeUndefined()
   })
 })
