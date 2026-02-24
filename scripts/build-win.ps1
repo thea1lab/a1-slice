@@ -45,6 +45,47 @@ Write-Host "  nvcc  : $(nvcc --version | Select-String 'release' | ForEach-Objec
 Write-Host "  node  : $(node --version)"
 Write-Host "  npm   : $(npm --version)"
 
+# --- Set up MSVC environment via vcvarsall.bat ---
+if (-not (Get-Command "cl" -ErrorAction SilentlyContinue)) {
+    Write-Host "==> Setting up MSVC environment..." -ForegroundColor Cyan
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) {
+        Write-Host "ERROR: vswhere not found. Install Visual Studio Build Tools." -ForegroundColor Red
+        exit 1
+    }
+    $vsPath = & $vswhere -latest -products * -property installationPath
+    if (-not $vsPath) {
+        Write-Host "ERROR: No Visual Studio or Build Tools installation found." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  Found: $vsPath"
+    $vcvarsall = Join-Path (Join-Path $vsPath "VC") "Auxiliary\Build\vcvarsall.bat"
+    if (-not (Test-Path $vcvarsall)) {
+        Write-Host "ERROR: vcvarsall.bat not found at $vcvarsall" -ForegroundColor Red
+        exit 1
+    }
+    # Source vcvarsall.bat and import env vars into PowerShell
+    $output = cmd /c "`"$vcvarsall`" x64 >nul 2>&1 && set"
+    foreach ($line in $output) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+        }
+    }
+    $clVersion = (cl 2>&1 | Select-Object -First 1) -replace '.*Compiler Version\s+', 'MSVC '
+    Write-Host "  cl    : $clVersion"
+} else {
+    $clVersion = (cl 2>&1 | Select-Object -First 1) -replace '.*Compiler Version\s+', 'MSVC '
+    Write-Host "  cl    : $clVersion"
+}
+
+# Detect cmake generator — prefer Ninja, fall back to NMake
+if (Get-Command "ninja" -ErrorAction SilentlyContinue) {
+    $cmakeGenerator = "Ninja"
+} else {
+    $cmakeGenerator = "NMake Makefiles"
+}
+Write-Host "  generator: $cmakeGenerator"
+
 # --- Clean flag ---
 if ($Clean) {
     Write-Host "==> Clean build requested. Removing cached builds..." -ForegroundColor Yellow
@@ -76,7 +117,7 @@ if ($needBuild) {
     if (-not (Test-Path $CpuBinary)) {
         Write-Host "==> Building whisper-cli (CPU)..." -ForegroundColor Cyan
         $cpuBuildDir = Join-Path $CacheDir "build-cpu"
-        cmake -S $CacheDir -B $cpuBuildDir `
+        cmake -S $CacheDir -B $cpuBuildDir -G "$cmakeGenerator" `
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF `
             -DGGML_METAL=OFF -DGGML_CUDA=OFF
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: cmake configure (CPU) failed" -ForegroundColor Red; exit 1 }
@@ -84,7 +125,11 @@ if ($needBuild) {
         cmake --build $cpuBuildDir --config Release --target whisper-cli --parallel
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: cmake build (CPU) failed" -ForegroundColor Red; exit 1 }
 
-        Copy-Item (Join-Path (Join-Path (Join-Path $cpuBuildDir "bin") "Release") "whisper-cli.exe") $CpuBinary
+        $cpuExe = Join-Path (Join-Path $cpuBuildDir "bin") "whisper-cli.exe"
+        if (-not (Test-Path $cpuExe)) {
+            $cpuExe = Join-Path (Join-Path (Join-Path $cpuBuildDir "bin") "Release") "whisper-cli.exe"
+        }
+        Copy-Item $cpuExe $CpuBinary
         Write-Host "  -> $CpuBinary" -ForegroundColor Green
     } else {
         Write-Host "==> CPU binary already exists, skipping build." -ForegroundColor Cyan
@@ -94,7 +139,7 @@ if ($needBuild) {
     if (-not (Test-Path $GpuBinary)) {
         Write-Host "==> Building whisper-cli (GPU, CUDA)..." -ForegroundColor Cyan
         $gpuBuildDir = Join-Path $CacheDir "build-gpu"
-        cmake -S $CacheDir -B $gpuBuildDir `
+        cmake -S $CacheDir -B $gpuBuildDir -G "$cmakeGenerator" `
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF `
             -DGGML_METAL=OFF -DGGML_CUDA=ON `
             -DCMAKE_CUDA_ARCHITECTURES="$CudaArchitectures"
@@ -103,7 +148,11 @@ if ($needBuild) {
         cmake --build $gpuBuildDir --config Release --target whisper-cli --parallel
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: cmake build (GPU) failed" -ForegroundColor Red; exit 1 }
 
-        Copy-Item (Join-Path (Join-Path (Join-Path $gpuBuildDir "bin") "Release") "whisper-cli.exe") $GpuBinary
+        $gpuExe = Join-Path (Join-Path $gpuBuildDir "bin") "whisper-cli.exe"
+        if (-not (Test-Path $gpuExe)) {
+            $gpuExe = Join-Path (Join-Path (Join-Path $gpuBuildDir "bin") "Release") "whisper-cli.exe"
+        }
+        Copy-Item $gpuExe $GpuBinary
         Write-Host "  -> $GpuBinary" -ForegroundColor Green
     } else {
         Write-Host "==> GPU binary already exists, skipping build." -ForegroundColor Cyan
