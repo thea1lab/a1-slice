@@ -67,10 +67,11 @@ jobs:
         run: npm ci
 
       - name: Build whisper-cli
+        shell: bash
         run: |
           git clone --depth 1 --branch v1.8.3 https://github.com/ggerganov/whisper.cpp.git
           cmake -S whisper.cpp -B whisper.cpp/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
-          cmake --build whisper.cpp/build --config Release --target whisper-cli -j$(nproc || echo 4)
+          cmake --build whisper.cpp/build --config Release --target whisper-cli --parallel
 
       - name: Copy whisper-cli binary (Linux)
         if: runner.os == 'Linux'
