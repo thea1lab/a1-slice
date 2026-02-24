@@ -481,7 +481,6 @@ export default function App(): React.JSX.Element {
       case 'transcribe':
         return (
           <StepTranscribe
-            stage={state.transcribeStage}
             message={state.transcribeMessage}
             percent={state.transcribePercent}
             error={state.transcribeError}

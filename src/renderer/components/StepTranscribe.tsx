@@ -1,14 +1,6 @@
 import ProgressBar from './ProgressBar'
-import type { PipelineStage } from '../../shared/types'
-
-const STAGE_LABELS: Partial<Record<PipelineStage, string>> = {
-  extracting: 'Extracting Audio',
-  downloading: 'Downloading Model',
-  transcribing: 'Transcribing'
-}
 
 interface StepTranscribeProps {
-  stage: PipelineStage
   message: string
   percent: number
   error: string | null
@@ -17,7 +9,6 @@ interface StepTranscribeProps {
 }
 
 export default function StepTranscribe({
-  stage,
   message,
   percent,
   error,
@@ -47,10 +38,9 @@ export default function StepTranscribe({
           <div className="space-y-4">
             <ProgressBar
               percent={percent}
-              label={STAGE_LABELS[stage] ?? stage}
+              label={message}
               sublabel={`${percent}%`}
             />
-            <p className="text-xs text-neutral-500">{message}</p>
             <button
               onClick={onCancel}
               className="w-full bg-red-800 hover:bg-red-700 text-white font-medium rounded-lg py-2.5 text-sm transition-colors"

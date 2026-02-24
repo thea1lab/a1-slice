@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { homedir, platform, arch } from 'os'
-import { existsSync, mkdirSync, createWriteStream, readFileSync } from 'fs'
+import { existsSync, mkdirSync, createWriteStream, readFileSync, renameSync, unlinkSync, statSync } from 'fs'
 import { spawn } from 'child_process'
 import https from 'https'
 import http from 'http'
@@ -41,54 +41,186 @@ export function getWhisperBinaryPath(): string {
   return devPath.replace('app.asar', 'app.asar.unpacked')
 }
 
-export function downloadModel(
+const RETRYABLE_CODES = new Set([
+  'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EPIPE',
+  'EAI_AGAIN', 'ECONNREFUSED', 'EHOSTUNREACH'
+])
+const MAX_RETRIES = 3
+const BASE_DELAY_MS = 2000
+
+function isRetryableError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const code = (err as NodeJS.ErrnoException).code
+  if (code && RETRYABLE_CODES.has(code)) return true
+  if (err.message === 'socket hang up' || err.message === 'Download timed out') return true
+  return false
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+function attemptDownload(
+  modelPath: string,
+  partialPath: string,
   onProgress?: (percent: number) => void
 ): Promise<string> {
-  const modelPath = join(getModelsDir(), MODEL_FILENAME)
-  if (existsSync(modelPath)) return Promise.resolve(modelPath)
-
   return new Promise((resolve, reject) => {
-    function doRequest(url: string): void {
+    let settled = false
+    function fail(err: Error): void {
+      if (settled) return
+      settled = true
+      reject(err)
+    }
+
+    let existingBytes = 0
+    try {
+      existingBytes = statSync(partialPath).size
+    } catch { /* no partial file yet */ }
+
+    function doRequest(url: string, redirects = 0): void {
+      if (redirects > 5) {
+        fail(new Error('Too many redirects'))
+        return
+      }
+
+      const headers: Record<string, string> = {}
+      if (existingBytes > 0) {
+        headers['Range'] = `bytes=${existingBytes}-`
+      }
+
       const proto = url.startsWith('https') ? https : http
-      proto
-        .get(url, (res) => {
-          // Handle redirects
-          if (
-            (res.statusCode === 301 || res.statusCode === 302) &&
-            res.headers.location
-          ) {
-            doRequest(res.headers.location)
-            return
+      const req = proto.get(url, { timeout: 30_000, headers }, (res) => {
+        // Handle redirects (301, 302, 307, 308)
+        const sc = res.statusCode ?? 0
+        if ([301, 302, 307, 308].includes(sc) && res.headers.location) {
+          res.resume() // consume body so socket can be freed
+          doRequest(res.headers.location, redirects + 1)
+          return
+        }
+
+        // 416 Range Not Satisfiable — partial file may already be complete
+        if (sc === 416) {
+          res.resume()
+          // Check if partial file is actually the full file
+          try {
+            const partialSize = statSync(partialPath).size
+            // If there's a meaningful file, assume it's complete
+            if (partialSize > 0) {
+              renameSync(partialPath, modelPath)
+              if (!settled) { settled = true; resolve(modelPath) }
+              return
+            }
+          } catch { /* ignore */ }
+          // Otherwise delete and let outer loop retry from scratch
+          try { unlinkSync(partialPath) } catch { /* ignore */ }
+          fail(new Error('Range not satisfiable, restarting download'))
+          return
+        }
+
+        let downloaded: number
+        let totalBytes: number
+
+        if (sc === 206) {
+          // Partial content — append
+          downloaded = existingBytes
+          const rangeHeader = res.headers['content-range'] // e.g. "bytes 1234-5678/9999"
+          if (rangeHeader) {
+            const match = rangeHeader.match(/\/(\d+)/)
+            totalBytes = match ? parseInt(match[1], 10) : 0
+          } else {
+            const cl = parseInt(res.headers['content-length'] ?? '0', 10)
+            totalBytes = existingBytes + cl
           }
-
-          if (res.statusCode !== 200) {
-            reject(new Error(`Download failed: HTTP ${res.statusCode}`))
-            return
+        } else if (sc === 200) {
+          // Server ignored Range — restart from scratch
+          if (existingBytes > 0) {
+            try { unlinkSync(partialPath) } catch { /* ignore */ }
+            existingBytes = 0
           }
+          downloaded = 0
+          totalBytes = parseInt(res.headers['content-length'] ?? '0', 10)
+        } else {
+          fail(new Error(`Download failed: HTTP ${sc}`))
+          return
+        }
 
-          const totalBytes = parseInt(res.headers['content-length'] ?? '0', 10)
-          let downloaded = 0
-          const file = createWriteStream(modelPath)
+        const fileFlags = sc === 206 ? 'a' : 'w'
+        const file = createWriteStream(partialPath, { flags: fileFlags })
 
-          res.on('data', (chunk: Buffer) => {
-            downloaded += chunk.length
-            if (onProgress && totalBytes > 0) {
-              onProgress(Math.round((downloaded / totalBytes) * 100))
+        res.on('data', (chunk: Buffer) => {
+          downloaded += chunk.length
+          if (onProgress && totalBytes > 0) {
+            onProgress(Math.round((downloaded / totalBytes) * 100))
+          }
+        })
+
+        res.on('error', (err) => {
+          file.destroy()
+          fail(err)
+        })
+
+        res.pipe(file)
+
+        file.on('finish', () => {
+          file.close(() => {
+            if (settled) return
+            settled = true
+            try {
+              renameSync(partialPath, modelPath)
+              resolve(modelPath)
+            } catch (err) {
+              fail(err as Error)
             }
           })
-
-          res.pipe(file)
-          file.on('finish', () => {
-            file.close()
-            resolve(modelPath)
-          })
-          file.on('error', (err) => reject(err))
         })
-        .on('error', (err) => reject(err))
+        file.on('error', (err) => {
+          res.destroy()
+          fail(err)
+        })
+      })
+
+      req.on('error', (err) => fail(err))
+      req.on('timeout', () => {
+        req.destroy()
+        fail(new Error('Download timed out'))
+      })
     }
 
     doRequest(MODEL_URL)
   })
+}
+
+export async function downloadModel(
+  onProgress?: (percent: number) => void
+): Promise<string> {
+  const modelPath = join(getModelsDir(), MODEL_FILENAME)
+  if (existsSync(modelPath)) return modelPath
+
+  const partialPath = modelPath + '.partial'
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await delay(BASE_DELAY_MS * Math.pow(2, attempt - 1))
+    }
+    try {
+      return await attemptDownload(modelPath, partialPath, onProgress)
+    } catch (err) {
+      if (!isRetryableError(err) || attempt === MAX_RETRIES) {
+        try { unlinkSync(partialPath) } catch { /* ignore */ }
+        if (attempt === MAX_RETRIES) {
+          throw new Error(
+            `Download failed after ${MAX_RETRIES + 1} attempts: ${(err as Error).message}`
+          )
+        }
+        throw err
+      }
+      // retryable — keep .partial for resume, loop continues
+    }
+  }
+
+  // unreachable, but satisfies TypeScript
+  throw new Error('Download failed')
 }
 
 export function parseTimestamp(ts: string): number {
