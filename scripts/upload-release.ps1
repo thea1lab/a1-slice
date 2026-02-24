@@ -20,7 +20,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 }
@@ -37,11 +37,11 @@ function Write-Cyan   { param($Msg) Write-Host $Msg -ForegroundColor Cyan }
 function Write-Green  { param($Msg) Write-Host $Msg -ForegroundColor Green }
 function Write-Red    { param($Msg) Write-Host $Msg -ForegroundColor Red }
 
-# --- Source directory ---
+# --- Source directories (search both by default) ---
 if ($Dist) {
-    $SourceDir = Join-Path $RepoRoot "dist"
+    $SourceDirs = @(Join-Path $RepoRoot "dist")
 } else {
-    $SourceDir = Join-Path $RepoRoot "release"
+    $SourceDirs = @(Join-Path $RepoRoot "release"), (Join-Path $RepoRoot "dist")
 }
 
 # --- Prerequisite checks ---
@@ -68,15 +68,19 @@ Write-Cyan "==> Version: $Version (tag: $Tag)"
 
 # --- Find artifacts to upload ---
 $Artifacts = @()
-foreach ($pattern in @("*.AppImage", "*.dmg", "*.exe")) {
-    $found = Get-ChildItem -Path $SourceDir -Filter $pattern -File -ErrorAction SilentlyContinue
-    if ($found) {
-        $Artifacts += $found
+foreach ($dir in $SourceDirs) {
+    if (Test-Path $dir) {
+        foreach ($pattern in @("*.AppImage", "*.dmg", "*.exe")) {
+            $found = Get-ChildItem -Path $dir -Filter $pattern -File -ErrorAction SilentlyContinue
+            if ($found) {
+                $Artifacts += $found
+            }
+        }
     }
 }
 
 if ($Artifacts.Count -eq 0) {
-    Write-Red "ERROR: No release artifacts found in $SourceDir"
+    Write-Red "ERROR: No release artifacts found in: $($SourceDirs -join ', ')"
     Write-Red "  Looked for: *.AppImage, *.dmg, *.exe"
     exit 1
 }
