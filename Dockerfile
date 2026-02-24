@@ -1,5 +1,5 @@
 # Stage 1: Base image with CUDA, Node.js, Wine, and build tools
-FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS base
+FROM nvidia/cuda:13.1.0-devel-ubuntu22.04 AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV WINEDEBUG=-all
