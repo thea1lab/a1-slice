@@ -1,6 +1,6 @@
 {
   "name": "a1-slice",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "description": "Cut long videos into short, captioned reels using AI",
   "engines": {
     "node": ">=24.0.0"
