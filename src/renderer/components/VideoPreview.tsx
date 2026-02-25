@@ -112,6 +112,27 @@ const VideoPreview = React.memo(function VideoPreview({
     player.on('ended', onEnded)
     player.on('error', () => setVisible(true))
 
+    // Preserve scroll position across fullscreen toggle.
+    // The browser resets scroll BEFORE fullscreenchange fires, so we capture
+    // the scroll position on pointerdown (which always precedes fullscreen).
+    const scrollParent = container.closest('.overflow-y-auto') as HTMLElement | null
+    let savedScrollTop = scrollParent?.scrollTop ?? 0
+    const onPointerDown = (): void => {
+      savedScrollTop = scrollParent?.scrollTop ?? 0
+    }
+    container.addEventListener('pointerdown', onPointerDown, true)
+
+    const onFullscreenChange = (): void => {
+      if (!player.isFullscreen()) {
+        requestAnimationFrame(() => {
+          if (scrollParent) {
+            scrollParent.scrollTop = savedScrollTop
+          }
+        })
+      }
+    }
+    player.on('fullscreenchange', onFullscreenChange)
+
     // If metadata already available (cached), seek immediately
     if (player.readyState() >= 1) {
       seekToStart()
@@ -120,6 +141,7 @@ const VideoPreview = React.memo(function VideoPreview({
 
     return () => {
       window.clearTimeout(revealTimer)
+      container.removeEventListener('pointerdown', onPointerDown, true)
       if (playerRef.current) {
         playerRef.current.dispose()
         playerRef.current = null
