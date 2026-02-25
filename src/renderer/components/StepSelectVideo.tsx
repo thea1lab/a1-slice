@@ -7,10 +7,12 @@ interface StepSelectVideoProps {
   entropyThold: number
   maxContext: number
   beamSize: number
+  temperatureInc: number
   onLanguageChange: (language: VideoLanguage) => void
   onEntropyTholdChange: (value: number) => void
   onMaxContextChange: (value: number) => void
   onBeamSizeChange: (value: number) => void
+  onTemperatureIncChange: (value: number) => void
   onSelectVideo: () => void
   onNext: () => void
   onLoadCachedTranscript?: (segments: TranscriptSegment[]) => void
@@ -22,10 +24,12 @@ export default function StepSelectVideo({
   entropyThold,
   maxContext,
   beamSize,
+  temperatureInc,
   onLanguageChange,
   onEntropyTholdChange,
   onMaxContextChange,
   onBeamSizeChange,
+  onTemperatureIncChange,
   onSelectVideo,
   onNext,
   onLoadCachedTranscript
@@ -77,8 +81,8 @@ export default function StepSelectVideo({
       </div>
 
       {/* Video Card */}
+      <h2 className="text-base font-semibold text-neutral-200 self-start -mb-3">Select a video file</h2>
       <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-6 space-y-4 shadow-lg">
-        <h2 className="text-sm font-medium text-neutral-300">Select a video file</h2>
         <div className="flex items-center gap-3">
           <button
             onClick={onSelectVideo}
@@ -167,6 +171,22 @@ export default function StepSelectVideo({
                     onChange={(e) => {
                       const v = parseInt(e.target.value, 10)
                       if (!isNaN(v)) onBeamSizeChange(v)
+                    }}
+                    className="appearance-none bg-bg-input border border-white/12 rounded-lg px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-accent transition-colors w-24 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-neutral-500">
+                  Temperature increment (-tpi)
+                  <span className="text-[10px] text-neutral-600">Temperature increase on fallback (whisper default 0.2, we default 0.1, set 0 to disable)</span>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="1"
+                    value={temperatureInc}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value)
+                      if (!isNaN(v)) onTemperatureIncChange(v)
                     }}
                     className="appearance-none bg-bg-input border border-white/12 rounded-lg px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-accent transition-colors w-24 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />

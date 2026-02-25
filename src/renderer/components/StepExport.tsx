@@ -27,14 +27,11 @@ export default function StepExport({
 
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-6 max-w-lg mx-auto w-full">
+      <h2 className="text-base font-semibold text-neutral-200 self-start -mb-3">
+        {isDone ? 'Export Complete' : error ? 'Export Failed' : 'Exporting Clips'}
+      </h2>
       {isDone ? (
         <div className="w-full bg-bg-card border border-emerald-800 rounded-2xl p-6 space-y-5 shadow-lg">
-          <div className="flex items-center gap-2.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            <span className="text-sm text-emerald-300 font-medium">
-              Export complete
-            </span>
-          </div>
           <p className="text-sm text-neutral-400 leading-relaxed">
             Your clips have been saved next to the original video in{' '}
             <span className="text-neutral-200 font-medium">{folderName}</span>
@@ -70,9 +67,6 @@ export default function StepExport({
         </div>
       ) : (
         <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-6 space-y-5 shadow-lg">
-          <h2 className="text-sm font-medium text-neutral-300">
-            Exporting Clips
-          </h2>
           <ProgressBar
             percent={percent}
             label="Cutting"

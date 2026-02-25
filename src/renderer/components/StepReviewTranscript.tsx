@@ -78,16 +78,16 @@ export default function StepReviewTranscript({
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full py-4">
       {/* Transcript */}
+      <h2 className="text-base font-semibold text-neutral-200 -mb-3">
+        Transcript ({segments.length} segments)
+      </h2>
       <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-5 shadow-lg space-y-3">
-        <h2 className="text-sm font-medium text-neutral-300">
-          Transcript ({segments.length} segments)
-        </h2>
         <TranscriptViewer segments={segments} />
       </div>
 
       {/* LLM Settings */}
+      <h2 className="text-base font-semibold text-neutral-200 -mb-3">LLM Settings</h2>
       <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-5 space-y-4 shadow-lg">
-        <h2 className="text-sm font-medium text-neutral-300">LLM Settings</h2>
         <div className="flex gap-3">
           <label className="flex flex-col gap-1.5 text-xs text-neutral-400 w-40">
             Provider

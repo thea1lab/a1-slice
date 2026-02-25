@@ -80,11 +80,28 @@ export async function extractAudio(
 ): Promise<string> {
   const outPath = join(tmpdir(), `a1slice-${randomUUID()}.wav`)
   await spawnFfmpeg(
-    ['-i', videoPath, '-ar', '16000', '-ac', '1', '-f', 'wav', '-y', outPath],
+    ['-i', videoPath, '-af', 'afftdn=nr=12:nf=-20:tn=1', '-ar', '16000', '-ac', '1', '-f', 'wav', '-y', outPath],
     null,
     onProgress
   )
   return outPath
+}
+
+export async function splitWav(
+  wavPath: string,
+  chunkSec = 300
+): Promise<{ path: string; offsetMs: number }[]> {
+  const durationMs = await getVideoDurationMs(wavPath)
+  const chunks: { path: string; offsetMs: number }[] = []
+  for (let offsetSec = 0; offsetSec * 1000 < durationMs; offsetSec += chunkSec) {
+    const chunkPath = wavPath.replace('.wav', `-chunk${chunks.length}.wav`)
+    await spawnFfmpeg(
+      ['-ss', String(offsetSec), '-i', wavPath, '-t', String(chunkSec), '-c', 'copy', '-y', chunkPath],
+      null
+    )
+    chunks.push({ path: chunkPath, offsetMs: offsetSec * 1000 })
+  }
+  return chunks
 }
 
 export function getVideoDurationMs(videoPath: string): Promise<number> {

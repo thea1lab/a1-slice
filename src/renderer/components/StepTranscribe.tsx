@@ -17,16 +17,25 @@ export default function StepTranscribe({
 }: StepTranscribeProps): React.JSX.Element {
   return (
     <div className="flex flex-col items-center justify-center flex-1 gap-6 max-w-lg mx-auto w-full">
+      <h2 className="text-base font-semibold text-neutral-200 self-start -mb-3">Transcribing Video</h2>
       <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-6 space-y-5 shadow-lg">
-        <h2 className="text-sm font-medium text-neutral-300">Transcribing Video</h2>
 
         {error ? (
           <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-red-400" />
-              <span className="text-sm text-red-300 font-medium">Error</span>
-            </div>
-            <p className="text-sm text-neutral-400">{error}</p>
+            {error === 'Cancelled' ? (
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-neutral-400" />
+                <span className="text-sm text-neutral-400 font-medium">Cancelled</span>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-red-400" />
+                  <span className="text-sm text-red-300 font-medium">Error</span>
+                </div>
+                <p className="text-sm text-neutral-400">{error}</p>
+              </>
+            )}
             <button
               onClick={onRetry}
               className="w-full bg-bg-input border border-white/12 hover:border-white/25 text-neutral-200 font-medium rounded-lg py-2 text-sm transition-colors"

@@ -13,8 +13,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   userHint: '',
   language: 'auto',
   entropyThold: 2.8,
-  maxContext: -1,
-  beamSize: -1
+  maxContext: 64,
+  beamSize: 5,
+  temperatureInc: 0.1
 }
 
 export function loadSettings(): AppSettings {

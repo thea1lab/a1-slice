@@ -21,8 +21,8 @@ function mimeForVideo(filePath: string): string {
   }
   return map[ext] || 'video/mp4'
 }
-import { extractAudio, cutClip, getVideoDurationMs } from './ffmpeg'
-import { downloadModel, transcribe, type AbortHandle } from './whisper'
+import { extractAudio, splitWav, cutClip, getVideoDurationMs } from './ffmpeg'
+import { downloadModel, transcribeWithRetry, type AbortHandle } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
 import type {
@@ -174,7 +174,7 @@ ipcMain.on('cancel-pipeline', (event) => {
 // IPC: Transcribe video (Step 2)
 secureHandle(
   'transcribe-video',
-  async (_event, videoPath: string, language?: string, entropyThold?: number, maxContext?: number, beamSize?: number) => {
+  async (_event, videoPath: string, language?: string, entropyThold?: number, maxContext?: number, beamSize?: number, temperatureInc?: number) => {
     cancelled = false
 
     try {
@@ -210,37 +210,65 @@ secureHandle(
 
       if (cancelled) throw new Error('Cancelled')
 
-      // Transcribe
+      // Split audio into chunks for more reliable transcription
       sendProgress({
         stage: 'transcribing',
-        message: 'Transcribing audio...',
+        message: 'Splitting audio into chunks...',
         percent: 0
       })
-      const handle = transcribe(wavPath, {
-        language,
-        entropyThold,
-        maxContext,
-        beamSize,
-        onProgress: (pct) => {
-          sendProgress({
-            stage: 'transcribing',
-            message: 'Transcribing audio...',
-            percent: pct
-          })
+      const chunks = await splitWav(wavPath, 180)
+      const totalChunks = chunks.length
+      const allSegments: TranscriptSegment[] = []
+
+      for (let i = 0; i < totalChunks; i++) {
+        if (cancelled) throw new Error('Cancelled')
+
+        const chunk = chunks[i]
+        const chunkLabel = `Transcribing chunk ${i + 1}/${totalChunks}...`
+        sendProgress({
+          stage: 'transcribing',
+          message: chunkLabel,
+          percent: Math.round((i / totalChunks) * 100)
+        })
+
+        const handle = transcribeWithRetry(chunk.path, {
+          language,
+          entropyThold,
+          maxContext,
+          beamSize,
+          temperatureInc,
+          timeoutMs: 10 * 60 * 1000, // 10 minutes per chunk
+          onProgress: (pct) => {
+            const overallPct = Math.round(((i + pct / 100) / totalChunks) * 100)
+            sendProgress({
+              stage: 'transcribing',
+              message: chunkLabel,
+              percent: overallPct
+            })
+          }
+        })
+        activeWhisperHandle = handle
+
+        try {
+          const chunkSegments = await handle.promise
+          // Offset timestamps by chunk position
+          for (const seg of chunkSegments) {
+            allSegments.push({
+              startMs: seg.startMs + chunk.offsetMs,
+              endMs: seg.endMs + chunk.offsetMs,
+              text: seg.text
+            })
+          }
+        } finally {
+          activeWhisperHandle = null
         }
-      })
-      activeWhisperHandle = handle
-      let segments: Awaited<typeof handle.promise>
-      try {
-        segments = await handle.promise
-      } finally {
-        activeWhisperHandle = null
+
+        // Clean up chunk file
+        try { unlinkSync(chunk.path) } catch {}
       }
 
-      // Clean up temp WAV
-      try {
-        unlinkSync(wavPath)
-      } catch {}
+      // Clean up full WAV
+      try { unlinkSync(wavPath) } catch {}
 
       if (cancelled) throw new Error('Cancelled')
 
@@ -248,11 +276,11 @@ secureHandle(
       try {
         const vName = basename(videoPath).replace(/\.[^.]+$/, '')
         const cachePath = join(dirname(videoPath), `${vName}.a1slice.json`)
-        writeFileSync(cachePath, JSON.stringify(segments), 'utf-8')
+        writeFileSync(cachePath, JSON.stringify(allSegments), 'utf-8')
       } catch {}
 
       sendProgress({ stage: 'done', message: '', percent: 100 })
-      return { success: true, segments }
+      return { success: true, segments: allSegments }
     } catch (err) {
       if (cancelled) {
         sendProgress({ stage: 'error', message: 'Cancelled', percent: 0 })

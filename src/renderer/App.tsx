@@ -38,6 +38,7 @@ interface WizardState {
   entropyThold: number
   maxContext: number
   beamSize: number
+  temperatureInc: number
   settingsLoaded: boolean
 
   // Step 1: Select video
@@ -69,7 +70,7 @@ interface WizardState {
 }
 
 type WizardAction =
-  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string; userHint: string; language: VideoLanguage; entropyThold: number; maxContext: number; beamSize: number }
+  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string; userHint: string; language: VideoLanguage; entropyThold: number; maxContext: number; beamSize: number; temperatureInc: number }
   | { type: 'SET_PROVIDER'; provider: LLMProvider }
   | { type: 'SET_MODEL'; model: string }
   | { type: 'SET_API_KEY'; apiKey: string }
@@ -78,6 +79,7 @@ type WizardAction =
   | { type: 'SET_ENTROPY_THOLD'; entropyThold: number }
   | { type: 'SET_MAX_CONTEXT'; maxContext: number }
   | { type: 'SET_BEAM_SIZE'; beamSize: number }
+  | { type: 'SET_TEMPERATURE_INC'; temperatureInc: number }
   | { type: 'SET_VIDEO'; videoPath: string }
   | { type: 'GO_TO_STEP'; step: WizardStep }
   | { type: 'START_TRANSCRIBE' }
@@ -107,8 +109,9 @@ const initialState: WizardState = {
   userHint: '',
   language: 'auto',
   entropyThold: 2.8,
-  maxContext: -1,
-  beamSize: -1,
+  maxContext: 64,
+  beamSize: 5,
+  temperatureInc: 0.1,
   settingsLoaded: false,
 
   videoPath: null,
@@ -151,6 +154,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         entropyThold: action.entropyThold,
         maxContext: action.maxContext,
         beamSize: action.beamSize,
+        temperatureInc: action.temperatureInc,
         settingsLoaded: true
       }
     case 'SET_PROVIDER':
@@ -173,6 +177,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return { ...state, maxContext: action.maxContext }
     case 'SET_BEAM_SIZE':
       return { ...state, beamSize: action.beamSize }
+    case 'SET_TEMPERATURE_INC':
+      return { ...state, temperatureInc: action.temperatureInc }
     case 'SET_VIDEO':
       return { ...state, videoPath: action.videoPath }
     case 'GO_TO_STEP':
@@ -323,6 +329,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         entropyThold: state.entropyThold,
         maxContext: state.maxContext,
         beamSize: state.beamSize,
+        temperatureInc: state.temperatureInc,
         settingsLoaded: state.settingsLoaded
       }
 
@@ -347,8 +354,9 @@ export default function App(): React.JSX.Element {
         userHint: s.userHint,
         language: s.language,
         entropyThold: s.entropyThold ?? 2.8,
-        maxContext: s.maxContext ?? -1,
-        beamSize: s.beamSize ?? -1
+        maxContext: s.maxContext ?? 64,
+        beamSize: s.beamSize ?? 5,
+        temperatureInc: s.temperatureInc ?? 0.1
       })
     })
   }, [])
@@ -364,9 +372,10 @@ export default function App(): React.JSX.Element {
       language: state.language,
       entropyThold: state.entropyThold,
       maxContext: state.maxContext,
-      beamSize: state.beamSize
+      beamSize: state.beamSize,
+      temperatureInc: state.temperatureInc
     })
-  }, [state.provider, state.model, state.apiKey, state.userHint, state.language, state.entropyThold, state.maxContext, state.beamSize, state.settingsLoaded])
+  }, [state.provider, state.model, state.apiKey, state.userHint, state.language, state.entropyThold, state.maxContext, state.beamSize, state.temperatureInc, state.settingsLoaded])
 
   // Listen for pipeline progress — route to the correct step
   useEffect(() => {
@@ -397,7 +406,7 @@ export default function App(): React.JSX.Element {
   const handleStartTranscribe = useCallback(async () => {
     if (!state.videoPath) return
     dispatch({ type: 'START_TRANSCRIBE' })
-    const result = await window.api.transcribeVideo(state.videoPath, state.language, state.entropyThold, state.maxContext, state.beamSize)
+    const result = await window.api.transcribeVideo(state.videoPath, state.language, state.entropyThold, state.maxContext, state.beamSize, state.temperatureInc)
     if (result.success && result.segments) {
       dispatch({ type: 'TRANSCRIBE_DONE', segments: result.segments })
     } else {
@@ -406,7 +415,7 @@ export default function App(): React.JSX.Element {
         error: result.error || 'Transcription failed'
       })
     }
-  }, [state.videoPath, state.language, state.entropyThold, state.maxContext, state.beamSize])
+  }, [state.videoPath, state.language, state.entropyThold, state.maxContext, state.beamSize, state.temperatureInc])
 
   const clampClips = useCallback(
     (clips: { title: string; startMs: number; endMs: number }[], rawResponse: string) => {
@@ -445,7 +454,8 @@ export default function App(): React.JSX.Element {
       language: state.language,
       entropyThold: state.entropyThold,
       maxContext: state.maxContext,
-      beamSize: state.beamSize
+      beamSize: state.beamSize,
+      temperatureInc: state.temperatureInc
     }, userHint)
     if (result.success && result.clips) {
       clampClips(result.clips, result.rawResponse || '')
@@ -525,10 +535,12 @@ export default function App(): React.JSX.Element {
             entropyThold={state.entropyThold}
             maxContext={state.maxContext}
             beamSize={state.beamSize}
+            temperatureInc={state.temperatureInc}
             onLanguageChange={(l) => dispatch({ type: 'SET_LANGUAGE', language: l })}
             onEntropyTholdChange={(v) => dispatch({ type: 'SET_ENTROPY_THOLD', entropyThold: v })}
             onMaxContextChange={(v) => dispatch({ type: 'SET_MAX_CONTEXT', maxContext: v })}
             onBeamSizeChange={(v) => dispatch({ type: 'SET_BEAM_SIZE', beamSize: v })}
+            onTemperatureIncChange={(v) => dispatch({ type: 'SET_TEMPERATURE_INC', temperatureInc: v })}
             onSelectVideo={handleSelectVideo}
             onNext={handleStartTranscribe}
             onLoadCachedTranscript={handleLoadCachedTranscript}

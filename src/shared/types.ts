@@ -41,6 +41,7 @@ export interface AppSettings {
   entropyThold: number
   maxContext: number
   beamSize: number
+  temperatureInc: number
 }
 
 // --- Wizard types ---

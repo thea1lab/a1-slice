@@ -273,6 +273,8 @@ interface WhisperOptions {
   entropyThold?: number
   maxContext?: number
   beamSize?: number
+  temperatureInc?: number
+  timeoutMs?: number
   onProgress?: (percent: number) => void
 }
 
@@ -306,12 +308,24 @@ function runWhisper(
       args.push('-bs', String(opts.beamSize))
     }
 
+    args.push('-tpi', String(opts.temperatureInc ?? 0.1))
+
     if (opts.language && opts.language !== 'auto') {
       args.push('-l', opts.language)
     }
 
     proc = spawn(binaryPath, args)
     let stderr = ''
+    let timedOut = false
+
+    // Per-chunk timeout: kill whisper if it takes too long
+    let timer: ReturnType<typeof setTimeout> | null = null
+    if (opts.timeoutMs && opts.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true
+        proc?.kill()
+      }, opts.timeoutMs)
+    }
 
     proc.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString()
@@ -325,6 +339,11 @@ function runWhisper(
     })
 
     proc.on('close', (code) => {
+      if (timer) clearTimeout(timer)
+      if (timedOut) {
+        reject(new Error('Whisper timed out'))
+        return
+      }
       if (code !== 0) {
         reject(new Error(`whisper-cli exited with code ${code}: ${stderr}`))
         return
@@ -338,7 +357,10 @@ function runWhisper(
       }
     })
 
-    proc.on('error', (err) => reject(err))
+    proc.on('error', (err) => {
+      if (timer) clearTimeout(timer)
+      reject(err)
+    })
   })
 
   return { promise, kill: () => proc?.kill() }
@@ -382,4 +404,45 @@ export function transcribe(
     return { promise: currentHandle.promise, kill }
   }
   return { promise: Promise.reject(new Error('No whisper binary found')), kill: () => {} }
+}
+
+export function transcribeWithRetry(
+  wavPath: string,
+  opts: WhisperOptions = {}
+): AbortHandle {
+  let currentHandle: AbortHandle | null = null
+  let killed = false
+
+  const kill = (): void => {
+    killed = true
+    currentHandle?.kill()
+  }
+
+  const promise = (async (): Promise<TranscriptSegment[]> => {
+    // First attempt
+    currentHandle = transcribe(wavPath, opts)
+    try {
+      return await currentHandle.promise
+    } catch (err) {
+      if (killed) throw new Error('Cancelled')
+      const isTimeout = err instanceof Error && err.message === 'Whisper timed out'
+      if (!isTimeout) throw err
+
+      // Retry once on timeout
+      currentHandle = transcribe(wavPath, opts)
+      try {
+        return await currentHandle.promise
+      } catch (retryErr) {
+        if (killed) throw new Error('Cancelled')
+        const isRetryTimeout = retryErr instanceof Error && retryErr.message === 'Whisper timed out'
+        if (isRetryTimeout) {
+          // Both attempts timed out — return empty segments (skip chunk)
+          return []
+        }
+        throw retryErr
+      }
+    }
+  })()
+
+  return { promise, kill }
 }

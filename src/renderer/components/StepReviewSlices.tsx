@@ -49,7 +49,7 @@ export default function StepReviewSlices({
     <div className="flex flex-col gap-6 w-full py-4 px-2">
       {/* Header */}
       <div className="flex items-center justify-between px-2">
-        <h2 className="text-sm font-medium text-neutral-300">
+        <h2 className="text-base font-semibold text-neutral-200">
           {approvedCount} of {clips.length} clips selected
         </h2>
         <button
