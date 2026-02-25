@@ -15,8 +15,8 @@ contextBridge.exposeInMainWorld('api', {
   selectVideo: (): Promise<string | null> =>
     ipcRenderer.invoke('select-video'),
 
-  transcribeVideo: (videoPath: string, language?: string): Promise<TranscribeResult> =>
-    ipcRenderer.invoke('transcribe-video', videoPath, language),
+  transcribeVideo: (videoPath: string, language?: string, entropyThold?: number, noContext?: boolean): Promise<TranscribeResult> =>
+    ipcRenderer.invoke('transcribe-video', videoPath, language, entropyThold, noContext),
 
   analyzeTranscript: (
     videoPath: string,

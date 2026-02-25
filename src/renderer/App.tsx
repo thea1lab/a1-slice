@@ -35,6 +35,8 @@ interface WizardState {
   apiKey: string
   userHint: string
   language: VideoLanguage
+  entropyThold: number
+  noContext: boolean
   settingsLoaded: boolean
 
   // Step 1: Select video
@@ -66,12 +68,14 @@ interface WizardState {
 }
 
 type WizardAction =
-  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string; userHint: string; language: VideoLanguage }
+  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string; userHint: string; language: VideoLanguage; entropyThold: number; noContext: boolean }
   | { type: 'SET_PROVIDER'; provider: LLMProvider }
   | { type: 'SET_MODEL'; model: string }
   | { type: 'SET_API_KEY'; apiKey: string }
   | { type: 'SET_USER_HINT'; userHint: string }
   | { type: 'SET_LANGUAGE'; language: VideoLanguage }
+  | { type: 'SET_ENTROPY_THOLD'; entropyThold: number }
+  | { type: 'SET_NO_CONTEXT'; noContext: boolean }
   | { type: 'SET_VIDEO'; videoPath: string }
   | { type: 'GO_TO_STEP'; step: WizardStep }
   | { type: 'START_TRANSCRIBE' }
@@ -100,6 +104,8 @@ const initialState: WizardState = {
   apiKey: '',
   userHint: '',
   language: 'auto',
+  entropyThold: 2.4,
+  noContext: false,
   settingsLoaded: false,
 
   videoPath: null,
@@ -139,6 +145,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         apiKey: action.apiKey,
         userHint: action.userHint,
         language: action.language,
+        entropyThold: action.entropyThold,
+        noContext: action.noContext,
         settingsLoaded: true
       }
     case 'SET_PROVIDER':
@@ -155,6 +163,10 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return { ...state, userHint: action.userHint }
     case 'SET_LANGUAGE':
       return { ...state, language: action.language }
+    case 'SET_ENTROPY_THOLD':
+      return { ...state, entropyThold: action.entropyThold }
+    case 'SET_NO_CONTEXT':
+      return { ...state, noContext: action.noContext }
     case 'SET_VIDEO':
       return { ...state, videoPath: action.videoPath }
     case 'GO_TO_STEP':
@@ -302,6 +314,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         apiKey: state.apiKey,
         userHint: state.userHint,
         language: state.language,
+        entropyThold: state.entropyThold,
+        noContext: state.noContext,
         settingsLoaded: state.settingsLoaded
       }
 
@@ -324,7 +338,9 @@ export default function App(): React.JSX.Element {
         model: s.model,
         apiKey: s.apiKey,
         userHint: s.userHint,
-        language: s.language
+        language: s.language,
+        entropyThold: s.entropyThold ?? 2.4,
+        noContext: s.noContext ?? false
       })
     })
   }, [])
@@ -337,9 +353,11 @@ export default function App(): React.JSX.Element {
       model: state.model,
       apiKey: state.apiKey,
       userHint: state.userHint,
-      language: state.language
+      language: state.language,
+      entropyThold: state.entropyThold,
+      noContext: state.noContext
     })
-  }, [state.provider, state.model, state.apiKey, state.userHint, state.language, state.settingsLoaded])
+  }, [state.provider, state.model, state.apiKey, state.userHint, state.language, state.entropyThold, state.noContext, state.settingsLoaded])
 
   // Listen for pipeline progress — route to the correct step
   useEffect(() => {
@@ -370,7 +388,7 @@ export default function App(): React.JSX.Element {
   const handleStartTranscribe = useCallback(async () => {
     if (!state.videoPath) return
     dispatch({ type: 'START_TRANSCRIBE' })
-    const result = await window.api.transcribeVideo(state.videoPath, state.language)
+    const result = await window.api.transcribeVideo(state.videoPath, state.language, state.entropyThold, state.noContext)
     if (result.success && result.segments) {
       dispatch({ type: 'TRANSCRIBE_DONE', segments: result.segments })
     } else {
@@ -379,7 +397,7 @@ export default function App(): React.JSX.Element {
         error: result.error || 'Transcription failed'
       })
     }
-  }, [state.videoPath, state.language])
+  }, [state.videoPath, state.language, state.entropyThold, state.noContext])
 
   const clampClips = useCallback(
     (clips: { title: string; startMs: number; endMs: number }[], rawResponse: string) => {
@@ -415,7 +433,9 @@ export default function App(): React.JSX.Element {
       model: state.model,
       apiKey: state.apiKey,
       userHint: state.userHint,
-      language: state.language
+      language: state.language,
+      entropyThold: state.entropyThold,
+      noContext: state.noContext
     }, userHint)
     if (result.success && result.clips) {
       clampClips(result.clips, result.rawResponse || '')
@@ -492,7 +512,11 @@ export default function App(): React.JSX.Element {
           <StepSelectVideo
             videoPath={state.videoPath}
             language={state.language}
+            entropyThold={state.entropyThold}
+            noContext={state.noContext}
             onLanguageChange={(l) => dispatch({ type: 'SET_LANGUAGE', language: l })}
+            onEntropyTholdChange={(v) => dispatch({ type: 'SET_ENTROPY_THOLD', entropyThold: v })}
+            onNoContextChange={(v) => dispatch({ type: 'SET_NO_CONTEXT', noContext: v })}
             onSelectVideo={handleSelectVideo}
             onNext={handleStartTranscribe}
             onLoadCachedTranscript={handleLoadCachedTranscript}

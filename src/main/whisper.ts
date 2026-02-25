@@ -263,11 +263,17 @@ export function parseWhisperJson(
   return results
 }
 
+interface WhisperOptions {
+  language?: string
+  entropyThold?: number
+  noContext?: boolean
+  onProgress?: (percent: number) => void
+}
+
 function runWhisper(
   binaryPath: string,
   wavPath: string,
-  language?: string,
-  onProgress?: (percent: number) => void
+  opts: WhisperOptions = {}
 ): Promise<TranscriptSegment[]> {
   return new Promise((resolve, reject) => {
     const modelPath = join(getModelsDir(), MODEL_FILENAME)
@@ -280,11 +286,16 @@ function runWhisper(
       '-oj', // JSON output
       '-of',
       outputBase,
-      '-pp' // print progress to stderr
+      '-pp', // print progress to stderr
+      '--entropy-thold', String(opts.entropyThold ?? 2.4)
     ]
 
-    if (language && language !== 'auto') {
-      args.push('-l', language)
+    if (opts.noContext) {
+      args.push('--max-context', '0')
+    }
+
+    if (opts.language && opts.language !== 'auto') {
+      args.push('-l', opts.language)
     }
 
     const proc = spawn(binaryPath, args)
@@ -294,10 +305,10 @@ function runWhisper(
       stderr += chunk.toString()
       // whisper.cpp prints progress like "whisper_full: progress = 42%"
       const match = stderr.match(/progress\s*=\s*(\d+)%/g)
-      if (match && onProgress) {
+      if (match && opts.onProgress) {
         const last = match[match.length - 1]
         const pct = parseInt(last.match(/(\d+)/)![1], 10)
-        onProgress(pct)
+        opts.onProgress(pct)
       }
     })
 
@@ -321,8 +332,7 @@ function runWhisper(
 
 export function transcribe(
   wavPath: string,
-  language?: string,
-  onProgress?: (percent: number) => void
+  opts: WhisperOptions = {}
 ): Promise<TranscriptSegment[]> {
   const modelPath = join(getModelsDir(), MODEL_FILENAME)
   if (!existsSync(modelPath)) {
@@ -333,7 +343,7 @@ export function transcribe(
   const gpuPath = findBinaryPath(gpuName)
   const cpuPath = findBinaryPath(cpuName)
 
-  const tryBinary = (binaryPath: string) => runWhisper(binaryPath, wavPath, language, onProgress)
+  const tryBinary = (binaryPath: string) => runWhisper(binaryPath, wavPath, opts)
 
   if (gpuPath) {
     return tryBinary(gpuPath).catch(() => {

@@ -11,7 +11,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   model: 'claude-haiku-4-5',
   apiKey: '',
   userHint: '',
-  language: 'auto'
+  language: 'auto',
+  entropyThold: 2.4,
+  noContext: false
 }
 
 export function loadSettings(): AppSettings {

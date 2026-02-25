@@ -59,4 +59,5 @@ describe('parseWhisperJson', () => {
     const json = JSON.stringify({ transcription: [] })
     expect(parseWhisperJson(json)).toEqual([])
   })
+
 })

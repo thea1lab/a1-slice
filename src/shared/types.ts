@@ -38,6 +38,8 @@ export interface AppSettings {
   apiKey: string
   userHint: string
   language: VideoLanguage
+  entropyThold: number
+  noContext: boolean
 }
 
 // --- Wizard types ---

@@ -4,7 +4,11 @@ import type { TranscriptSegment, VideoLanguage } from '../../shared/types'
 interface StepSelectVideoProps {
   videoPath: string | null
   language: VideoLanguage
+  entropyThold: number
+  noContext: boolean
   onLanguageChange: (language: VideoLanguage) => void
+  onEntropyTholdChange: (value: number) => void
+  onNoContextChange: (value: boolean) => void
   onSelectVideo: () => void
   onNext: () => void
   onLoadCachedTranscript?: (segments: TranscriptSegment[]) => void
@@ -13,13 +17,18 @@ interface StepSelectVideoProps {
 export default function StepSelectVideo({
   videoPath,
   language,
+  entropyThold,
+  noContext,
   onLanguageChange,
+  onEntropyTholdChange,
+  onNoContextChange,
   onSelectVideo,
   onNext,
   onLoadCachedTranscript
 }: StepSelectVideoProps): React.JSX.Element {
   const [cachedSegments, setCachedSegments] = useState<TranscriptSegment[] | null>(null)
   const [checking, setChecking] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   useEffect(() => {
     if (!videoPath) {
@@ -95,6 +104,52 @@ export default function StepSelectVideo({
               <option value="es">Spanish</option>
             </select>
           </label>
+        )}
+
+        {/* Advanced whisper settings — collapsed by default */}
+        {videoPath && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="text-xs text-neutral-500 hover:text-neutral-400 transition-colors flex items-center gap-1"
+            >
+              <span className="text-[10px]">{showAdvanced ? '\u25BC' : '\u25B6'}</span>
+              Advanced
+            </button>
+            {showAdvanced && (
+              <div className="mt-2 space-y-3 pl-3 border-l border-white/5">
+                <label className="flex flex-col gap-1 text-xs text-neutral-500">
+                  Entropy threshold
+                  <span className="text-[10px] text-neutral-600">Repetition detection sensitivity (default 2.4, try 2.8+ if you get loops)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="10"
+                    value={entropyThold}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value)
+                      if (!isNaN(v)) onEntropyTholdChange(v)
+                    }}
+                    className="appearance-none bg-bg-input border border-white/12 rounded-lg px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-accent transition-colors w-24 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-xs text-neutral-500 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={noContext}
+                    onChange={(e) => onNoContextChange(e.target.checked)}
+                    className="accent-accent"
+                  />
+                  <span>
+                    Disable cross-chunk context
+                    <span className="block text-[10px] text-neutral-600">Prevents repetition loops from propagating across chunks</span>
+                  </span>
+                </label>
+              </div>
+            )}
+          </div>
         )}
 
         {/* Cached transcript prompt */}
