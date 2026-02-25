@@ -463,4 +463,22 @@ describe('enforceCoverage', () => {
     const result = enforceCoverage(clips, candidates, totalDurationMs)
     expect(result).toHaveLength(2) // unchanged
   })
+
+  it('preserves sourceTopic as topic on auto-filled clips', () => {
+    const clips = [
+      { title: 'A', startMs: 50000, endMs: 110000 }
+    ]
+    const candidates = [
+      { title: 'A', startMs: 50000, endMs: 110000, score: 8, justification: '', sourceTopic: 'Intro' },
+      { title: 'Mid', startMs: 350000, endMs: 410000, score: 7, justification: '', sourceTopic: 'Main Content' },
+      { title: 'End', startMs: 700000, endMs: 760000, score: 6, justification: '', sourceTopic: 'Conclusion' }
+    ]
+    const result = enforceCoverage(clips, candidates, totalDurationMs)
+    expect(result).toHaveLength(3)
+    // Auto-filled clips should carry topic from candidate's sourceTopic
+    const midClip = result.find((c) => c.startMs === 350000)
+    expect(midClip?.topic).toBe('Main Content')
+    const endClip = result.find((c) => c.startMs === 700000)
+    expect(endClip?.topic).toBe('Conclusion')
+  })
 })

@@ -8,7 +8,7 @@ const SETTINGS_PATH = join(SETTINGS_DIR, 'settings.json')
 
 const DEFAULT_SETTINGS: AppSettings = {
   provider: 'claude',
-  model: 'claude-sonnet-4-6',
+  model: 'claude-haiku-4-5',
   apiKey: '',
   userHint: '',
   language: 'auto'

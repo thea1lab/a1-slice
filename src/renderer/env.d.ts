@@ -33,8 +33,6 @@ declare global {
       openFolder(folderPath: string): Promise<void>
       loadSettings(): Promise<AppSettings>
       saveSettings(settings: AppSettings): Promise<void>
-      windowMinimize(): Promise<void>
-      windowClose(): Promise<void>
       getPlatform(): string
     }
   }

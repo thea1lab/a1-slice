@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import ClipCard from './ClipCard'
 import type { ClipSegmentWithStatus } from '../../shared/types'
 
@@ -22,6 +23,28 @@ export default function StepReviewSlices({
 }: StepReviewSlicesProps): React.JSX.Element {
   const approvedCount = clips.filter((c) => c.approved).length
 
+  const groupedClips = useMemo(() => {
+    const hasTopic = clips.some((c) => c.topic)
+    if (!hasTopic) return null
+
+    const groups = new Map<string, ClipSegmentWithStatus[]>()
+    for (const clip of clips) {
+      const key = clip.topic || ''
+      const list = groups.get(key) ?? []
+      list.push(clip)
+      groups.set(key, list)
+    }
+
+    // Sort groups by earliest startMs; ungrouped (key "") goes last
+    return [...groups.entries()].sort((a, b) => {
+      if (a[0] === '') return 1
+      if (b[0] === '') return -1
+      const aMin = Math.min(...a[1].map((c) => c.startMs))
+      const bMin = Math.min(...b[1].map((c) => c.startMs))
+      return aMin - bMin
+    })
+  }, [clips])
+
   return (
     <div className="flex flex-col gap-6 w-full py-4 px-2">
       {/* Header */}
@@ -40,16 +63,37 @@ export default function StepReviewSlices({
 
       {/* Clip list */}
       <div className="flex flex-col gap-3">
-        {clips.map((clip) => (
-          <ClipCard
-            key={clip.id}
-            clip={clip}
-            videoPath={videoPath}
-            videoDurationMs={videoDurationMs}
-            onToggle={onToggle}
-            onUpdateTimes={onUpdateClipTimes}
-          />
-        ))}
+        {groupedClips
+          ? groupedClips.map(([topic, groupClips]) => (
+              <div key={topic || '__ungrouped'} className="flex flex-col gap-3">
+                {topic && (
+                  <div className="flex items-center gap-3 pt-6 pb-2">
+                    <span className="text-lg font-bold text-white/90">{topic}</span>
+                    <div className="flex-1 border-t border-white/15" />
+                  </div>
+                )}
+                {groupClips.map((clip) => (
+                  <ClipCard
+                    key={clip.id}
+                    clip={clip}
+                    videoPath={videoPath}
+                    videoDurationMs={videoDurationMs}
+                    onToggle={onToggle}
+                    onUpdateTimes={onUpdateClipTimes}
+                  />
+                ))}
+              </div>
+            ))
+          : clips.map((clip) => (
+              <ClipCard
+                key={clip.id}
+                clip={clip}
+                videoPath={videoPath}
+                videoDurationMs={videoDurationMs}
+                onToggle={onToggle}
+                onUpdateTimes={onUpdateClipTimes}
+              />
+            ))}
       </div>
 
       {/* Raw LLM response */}

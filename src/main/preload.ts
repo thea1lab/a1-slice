@@ -62,11 +62,5 @@ contextBridge.exposeInMainWorld('api', {
   saveSettings: (settings: AppSettings): Promise<void> =>
     ipcRenderer.invoke('save-settings', settings),
 
-  windowMinimize: (): Promise<void> =>
-    ipcRenderer.invoke('window-minimize'),
-
-  windowClose: (): Promise<void> =>
-    ipcRenderer.invoke('window-close'),
-
   getPlatform: (): string => process.platform
 })

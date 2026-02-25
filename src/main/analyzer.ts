@@ -270,7 +270,8 @@ export function enforceCoverage(
       result.push({
         title: best.title,
         startMs: best.startMs,
-        endMs: best.endMs
+        endMs: best.endMs,
+        topic: best.sourceTopic
       })
     }
   }
@@ -685,11 +686,13 @@ export async function analyzeTranscript(
     const original = finalClips.find(
       (f) => f.startMs === c.startMs && f.endMs === c.endMs
     )
+    const match = candidateMap.get(`${c.startMs}-${c.endMs}`)
     return {
       title: c.title,
       startMs: c.startMs,
       endMs: c.endMs,
-      category: original?.category
+      category: original?.category,
+      topic: match?.sourceTopic
     }
   })
 
@@ -701,7 +704,8 @@ export async function analyzeTranscript(
       title: c.title,
       start_ms: c.startMs,
       end_ms: c.endMs,
-      category: c.category
+      category: c.category,
+      topic: c.topic
     })),
     null,
     2

@@ -4,7 +4,7 @@ import ProgressBar from './ProgressBar'
 import type { TranscriptSegment, ClipSegment, LLMProvider } from '../../shared/types'
 
 const DEFAULT_MODELS: Record<LLMProvider, string> = {
-  claude: 'claude-sonnet-4-6',
+  claude: 'claude-haiku-4-5',
   openai: 'gpt-5-mini-2025-08-07'
 }
 
@@ -156,9 +156,12 @@ export default function StepReviewTranscript({
         )}
 
         {error && (
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-red-400" />
-            <span className="text-sm text-red-300">{error}</span>
+          <div className="bg-red-950/40 border border-red-500/20 rounded-lg p-3 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-red-400 shrink-0" />
+              <span className="text-sm font-medium text-red-300">Analysis failed</span>
+            </div>
+            <pre className="text-xs text-red-300/70 whitespace-pre-wrap break-all overflow-x-auto max-h-32 overflow-y-auto pl-4">{error}</pre>
           </div>
         )}
 

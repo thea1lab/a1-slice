@@ -72,16 +72,24 @@ function createWindow(): void {
   const isMac = process.platform === 'darwin'
 
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1320,
+    height: 860,
     minWidth: 900,
     minHeight: 600,
     resizable: true,
-    frame: isMac,
-    titleBarStyle: isMac ? 'hiddenInset' : undefined,
+    frame: true,
+    titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
+    ...(isMac ? {} : {
+      titleBarOverlay: {
+        color: '#08080f',
+        symbolColor: '#737373',
+        height: 40
+      }
+    }),
     backgroundColor: '#0f0f1a',
     maximizable: true,
+    autoHideMenuBar: !isMac,
     icon: join(__dirname, '../../resources/icon.png'),
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
@@ -94,6 +102,10 @@ function createWindow(): void {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+
+  if (!isMac) {
+    mainWindow.setMenuBarVisibility(false)
   }
 
   // Content Security Policy
@@ -128,15 +140,6 @@ secureHandle('load-settings', () => {
 
 secureHandle('save-settings', (_event, settings: AppSettings) => {
   saveSettings(settings)
-})
-
-// IPC: Window controls
-secureHandle('window-minimize', () => {
-  mainWindow?.minimize()
-})
-
-secureHandle('window-close', () => {
-  mainWindow?.close()
 })
 
 // IPC: Select video file
@@ -276,6 +279,9 @@ secureHandle('check-analysis', (_event, videoPath: string) => {
         }
         if (item.category === 'related' || item.category === 'standalone') {
           clip.category = item.category
+        }
+        if (item.topic) {
+          clip.topic = item.topic
         }
         return clip
       })

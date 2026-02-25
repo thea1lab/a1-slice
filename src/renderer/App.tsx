@@ -19,7 +19,7 @@ import type {
 // --- Default models per provider ---
 
 const DEFAULT_MODELS: Record<LLMProvider, string> = {
-  claude: 'claude-sonnet-4-6',
+  claude: 'claude-haiku-4-5',
   openai: 'gpt-5-mini-2025-08-07'
 }
 
@@ -566,7 +566,7 @@ export default function App(): React.JSX.Element {
 
   return (
     <div
-      className="relative flex flex-col min-h-screen bg-bg-base text-neutral-200 font-sans overflow-hidden"
+      className="relative flex flex-col h-screen bg-bg-base text-neutral-200 font-sans overflow-hidden"
       style={{
         background: 'radial-gradient(ellipse at top, #12121e 0%, #08080f 60%)'
       }}
