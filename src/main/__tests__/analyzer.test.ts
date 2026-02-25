@@ -2,8 +2,18 @@ import { describe, it, expect } from 'vitest'
 import {
   msToTimecode,
   formatTranscriptForLLM,
-  parseLLMResponse
+  parseLLMResponse,
+  parseTopicSegments,
+  validateSegmentation,
+  fallbackToTimeChunks,
+  getSegmentsInRange,
+  generateTranscriptPreview,
+  deduplicateClips,
+  budgetCandidates,
+  enforceCoverage
 } from '../analyzer'
+
+// --- Existing tests (unchanged) ---
 
 describe('msToTimecode', () => {
   it('formats zero', () => {
@@ -113,5 +123,344 @@ describe('parseLLMResponse', () => {
     ])
     const result = parseLLMResponse(text)
     expect(result[0].category).toBeUndefined()
+  })
+})
+
+// --- New tests ---
+
+describe('parseTopicSegments', () => {
+  it('parses valid JSON topic segments', () => {
+    const text = JSON.stringify([
+      { topic: 'Intro', start_ms: 0, end_ms: 60000, description: 'Introduction' },
+      { topic: 'Main', start_ms: 60000, end_ms: 300000, description: 'Main content' }
+    ])
+    const result = parseTopicSegments(text)
+    expect(result).toEqual([
+      { topic: 'Intro', startMs: 0, endMs: 60000, description: 'Introduction' },
+      { topic: 'Main', startMs: 60000, endMs: 300000, description: 'Main content' }
+    ])
+  })
+
+  it('extracts JSON from markdown-wrapped response', () => {
+    const text = `Here are the segments:\n\`\`\`json\n[{"topic": "A", "start_ms": 0, "end_ms": 100000, "description": "Desc"}]\n\`\`\``
+    const result = parseTopicSegments(text)
+    expect(result).toHaveLength(1)
+    expect(result[0].topic).toBe('A')
+  })
+
+  it('throws on malformed response', () => {
+    expect(() => parseTopicSegments('No JSON here')).toThrow('No JSON array found')
+  })
+})
+
+describe('validateSegmentation', () => {
+  const makeTopics = (ranges: [number, number][]): { topic: string; startMs: number; endMs: number; description: string }[] =>
+    ranges.map(([s, e], i) => ({ topic: `T${i}`, startMs: s, endMs: e, description: '' }))
+
+  it('returns true for good segmentation', () => {
+    const topics = makeTopics([
+      [0, 100000],
+      [100000, 200000],
+      [200000, 300000]
+    ])
+    expect(validateSegmentation(topics, 300000)).toBe(true)
+  })
+
+  it('returns false for fewer than 3 segments', () => {
+    const topics = makeTopics([
+      [0, 150000],
+      [150000, 300000]
+    ])
+    expect(validateSegmentation(topics, 300000)).toBe(false)
+  })
+
+  it('returns false for low coverage', () => {
+    const topics = makeTopics([
+      [0, 50000],
+      [50000, 100000],
+      [100000, 130000]
+    ])
+    // Coverage = 130000 / 300000 ≈ 43%
+    expect(validateSegmentation(topics, 300000)).toBe(false)
+  })
+
+  it('returns false for large gaps between segments', () => {
+    const topics = makeTopics([
+      [0, 100000],
+      [110000, 200000], // 10s gap
+      [200000, 300000]
+    ])
+    expect(validateSegmentation(topics, 300000)).toBe(false)
+  })
+
+  it('returns false for out of order segments', () => {
+    const topics = makeTopics([
+      [100000, 200000],
+      [0, 100000], // starts before previous ends
+      [200000, 300000]
+    ])
+    expect(validateSegmentation(topics, 300000)).toBe(false)
+  })
+
+  it('returns false for ultra-short segments', () => {
+    const topics = makeTopics([
+      [0, 10000], // 10s < 15s
+      [10000, 200000],
+      [200000, 300000]
+    ])
+    expect(validateSegmentation(topics, 300000)).toBe(false)
+  })
+})
+
+describe('fallbackToTimeChunks', () => {
+  const makeSegments = (count: number, spanMs: number) => {
+    const segMs = spanMs / count
+    return Array.from({ length: count }, (_, i) => ({
+      startMs: Math.round(i * segMs),
+      endMs: Math.round((i + 1) * segMs),
+      text: `Segment ${i}`
+    }))
+  }
+
+  it('covers full transcript with ~5min chunks', () => {
+    const segments = makeSegments(60, 900000) // 15min video
+    const chunks = fallbackToTimeChunks(segments)
+    expect(chunks.length).toBe(3) // 15min / 5min = 3
+    expect(chunks[0].startMs).toBe(0)
+    expect(chunks[chunks.length - 1].endMs).toBe(900000)
+  })
+
+  it('handles short video (1 chunk)', () => {
+    const segments = makeSegments(10, 120000) // 2min video
+    const chunks = fallbackToTimeChunks(segments)
+    expect(chunks.length).toBe(1)
+    expect(chunks[0].startMs).toBe(0)
+    expect(chunks[0].endMs).toBe(120000)
+  })
+
+  it('handles exact multiples', () => {
+    const segments = makeSegments(30, 600000) // 10min = exactly 2 chunks
+    const chunks = fallbackToTimeChunks(segments)
+    expect(chunks.length).toBe(2)
+    expect(chunks[0].endMs).toBe(300000)
+    expect(chunks[1].endMs).toBe(600000)
+  })
+
+  it('returns empty array for empty segments', () => {
+    expect(fallbackToTimeChunks([])).toEqual([])
+  })
+})
+
+describe('getSegmentsInRange', () => {
+  const segments = [
+    { startMs: 0, endMs: 10000, text: 'A' },
+    { startMs: 10000, endMs: 20000, text: 'B' },
+    { startMs: 20000, endMs: 30000, text: 'C' },
+    { startMs: 30000, endMs: 40000, text: 'D' },
+    { startMs: 40000, endMs: 50000, text: 'E' }
+  ]
+
+  it('filters segments correctly within range', () => {
+    const result = getSegmentsInRange(segments, 15000, 35000)
+    expect(result.map((s) => s.text)).toEqual(['B', 'C', 'D'])
+  })
+
+  it('includes partial-overlap boundary segments', () => {
+    const result = getSegmentsInRange(segments, 5000, 25000)
+    // A overlaps (endMs 10000 > startMs 5000), B fully inside, C overlaps
+    expect(result.map((s) => s.text)).toEqual(['A', 'B', 'C'])
+  })
+
+  it('returns empty for range outside segments', () => {
+    const result = getSegmentsInRange(segments, 60000, 70000)
+    expect(result).toEqual([])
+  })
+})
+
+describe('generateTranscriptPreview', () => {
+  const segments = [
+    { startMs: 0, endMs: 10000, text: 'Line 1' },
+    { startMs: 10000, endMs: 20000, text: 'Line 2' },
+    { startMs: 20000, endMs: 30000, text: 'Line 3' },
+    { startMs: 30000, endMs: 40000, text: 'Line 4' },
+    { startMs: 40000, endMs: 50000, text: 'Line 5' },
+    { startMs: 50000, endMs: 60000, text: 'Line 6' }
+  ]
+
+  it('returns first 2 + last 2 lines for a range with many segments', () => {
+    const result = generateTranscriptPreview(segments, 0, 60000)
+    expect(result).toBe('Line 1 | Line 2 | ... | Line 5 | Line 6')
+  })
+
+  it('handles ranges with fewer than 5 lines', () => {
+    const result = generateTranscriptPreview(segments, 0, 30000)
+    // 3 segments: Line 1, Line 2, Line 3 — no ellipsis
+    expect(result).toBe('Line 1 | Line 2 | Line 3')
+  })
+
+  it('returns empty string for range with no segments', () => {
+    const result = generateTranscriptPreview(segments, 70000, 80000)
+    expect(result).toBe('')
+  })
+
+  it('handles exactly 4 lines without ellipsis', () => {
+    const result = generateTranscriptPreview(segments, 0, 40000)
+    expect(result).toBe('Line 1 | Line 2 | Line 3 | Line 4')
+  })
+})
+
+describe('deduplicateClips', () => {
+  const makeClip = (
+    startMs: number,
+    endMs: number,
+    score: number,
+    title: string = 'Clip'
+  ) => ({
+    title,
+    startMs,
+    endMs,
+    score,
+    justification: '',
+    sourceTopic: 'T'
+  })
+
+  it('keeps all clips with no overlap', () => {
+    const clips = [
+      makeClip(0, 60000, 8),
+      makeClip(120000, 180000, 7),
+      makeClip(240000, 300000, 6)
+    ]
+    const result = deduplicateClips(clips)
+    expect(result).toHaveLength(3)
+  })
+
+  it('keeps higher score when IoU > 0.5', () => {
+    const clips = [
+      makeClip(0, 60000, 5, 'Low'),
+      makeClip(0, 60000, 9, 'High') // exact same range
+    ]
+    const result = deduplicateClips(clips)
+    expect(result).toHaveLength(1)
+    expect(result[0].title).toBe('High')
+  })
+
+  it('keeps both clips when IoU <= 0.5', () => {
+    // A: 0-100000, B: 60000-200000
+    // Intersection: 60000-100000 = 40000
+    // Union: 0-200000 = 200000
+    // IoU = 40000/200000 = 0.2
+    const clips = [
+      makeClip(0, 100000, 7),
+      makeClip(60000, 200000, 8)
+    ]
+    const result = deduplicateClips(clips)
+    expect(result).toHaveLength(2)
+  })
+})
+
+describe('budgetCandidates', () => {
+  const makeClip = (topic: string, score: number) => ({
+    title: `Clip ${score}`,
+    startMs: score * 10000,
+    endMs: score * 10000 + 60000,
+    score,
+    justification: '',
+    sourceTopic: topic
+  })
+
+  it('keeps top K per topic by score', () => {
+    const candidates = [
+      makeClip('A', 3),
+      makeClip('A', 8),
+      makeClip('A', 5),
+      makeClip('A', 9),
+      makeClip('A', 1),
+      makeClip('A', 7) // 6 clips for topic A, keep top 2
+    ]
+    const result = budgetCandidates(candidates, 2)
+    expect(result).toHaveLength(2)
+    expect(result.map((c) => c.score).sort((a, b) => b - a)).toEqual([9, 8])
+  })
+
+  it('keeps all when fewer than K', () => {
+    const candidates = [
+      makeClip('A', 5),
+      makeClip('A', 8)
+    ]
+    const result = budgetCandidates(candidates, 5)
+    expect(result).toHaveLength(2)
+  })
+
+  it('budgets per topic independently', () => {
+    const candidates = [
+      makeClip('A', 9),
+      makeClip('A', 7),
+      makeClip('A', 3),
+      makeClip('B', 8),
+      makeClip('B', 4),
+      makeClip('B', 2)
+    ]
+    const result = budgetCandidates(candidates, 2)
+    expect(result).toHaveLength(4) // 2 from A + 2 from B
+  })
+})
+
+describe('enforceCoverage', () => {
+  const totalDurationMs = 900000 // 15min
+
+  const makeCandidate = (startMs: number, endMs: number, score: number) => ({
+    title: `Candidate ${startMs}`,
+    startMs,
+    endMs,
+    score,
+    justification: '',
+    sourceTopic: 'T'
+  })
+
+  it('does not change when all thirds are covered', () => {
+    const clips = [
+      { title: 'A', startMs: 50000, endMs: 110000 },   // first third
+      { title: 'B', startMs: 350000, endMs: 410000 },   // second third
+      { title: 'C', startMs: 650000, endMs: 710000 }    // third third
+    ]
+    const candidates = [
+      makeCandidate(50000, 110000, 8),
+      makeCandidate(350000, 410000, 7),
+      makeCandidate(650000, 710000, 6)
+    ]
+    const result = enforceCoverage(clips, candidates, totalDurationMs)
+    expect(result).toHaveLength(3)
+  })
+
+  it('auto-fills missing third when candidates exist', () => {
+    // Only clips in first and second third
+    const clips = [
+      { title: 'A', startMs: 50000, endMs: 110000 },
+      { title: 'B', startMs: 350000, endMs: 410000 }
+    ]
+    const candidates = [
+      makeCandidate(50000, 110000, 8),
+      makeCandidate(350000, 410000, 7),
+      makeCandidate(650000, 710000, 9),  // candidate in third third
+      makeCandidate(700000, 760000, 6)
+    ]
+    const result = enforceCoverage(clips, candidates, totalDurationMs)
+    expect(result).toHaveLength(3)
+    // Should auto-fill from highest-scored candidate in the third third
+    expect(result[2].startMs).toBe(650000)
+  })
+
+  it('does not change when missing third has no candidates', () => {
+    const clips = [
+      { title: 'A', startMs: 50000, endMs: 110000 },
+      { title: 'B', startMs: 350000, endMs: 410000 }
+    ]
+    const candidates = [
+      makeCandidate(50000, 110000, 8),
+      makeCandidate(350000, 410000, 7)
+      // No candidates in third third
+    ]
+    const result = enforceCoverage(clips, candidates, totalDurationMs)
+    expect(result).toHaveLength(2) // unchanged
   })
 })

@@ -261,9 +261,33 @@ secureHandle('check-transcript', (_event, videoPath: string) => {
 secureHandle('check-analysis', (_event, videoPath: string) => {
   try {
     const vName = basename(videoPath).replace(/\.[^.]+$/, '')
-    const cachePath = join(dirname(videoPath), `${vName}.a1slice-analysis.txt`)
-    if (existsSync(cachePath)) {
-      const rawResponse = readFileSync(cachePath, 'utf-8')
+    const dir = dirname(videoPath)
+    const clipsPath = join(dir, `${vName}.a1slice-clips.json`)
+    const analysisPath = join(dir, `${vName}.a1slice-analysis.txt`)
+
+    // Try new clips JSON cache first
+    if (existsSync(clipsPath)) {
+      const clipsData = JSON.parse(readFileSync(clipsPath, 'utf-8'))
+      const clips: ClipSegment[] = (clipsData as any[]).map((item: any) => {
+        const clip: ClipSegment = {
+          title: item.title,
+          startMs: item.startMs,
+          endMs: item.endMs
+        }
+        if (item.category === 'related' || item.category === 'standalone') {
+          clip.category = item.category
+        }
+        return clip
+      })
+      const rawResponse = existsSync(analysisPath)
+        ? readFileSync(analysisPath, 'utf-8')
+        : ''
+      return { found: true, clips, rawResponse }
+    }
+
+    // Backward compat: old .a1slice-analysis.txt format
+    if (existsSync(analysisPath)) {
+      const rawResponse = readFileSync(analysisPath, 'utf-8')
       const clips = parseLLMResponse(rawResponse)
       return { found: true, clips, rawResponse }
     }
@@ -304,8 +328,19 @@ secureHandle(
       // Cache analysis next to source video
       try {
         const vName = basename(videoPath).replace(/\.[^.]+$/, '')
-        const cachePath = join(dirname(videoPath), `${vName}.a1slice-analysis.txt`)
-        writeFileSync(cachePath, rawResponse, 'utf-8')
+        const dir = dirname(videoPath)
+        // Save clips as structured JSON for reliable re-parsing
+        writeFileSync(
+          join(dir, `${vName}.a1slice-clips.json`),
+          JSON.stringify(clips),
+          'utf-8'
+        )
+        // Save full debug output for inspection
+        writeFileSync(
+          join(dir, `${vName}.a1slice-analysis.txt`),
+          rawResponse,
+          'utf-8'
+        )
       } catch {}
 
       sendProgress({ stage: 'done', message: '', percent: 100 })
