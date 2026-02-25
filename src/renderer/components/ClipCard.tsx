@@ -1,6 +1,9 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import VideoPreview from './VideoPreview'
 import type { ClipSegmentWithStatus } from '../../shared/types'
+
+const MIN_CLIP_MS = 500
+const NUDGE_MS = 1000
 
 function formatDuration(startMs: number, endMs: number): string {
   const totalSeconds = Math.round((endMs - startMs) / 1000)
@@ -43,6 +46,10 @@ function parseTime(value: string): number | null {
   return ms >= 0 ? Math.round(ms) : null
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
 interface ClipCardProps {
   clip: ClipSegmentWithStatus
   videoPath: string
@@ -51,7 +58,7 @@ interface ClipCardProps {
   onUpdateTimes?: (id: string, startMs: number, endMs: number) => void
 }
 
-export default function ClipCard({
+const ClipCard = React.memo(function ClipCard({
   clip,
   videoPath,
   videoDurationMs,
@@ -60,6 +67,10 @@ export default function ClipCard({
 }: ClipCardProps): React.JSX.Element {
   const [startInput, setStartInput] = useState(msToHMMSSs(clip.startMs))
   const [endInput, setEndInput] = useState(msToHMMSSs(clip.endMs))
+  const maxMs = videoDurationMs && videoDurationMs > 0
+    ? videoDurationMs
+    : Math.max(clip.endMs + 120000, clip.startMs + 120000)
+  const minGapMs = Math.max(50, Math.min(MIN_CLIP_MS, clip.endMs - clip.startMs))
 
   useEffect(() => {
     setStartInput(msToHMMSSs(clip.startMs))
@@ -71,7 +82,6 @@ export default function ClipCard({
 
   const handleStartBlur = (): void => {
     const ms = parseTime(startInput)
-    const maxMs = videoDurationMs ?? Infinity
     if (ms !== null && ms < clip.endMs && ms <= maxMs && onUpdateTimes) {
       onUpdateTimes(clip.id, ms, clip.endMs)
     } else {
@@ -81,12 +91,23 @@ export default function ClipCard({
 
   const handleEndBlur = (): void => {
     const ms = parseTime(endInput)
-    const maxMs = videoDurationMs ?? Infinity
     if (ms !== null && ms > clip.startMs && ms <= maxMs && onUpdateTimes) {
       onUpdateTimes(clip.id, clip.startMs, ms)
     } else {
       setEndInput(msToHMMSSs(clip.endMs))
     }
+  }
+
+  const nudgeStart = (deltaMs: number): void => {
+    if (!onUpdateTimes) return
+    const maxStart = Math.min(maxMs, clip.endMs - minGapMs)
+    onUpdateTimes(clip.id, clamp(clip.startMs + deltaMs, 0, maxStart), clip.endMs)
+  }
+
+  const nudgeEnd = (deltaMs: number): void => {
+    if (!onUpdateTimes) return
+    const minEnd = clip.startMs + minGapMs
+    onUpdateTimes(clip.id, clip.startMs, clamp(clip.endMs + deltaMs, minEnd, maxMs))
   }
 
   return (
@@ -105,15 +126,12 @@ export default function ClipCard({
       <div className="flex-1 p-4 flex flex-col justify-center gap-2 min-w-0">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="text-sm font-medium text-neutral-200">
+            <h3 className="text-lg font-semibold text-neutral-200">
               {clip.title}
-            </h3>
-            <p className="text-xs text-neutral-400 font-mono mt-1">
-              {msToHMMSSs(clip.startMs)} — {msToHMMSSs(clip.endMs)}
-              <span className="text-neutral-500 ml-2">
-                ({formatDuration(clip.startMs, clip.endMs)})
+              <span className="text-sm font-normal text-neutral-500 ml-2">
+                {formatDuration(clip.startMs, clip.endMs)}
               </span>
-            </p>
+            </h3>
           </div>
           <button
             onClick={() => onToggle(clip.id)}
@@ -129,25 +147,55 @@ export default function ClipCard({
           </button>
         </div>
         {onUpdateTimes && (
-          <div className="flex items-center gap-2 text-xs">
-            <input
-              type="text"
-              value={startInput}
-              onChange={(e) => setStartInput(e.target.value)}
-              onBlur={handleStartBlur}
-              className="w-24 bg-bg-input border border-white/12 rounded px-2 py-1 text-neutral-300 text-center font-mono"
-            />
+          <div className="flex items-center gap-2 text-xs flex-wrap">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => nudgeStart(-NUDGE_MS)}
+                className="h-6 px-1.5 rounded border border-white/15 bg-bg-input text-neutral-400 text-[11px] hover:border-accent/40 hover:text-neutral-200"
+              >
+                -1s
+              </button>
+              <input
+                type="text"
+                value={startInput}
+                onChange={(e) => setStartInput(e.target.value)}
+                onBlur={handleStartBlur}
+                className="w-[5.5rem] bg-bg-input border border-white/12 rounded px-2 py-1 text-neutral-300 text-center font-mono"
+              />
+              <button
+                onClick={() => nudgeStart(NUDGE_MS)}
+                className="h-6 px-1.5 rounded border border-white/15 bg-bg-input text-neutral-400 text-[11px] hover:border-accent/40 hover:text-neutral-200"
+              >
+                +1s
+              </button>
+            </div>
             <span className="text-neutral-500">—</span>
-            <input
-              type="text"
-              value={endInput}
-              onChange={(e) => setEndInput(e.target.value)}
-              onBlur={handleEndBlur}
-              className="w-24 bg-bg-input border border-white/12 rounded px-2 py-1 text-neutral-300 text-center font-mono"
-            />
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => nudgeEnd(-NUDGE_MS)}
+                className="h-6 px-1.5 rounded border border-white/15 bg-bg-input text-neutral-400 text-[11px] hover:border-accent/40 hover:text-neutral-200"
+              >
+                -1s
+              </button>
+              <input
+                type="text"
+                value={endInput}
+                onChange={(e) => setEndInput(e.target.value)}
+                onBlur={handleEndBlur}
+                className="w-[5.5rem] bg-bg-input border border-white/12 rounded px-2 py-1 text-neutral-300 text-center font-mono"
+              />
+              <button
+                onClick={() => nudgeEnd(NUDGE_MS)}
+                className="h-6 px-1.5 rounded border border-white/15 bg-bg-input text-neutral-400 text-[11px] hover:border-accent/40 hover:text-neutral-200"
+              >
+                +1s
+              </button>
+            </div>
           </div>
         )}
       </div>
     </div>
   )
-}
+})
+
+export default ClipCard
