@@ -4,23 +4,40 @@ import type { ClipSegmentWithStatus } from '../../shared/types'
 
 function formatDuration(startMs: number, endMs: number): string {
   const totalSeconds = Math.round((endMs - startMs) / 1000)
-  const m = Math.floor(totalSeconds / 60)
+  const h = Math.floor(totalSeconds / 3600)
+  const m = Math.floor((totalSeconds % 3600) / 60)
   const s = totalSeconds % 60
+  if (h > 0) return `${h}h ${m}m ${s}s`
   return m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
-function msToMMSSs(ms: number): string {
+function msToHMMSSs(ms: number): string {
   const totalSeconds = ms / 1000
-  const m = Math.floor(totalSeconds / 60)
+  const h = Math.floor(totalSeconds / 3600)
+  const m = Math.floor((totalSeconds % 3600) / 60)
   const s = totalSeconds % 60
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${s.toFixed(1).padStart(4, '0')}`
+  }
   return `${String(m).padStart(2, '0')}:${s.toFixed(1).padStart(4, '0')}`
 }
 
-function parseMMSSs(value: string): number | null {
-  const match = value.trim().match(/^(\d+):(\d+(?:\.\d+)?)$/)
-  if (!match) return null
-  const m = parseInt(match[1], 10)
-  const s = parseFloat(match[2])
+function parseTime(value: string): number | null {
+  // Try H:MM:SS.S (two colons)
+  const hMatch = value.trim().match(/^(\d+):(\d+):(\d+(?:\.\d+)?)$/)
+  if (hMatch) {
+    const h = parseInt(hMatch[1], 10)
+    const m = parseInt(hMatch[2], 10)
+    const s = parseFloat(hMatch[3])
+    if (isNaN(h) || isNaN(m) || isNaN(s) || m >= 60 || s >= 60) return null
+    const ms = (h * 3600 + m * 60 + s) * 1000
+    return ms >= 0 ? Math.round(ms) : null
+  }
+  // Try MM:SS.S (one colon)
+  const mMatch = value.trim().match(/^(\d+):(\d+(?:\.\d+)?)$/)
+  if (!mMatch) return null
+  const m = parseInt(mMatch[1], 10)
+  const s = parseFloat(mMatch[2])
   if (isNaN(m) || isNaN(s) || s >= 60) return null
   const ms = (m * 60 + s) * 1000
   return ms >= 0 ? Math.round(ms) : null
@@ -41,34 +58,34 @@ export default function ClipCard({
   onToggle,
   onUpdateTimes
 }: ClipCardProps): React.JSX.Element {
-  const [startInput, setStartInput] = useState(msToMMSSs(clip.startMs))
-  const [endInput, setEndInput] = useState(msToMMSSs(clip.endMs))
+  const [startInput, setStartInput] = useState(msToHMMSSs(clip.startMs))
+  const [endInput, setEndInput] = useState(msToHMMSSs(clip.endMs))
 
   useEffect(() => {
-    setStartInput(msToMMSSs(clip.startMs))
+    setStartInput(msToHMMSSs(clip.startMs))
   }, [clip.startMs])
 
   useEffect(() => {
-    setEndInput(msToMMSSs(clip.endMs))
+    setEndInput(msToHMMSSs(clip.endMs))
   }, [clip.endMs])
 
   const handleStartBlur = (): void => {
-    const ms = parseMMSSs(startInput)
+    const ms = parseTime(startInput)
     const maxMs = videoDurationMs ?? Infinity
     if (ms !== null && ms < clip.endMs && ms <= maxMs && onUpdateTimes) {
       onUpdateTimes(clip.id, ms, clip.endMs)
     } else {
-      setStartInput(msToMMSSs(clip.startMs))
+      setStartInput(msToHMMSSs(clip.startMs))
     }
   }
 
   const handleEndBlur = (): void => {
-    const ms = parseMMSSs(endInput)
+    const ms = parseTime(endInput)
     const maxMs = videoDurationMs ?? Infinity
     if (ms !== null && ms > clip.startMs && ms <= maxMs && onUpdateTimes) {
       onUpdateTimes(clip.id, clip.startMs, ms)
     } else {
-      setEndInput(msToMMSSs(clip.endMs))
+      setEndInput(msToHMMSSs(clip.endMs))
     }
   }
 
@@ -92,7 +109,7 @@ export default function ClipCard({
               {clip.title}
             </h3>
             <p className="text-xs text-neutral-400 font-mono mt-1">
-              {msToMMSSs(clip.startMs)} — {msToMMSSs(clip.endMs)}
+              {msToHMMSSs(clip.startMs)} — {msToHMMSSs(clip.endMs)}
               <span className="text-neutral-500 ml-2">
                 ({formatDuration(clip.startMs, clip.endMs)})
               </span>
@@ -118,7 +135,7 @@ export default function ClipCard({
               value={startInput}
               onChange={(e) => setStartInput(e.target.value)}
               onBlur={handleStartBlur}
-              className="w-20 bg-bg-input border border-white/12 rounded px-2 py-1 text-neutral-300 text-center font-mono"
+              className="w-24 bg-bg-input border border-white/12 rounded px-2 py-1 text-neutral-300 text-center font-mono"
             />
             <span className="text-neutral-500">—</span>
             <input
@@ -126,7 +143,7 @@ export default function ClipCard({
               value={endInput}
               onChange={(e) => setEndInput(e.target.value)}
               onBlur={handleEndBlur}
-              className="w-20 bg-bg-input border border-white/12 rounded px-2 py-1 text-neutral-300 text-center font-mono"
+              className="w-24 bg-bg-input border border-white/12 rounded px-2 py-1 text-neutral-300 text-center font-mono"
             />
           </div>
         )}
