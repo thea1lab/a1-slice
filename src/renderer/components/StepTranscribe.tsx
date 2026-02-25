@@ -41,6 +41,9 @@ export default function StepTranscribe({
               label={message}
               sublabel={`${percent}%`}
             />
+            <p className="text-[11px] text-neutral-600">
+              If transcription gets stuck or loops, cancel and adjust whisper parameters in Step 1 → Advanced (raise entropy threshold or lower max context).
+            </p>
             <button
               onClick={onCancel}
               className="w-full bg-red-800 hover:bg-red-700 text-white font-medium rounded-lg py-2.5 text-sm transition-colors"

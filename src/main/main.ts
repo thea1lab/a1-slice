@@ -22,7 +22,7 @@ function mimeForVideo(filePath: string): string {
   return map[ext] || 'video/mp4'
 }
 import { extractAudio, cutClip, getVideoDurationMs } from './ffmpeg'
-import { downloadModel, transcribe } from './whisper'
+import { downloadModel, transcribe, type AbortHandle } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
 import type {
@@ -50,6 +50,7 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow: BrowserWindow | null = null
 let cancelled = false
+let activeWhisperHandle: AbortHandle | null = null
 const allowedVideoPaths = new Set<string>()
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.avi', '.webm'])
@@ -166,12 +167,14 @@ secureHandle('open-folder', async (_event, folderPath: string) => {
 ipcMain.on('cancel-pipeline', (event) => {
   if (event.sender !== mainWindow?.webContents) return
   cancelled = true
+  activeWhisperHandle?.kill()
+  activeWhisperHandle = null
 })
 
 // IPC: Transcribe video (Step 2)
 secureHandle(
   'transcribe-video',
-  async (_event, videoPath: string, language?: string, entropyThold?: number, noContext?: boolean) => {
+  async (_event, videoPath: string, language?: string, entropyThold?: number, maxContext?: number, beamSize?: number) => {
     cancelled = false
 
     try {
@@ -213,10 +216,11 @@ secureHandle(
         message: 'Transcribing audio...',
         percent: 0
       })
-      const segments = await transcribe(wavPath, {
+      const handle = transcribe(wavPath, {
         language,
         entropyThold,
-        noContext,
+        maxContext,
+        beamSize,
         onProgress: (pct) => {
           sendProgress({
             stage: 'transcribing',
@@ -225,6 +229,13 @@ secureHandle(
           })
         }
       })
+      activeWhisperHandle = handle
+      let segments: Awaited<typeof handle.promise>
+      try {
+        segments = await handle.promise
+      } finally {
+        activeWhisperHandle = null
+      }
 
       // Clean up temp WAV
       try {
@@ -243,6 +254,10 @@ secureHandle(
       sendProgress({ stage: 'done', message: '', percent: 100 })
       return { success: true, segments }
     } catch (err) {
+      if (cancelled) {
+        sendProgress({ stage: 'error', message: 'Cancelled', percent: 0 })
+        return { success: false, error: 'Cancelled' }
+      }
       const message =
         err instanceof Error ? err.message : 'Unknown error occurred'
       sendProgress({ stage: 'error', message, percent: 0 })

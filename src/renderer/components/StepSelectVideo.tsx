@@ -5,10 +5,12 @@ interface StepSelectVideoProps {
   videoPath: string | null
   language: VideoLanguage
   entropyThold: number
-  noContext: boolean
+  maxContext: number
+  beamSize: number
   onLanguageChange: (language: VideoLanguage) => void
   onEntropyTholdChange: (value: number) => void
-  onNoContextChange: (value: boolean) => void
+  onMaxContextChange: (value: number) => void
+  onBeamSizeChange: (value: number) => void
   onSelectVideo: () => void
   onNext: () => void
   onLoadCachedTranscript?: (segments: TranscriptSegment[]) => void
@@ -18,10 +20,12 @@ export default function StepSelectVideo({
   videoPath,
   language,
   entropyThold,
-  noContext,
+  maxContext,
+  beamSize,
   onLanguageChange,
   onEntropyTholdChange,
-  onNoContextChange,
+  onMaxContextChange,
+  onBeamSizeChange,
   onSelectVideo,
   onNext,
   onLoadCachedTranscript
@@ -120,8 +124,8 @@ export default function StepSelectVideo({
             {showAdvanced && (
               <div className="mt-2 space-y-3 pl-3 border-l border-white/5">
                 <label className="flex flex-col gap-1 text-xs text-neutral-500">
-                  Entropy threshold
-                  <span className="text-[10px] text-neutral-600">Repetition detection sensitivity (default 2.4, try 2.8+ if you get loops)</span>
+                  Entropy threshold (-et)
+                  <span className="text-[10px] text-neutral-600">Rejects repetitive text (whisper default 2.4, we default to 2.8)</span>
                   <input
                     type="number"
                     step="0.1"
@@ -135,17 +139,37 @@ export default function StepSelectVideo({
                     className="appearance-none bg-bg-input border border-white/12 rounded-lg px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-accent transition-colors w-24 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
                 </label>
-                <label className="flex items-center gap-2 text-xs text-neutral-500 cursor-pointer">
+                <label className="flex flex-col gap-1 text-xs text-neutral-500">
+                  Max context (-mc)
+                  <span className="text-[10px] text-neutral-600">Context tokens from previous text (-1 = off/whisper default 224, try 64 or 48 for loops)</span>
                   <input
-                    type="checkbox"
-                    checked={noContext}
-                    onChange={(e) => onNoContextChange(e.target.checked)}
-                    className="accent-accent"
+                    type="number"
+                    step="1"
+                    min="-1"
+                    max="1024"
+                    value={maxContext}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10)
+                      if (!isNaN(v)) onMaxContextChange(v)
+                    }}
+                    className="appearance-none bg-bg-input border border-white/12 rounded-lg px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-accent transition-colors w-24 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                   />
-                  <span>
-                    Disable cross-chunk context
-                    <span className="block text-[10px] text-neutral-600">Prevents repetition loops from propagating across chunks</span>
-                  </span>
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-neutral-500">
+                  Beam size (-bs)
+                  <span className="text-[10px] text-neutral-600">Beam search width (-1 = off/greedy, must be &gt;= 1, try 5 for stability)</span>
+                  <input
+                    type="number"
+                    step="1"
+                    min="-1"
+                    max="16"
+                    value={beamSize}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10)
+                      if (!isNaN(v)) onBeamSizeChange(v)
+                    }}
+                    className="appearance-none bg-bg-input border border-white/12 rounded-lg px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-accent transition-colors w-24 [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
                 </label>
               </div>
             )}

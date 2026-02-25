@@ -6,6 +6,11 @@ import https from 'https'
 import http from 'http'
 import type { TranscriptSegment } from '../shared/types'
 
+export interface AbortHandle {
+  promise: Promise<TranscriptSegment[]>
+  kill: () => void
+}
+
 const MODEL_FILENAME = 'ggml-large-v3.bin'
 const MODEL_URL =
   'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin'
@@ -266,7 +271,8 @@ export function parseWhisperJson(
 interface WhisperOptions {
   language?: string
   entropyThold?: number
-  noContext?: boolean
+  maxContext?: number
+  beamSize?: number
   onProgress?: (percent: number) => void
 }
 
@@ -274,8 +280,10 @@ function runWhisper(
   binaryPath: string,
   wavPath: string,
   opts: WhisperOptions = {}
-): Promise<TranscriptSegment[]> {
-  return new Promise((resolve, reject) => {
+): AbortHandle {
+  let proc: ReturnType<typeof spawn> | null = null
+
+  const promise = new Promise<TranscriptSegment[]>((resolve, reject) => {
     const modelPath = join(getModelsDir(), MODEL_FILENAME)
     const outputBase = wavPath.replace(/\.wav$/, '')
     const args = [
@@ -287,18 +295,22 @@ function runWhisper(
       '-of',
       outputBase,
       '-pp', // print progress to stderr
-      '--entropy-thold', String(opts.entropyThold ?? 2.4)
+      '--entropy-thold', String(opts.entropyThold ?? 2.8)
     ]
 
-    if (opts.noContext) {
-      args.push('--max-context', '0')
+    if (opts.maxContext != null && opts.maxContext >= 0) {
+      args.push('--max-context', String(opts.maxContext))
+    }
+
+    if (opts.beamSize != null && opts.beamSize > 0) {
+      args.push('-bs', String(opts.beamSize))
     }
 
     if (opts.language && opts.language !== 'auto') {
       args.push('-l', opts.language)
     }
 
-    const proc = spawn(binaryPath, args)
+    proc = spawn(binaryPath, args)
     let stderr = ''
 
     proc.stderr.on('data', (chunk: Buffer) => {
@@ -328,29 +340,46 @@ function runWhisper(
 
     proc.on('error', (err) => reject(err))
   })
+
+  return { promise, kill: () => proc?.kill() }
 }
 
 export function transcribe(
   wavPath: string,
   opts: WhisperOptions = {}
-): Promise<TranscriptSegment[]> {
+): AbortHandle {
   const modelPath = join(getModelsDir(), MODEL_FILENAME)
   if (!existsSync(modelPath)) {
-    return Promise.reject(new Error('Whisper model not found. Download it first.'))
+    return { promise: Promise.reject(new Error('Whisper model not found. Download it first.')), kill: () => {} }
   }
 
   const [gpuName, cpuName] = getWhisperBinaryNames()
   const gpuPath = findBinaryPath(gpuName)
   const cpuPath = findBinaryPath(cpuName)
 
-  const tryBinary = (binaryPath: string) => runWhisper(binaryPath, wavPath, opts)
+  let currentHandle: AbortHandle | null = null
+  let killed = false
+
+  const kill = (): void => {
+    killed = true
+    currentHandle?.kill()
+  }
 
   if (gpuPath) {
-    return tryBinary(gpuPath).catch(() => {
-      if (cpuPath) return tryBinary(cpuPath)
+    currentHandle = runWhisper(gpuPath, wavPath, opts)
+    const promise = currentHandle.promise.catch(() => {
+      if (killed) throw new Error('Cancelled')
+      if (cpuPath) {
+        currentHandle = runWhisper(cpuPath, wavPath, opts)
+        return currentHandle.promise
+      }
       throw new Error('No whisper binary available')
     })
+    return { promise, kill }
   }
-  if (cpuPath) return tryBinary(cpuPath)
-  return Promise.reject(new Error('No whisper binary found'))
+  if (cpuPath) {
+    currentHandle = runWhisper(cpuPath, wavPath, opts)
+    return { promise: currentHandle.promise, kill }
+  }
+  return { promise: Promise.reject(new Error('No whisper binary found')), kill: () => {} }
 }

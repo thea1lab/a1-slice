@@ -16,7 +16,7 @@ declare global {
       selectVideo(): Promise<string | null>
       checkTranscript(videoPath: string): Promise<CheckTranscriptResult>
       checkAnalysis(videoPath: string): Promise<CheckAnalysisResult>
-      transcribeVideo(videoPath: string, language?: string, entropyThold?: number, noContext?: boolean): Promise<TranscribeResult>
+      transcribeVideo(videoPath: string, language?: string, entropyThold?: number, maxContext?: number, beamSize?: number): Promise<TranscribeResult>
       analyzeTranscript(
         videoPath: string,
         segments: TranscriptSegment[],

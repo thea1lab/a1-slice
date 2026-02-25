@@ -12,8 +12,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
   userHint: '',
   language: 'auto',
-  entropyThold: 2.4,
-  noContext: false
+  entropyThold: 2.8,
+  maxContext: -1,
+  beamSize: -1
 }
 
 export function loadSettings(): AppSettings {

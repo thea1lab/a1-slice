@@ -39,7 +39,8 @@ export interface AppSettings {
   userHint: string
   language: VideoLanguage
   entropyThold: number
-  noContext: boolean
+  maxContext: number
+  beamSize: number
 }
 
 // --- Wizard types ---
