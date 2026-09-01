@@ -15,13 +15,7 @@ import type {
   TranscriptSegment,
   ClipSegmentWithStatus
 } from '../shared/types'
-
-// --- Default models per provider ---
-
-const DEFAULT_MODELS: Record<LLMProvider, string> = {
-  claude: 'claude-haiku-4-5',
-  openai: 'gpt-5-mini-2025-08-07'
-}
+import { DEFAULT_MODELS } from '../shared/types'
 
 // --- State & Reducer ---
 

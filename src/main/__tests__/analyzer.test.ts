@@ -10,7 +10,9 @@ import {
   generateTranscriptPreview,
   deduplicateClips,
   budgetCandidates,
-  enforceCoverage
+  enforceCoverage,
+  openCodeApiKind,
+  normalizeOpenCodeModel
 } from '../analyzer'
 
 // --- Existing tests (unchanged) ---
@@ -480,5 +482,41 @@ describe('enforceCoverage', () => {
     expect(midClip?.topic).toBe('Main Content')
     const endClip = result.find((c) => c.startMs === 700000)
     expect(endClip?.topic).toBe('Conclusion')
+  })
+})
+
+describe('normalizeOpenCodeModel', () => {
+  it('strips the opencode/ prefix', () => {
+    expect(normalizeOpenCodeModel('opencode/minimax-m2.7')).toBe('minimax-m2.7')
+  })
+
+  it('leaves bare model ids unchanged', () => {
+    expect(normalizeOpenCodeModel('claude-haiku-4-5')).toBe('claude-haiku-4-5')
+  })
+})
+
+describe('openCodeApiKind', () => {
+  it('routes Claude and Qwen models to the Anthropic messages API', () => {
+    expect(openCodeApiKind('claude-haiku-4-5')).toBe('anthropic')
+    expect(openCodeApiKind('opencode/claude-sonnet-4-5')).toBe('anthropic')
+    expect(openCodeApiKind('qwen3.6-plus')).toBe('anthropic')
+  })
+
+  it('routes GPT, Grok, and Muse Spark models to the Responses API', () => {
+    expect(openCodeApiKind('gpt-5.4-mini')).toBe('responses')
+    expect(openCodeApiKind('grok-4.6')).toBe('responses')
+    expect(openCodeApiKind('muse-spark-1.2')).toBe('responses')
+  })
+
+  it('routes Gemini models to generateContent', () => {
+    expect(openCodeApiKind('gemini-3-flash')).toBe('gemini')
+  })
+
+  it('routes remaining models to chat completions', () => {
+    expect(openCodeApiKind('minimax-m2.7')).toBe('chat')
+    expect(openCodeApiKind('glm-5.1')).toBe('chat')
+    expect(openCodeApiKind('kimi-k2.6')).toBe('chat')
+    expect(openCodeApiKind('deepseek-v4-flash')).toBe('chat')
+    expect(openCodeApiKind('big-pickle')).toBe('chat')
   })
 })

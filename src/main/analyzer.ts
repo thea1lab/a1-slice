@@ -5,6 +5,32 @@ import type {
   ClipSegment,
   LLMProvider
 } from '../shared/types'
+import { OPENCODE_ZEN_BASE_URL } from '../shared/types'
+
+export type OpenCodeApiKind = 'anthropic' | 'responses' | 'chat' | 'gemini'
+
+/** Strip `opencode/` prefix used in OpenCode config model IDs. */
+export function normalizeOpenCodeModel(model: string): string {
+  return model.replace(/^opencode\//i, '').trim()
+}
+
+/**
+ * OpenCode Zen uses different wire formats per model family.
+ * See https://opencode.ai/docs/zen
+ */
+export function openCodeApiKind(model: string): OpenCodeApiKind {
+  const id = normalizeOpenCodeModel(model).toLowerCase()
+  if (id.startsWith('gemini-')) return 'gemini'
+  if (id.startsWith('claude-') || id.startsWith('qwen')) return 'anthropic'
+  if (
+    id.startsWith('gpt-') ||
+    id.startsWith('grok-') ||
+    id.startsWith('muse-spark')
+  ) {
+    return 'responses'
+  }
+  return 'chat'
+}
 
 // --- Types ---
 
@@ -281,6 +307,153 @@ export function enforceCoverage(
 
 // --- LLM call ---
 
+async function callAnthropic(
+  model: string,
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string,
+  baseURL?: string
+): Promise<string> {
+  const client = new Anthropic({
+    apiKey,
+    ...(baseURL
+      ? {
+          baseURL,
+          defaultHeaders: { Authorization: `Bearer ${apiKey}` }
+        }
+      : {})
+  })
+  const response = await client.messages.create({
+    model,
+    max_tokens: 4096,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userMessage }]
+  })
+  const block = response.content[0]
+  return block.type === 'text' ? block.text : ''
+}
+
+async function callOpenAIChat(
+  model: string,
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string,
+  baseURL?: string
+): Promise<string> {
+  const client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) })
+  const response = await client.chat.completions.create({
+    model,
+    max_tokens: 4096,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userMessage }
+    ]
+  })
+  return response.choices[0]?.message?.content ?? ''
+}
+
+function textFromResponses(response: {
+  output_text?: string
+  output?: Array<{
+    type: string
+    content?: Array<{ type: string; text?: string }>
+  }>
+}): string {
+  if (typeof response.output_text === 'string' && response.output_text.length > 0) {
+    return response.output_text
+  }
+  const parts: string[] = []
+  for (const item of response.output ?? []) {
+    if (item.type !== 'message' || !item.content) continue
+    for (const block of item.content) {
+      if (block.type === 'output_text' && block.text) parts.push(block.text)
+    }
+  }
+  return parts.join('')
+}
+
+async function callOpenAIResponses(
+  model: string,
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string,
+  baseURL: string
+): Promise<string> {
+  const client = new OpenAI({ apiKey, baseURL })
+  const response = await client.responses.create({
+    model,
+    max_output_tokens: 4096,
+    instructions: systemPrompt,
+    input: userMessage
+  })
+  return textFromResponses(response)
+}
+
+async function callOpenCodeGemini(
+  model: string,
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string
+): Promise<string> {
+  const url = `${OPENCODE_ZEN_BASE_URL}/models/${encodeURIComponent(model)}:generateContent`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+      generationConfig: { maxOutputTokens: 4096 }
+    })
+  })
+  const data = (await res.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+    error?: { message?: string }
+  }
+  if (!res.ok) {
+    throw new Error(data.error?.message || `OpenCode Gemini request failed (${res.status})`)
+  }
+  return (
+    data.candidates?.[0]?.content?.parts
+      ?.map((part) => part.text ?? '')
+      .join('') ?? ''
+  )
+}
+
+async function callOpenCode(
+  model: string,
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string
+): Promise<string> {
+  const id = normalizeOpenCodeModel(model)
+  const kind = openCodeApiKind(id)
+  if (kind === 'anthropic') {
+    return callAnthropic(
+      id,
+      apiKey,
+      systemPrompt,
+      userMessage,
+      'https://opencode.ai/zen'
+    )
+  }
+  if (kind === 'responses') {
+    return callOpenAIResponses(
+      id,
+      apiKey,
+      systemPrompt,
+      userMessage,
+      OPENCODE_ZEN_BASE_URL
+    )
+  }
+  if (kind === 'gemini') {
+    return callOpenCodeGemini(id, apiKey, systemPrompt, userMessage)
+  }
+  return callOpenAIChat(id, apiKey, systemPrompt, userMessage, OPENCODE_ZEN_BASE_URL)
+}
+
 async function callLLM(
   provider: LLMProvider,
   model: string,
@@ -289,27 +462,12 @@ async function callLLM(
   userMessage: string
 ): Promise<string> {
   if (provider === 'claude') {
-    const client = new Anthropic({ apiKey })
-    const response = await client.messages.create({
-      model,
-      max_tokens: 4096,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userMessage }]
-    })
-    const block = response.content[0]
-    return block.type === 'text' ? block.text : ''
-  } else {
-    const client = new OpenAI({ apiKey })
-    const response = await client.chat.completions.create({
-      model,
-      max_tokens: 4096,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage }
-      ]
-    })
-    return response.choices[0]?.message?.content ?? ''
+    return callAnthropic(model, apiKey, systemPrompt, userMessage)
   }
+  if (provider === 'opencode') {
+    return callOpenCode(model, apiKey, systemPrompt, userMessage)
+  }
+  return callOpenAIChat(model, apiKey, systemPrompt, userMessage)
 }
 
 // --- Prompts ---

@@ -82,6 +82,15 @@ describe('wizardReducer', () => {
     expect(state.model).toBe('claude-haiku-4-5')
   })
 
+  it('sets provider to opencode with default OpenCode model', () => {
+    const state = wizardReducer(makeState(), {
+      type: 'SET_PROVIDER',
+      provider: 'opencode'
+    })
+    expect(state.provider).toBe('opencode')
+    expect(state.model).toBe('minimax-m2.7')
+  })
+
   it('sets model', () => {
     const state = wizardReducer(makeState(), {
       type: 'SET_MODEL',
