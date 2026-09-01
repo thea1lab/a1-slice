@@ -16,6 +16,7 @@ import type {
   ClipSegmentWithStatus
 } from '../shared/types'
 import { DEFAULT_MODELS } from '../shared/types'
+import { refineClipBounds } from '../shared/clipBounds'
 
 // --- State & Reducer ---
 
@@ -417,13 +418,23 @@ export default function App(): React.JSX.Element {
         ? state.segments[state.segments.length - 1].endMs
         : Infinity
       const clipsWithStatus = clips
-        .map((clip, i) => ({
-          ...clip,
-          startMs: Math.max(0, Math.min(clip.startMs, maxMs)),
-          endMs: Math.max(0, Math.min(clip.endMs, maxMs)),
-          id: String(i),
-          approved: true
-        }))
+        .map((clip, i) => {
+          const refined = refineClipBounds(
+            {
+              ...clip,
+              startMs: clip.startMs,
+              endMs: clip.endMs
+            },
+            state.segments
+          )
+          return {
+            ...refined,
+            startMs: Math.max(0, Math.min(refined.startMs, maxMs)),
+            endMs: Math.max(0, Math.min(refined.endMs, maxMs)),
+            id: String(i),
+            approved: true
+          }
+        })
         .filter((clip) => clip.endMs > clip.startMs)
       if (clipsWithStatus.length === 0) {
         dispatch({

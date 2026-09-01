@@ -18,9 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     dpkg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 24
+# Install Node.js 24 and enable pnpm via Corepack
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y nodejs \
+    && corepack enable \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Wine and NSIS for Windows cross-compilation

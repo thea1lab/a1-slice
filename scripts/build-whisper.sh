@@ -9,6 +9,21 @@ TMP_DIR=$(mktemp -d)
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 
+missing=()
+for cmd in git cmake; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    missing+=("$cmd")
+  fi
+done
+if [[ ${#missing[@]} -gt 0 ]]; then
+  echo "ERROR: Missing required tools: ${missing[*]}"
+  echo "On Debian/Ubuntu/Mint:  sudo apt install cmake git build-essential"
+  echo "On Fedora:              sudo dnf install cmake git gcc-c++ make"
+  echo "On Arch:                sudo pacman -S cmake git base-devel"
+  echo "On macOS:               brew install cmake"
+  exit 1
+fi
+
 echo "Cloning whisper.cpp $WHISPER_TAG..."
 git clone --depth 1 --branch "$WHISPER_TAG" https://github.com/ggerganov/whisper.cpp.git "$TMP_DIR/whisper.cpp"
 

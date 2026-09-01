@@ -27,20 +27,20 @@ A1 Slice walks you through a 5-step wizard:
 
 ## Getting Started
 
-Requires **Node.js >= 24.13.1**.
+Requires **Node.js >= 24.13.1** and **pnpm**.
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 To build a distributable installer:
 
 ```bash
-npm run dist          # Current platform
-npm run dist:mac      # macOS DMG
-npm run dist:win      # Windows NSIS
-npm run dist:linux    # Linux AppImage
+pnpm dist             # Current platform
+pnpm dist:mac         # macOS DMG
+pnpm dist:win         # Windows NSIS
+pnpm dist:linux       # Linux AppImage
 ```
 
 ## Settings

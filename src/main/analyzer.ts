@@ -6,6 +6,7 @@ import type {
   LLMProvider
 } from '../shared/types'
 import { OPENCODE_ZEN_BASE_URL } from '../shared/types'
+import { refineClipBounds } from '../shared/clipBounds'
 
 export type OpenCodeApiKind = 'anthropic' | 'responses' | 'chat' | 'gemini'
 
@@ -60,55 +61,164 @@ export function msToTimecode(ms: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
-export function formatTranscriptForLLM(segments: TranscriptSegment[]): string {
+export function formatTranscriptForLLM(
+  segments: TranscriptSegment[],
+  startIndex = 0
+): string {
   return segments
     .map(
-      (seg) =>
-        `[${msToTimecode(seg.startMs)} -> ${msToTimecode(seg.endMs)} | ${seg.startMs} -> ${seg.endMs}] ${seg.text.trim()}`
+      (seg, i) =>
+        `[#${startIndex + i} ${msToTimecode(seg.startMs)} -> ${msToTimecode(seg.endMs)} | ${seg.startMs} -> ${seg.endMs}] ${seg.text.trim()}`
     )
     .join('\n')
 }
 
-export function parseLLMResponse(text: string): ClipSegment[] {
-  // Extract JSON array from LLM response (may be wrapped in markdown code block)
-  const jsonMatch = text.match(/\[[\s\S]*\]/)
-  if (!jsonMatch) throw new Error('No JSON array found in LLM response')
-
-  const parsed = JSON.parse(jsonMatch[0])
-  if (!Array.isArray(parsed)) throw new Error('LLM response is not an array')
-
-  return parsed.map(
-    (item: { title: string; start_ms: number; end_ms: number; category?: string }) => {
-      const clip: ClipSegment = {
-        title: item.title,
-        startMs: item.start_ms,
-        endMs: item.end_ms
+function extractBalanced(text: string, start: number): string | null {
+  const open = text[start]
+  const close = open === '[' ? ']' : '}'
+  let depth = 0
+  let inString = false
+  let escape = false
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (escape) {
+        escape = false
+        continue
       }
-      if (item.category === 'related' || item.category === 'standalone') {
-        clip.category = item.category
+      if (ch === '\\') {
+        escape = true
+        continue
       }
-      return clip
+      if (ch === '"') inString = false
+      continue
     }
-  )
+    if (ch === '"') {
+      inString = true
+      continue
+    }
+    if (ch === open) depth++
+    else if (ch === close) {
+      depth--
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  return null
+}
+
+function unwrapJsonArray(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    for (const key of ['clips', 'items', 'hooks', 'candidates', 'segments', 'topics']) {
+      if (Array.isArray(obj[key])) return obj[key]
+    }
+    const arrayVals = Object.values(obj).filter(Array.isArray)
+    if (arrayVals.length === 1) return arrayVals[0] as unknown[]
+  }
+  return null
+}
+
+export function extractJsonArray(text: string): unknown[] {
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const sources = fence ? [fence[1].trim(), text] : [text]
+  const arrays: unknown[][] = []
+
+  for (const src of sources) {
+    for (let i = 0; i < src.length; i++) {
+      if (src[i] !== '[' && src[i] !== '{') continue
+      const slice = extractBalanced(src, i)
+      if (!slice) continue
+      try {
+        const parsed = JSON.parse(slice)
+        const arr = unwrapJsonArray(parsed)
+        if (arr) {
+          arrays.push(arr)
+          i += slice.length - 1
+        }
+      } catch {
+        // keep scanning for the next balanced value
+      }
+    }
+    if (arrays.length > 0) break
+  }
+
+  if (arrays.length === 0) throw new Error('No JSON array found in LLM response')
+  return arrays[arrays.length - 1]
+}
+
+function coerceNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value)
+    if (Number.isFinite(n)) return n
+  }
+  return null
+}
+
+function clipFromParsedItem(
+  item: Record<string, unknown>,
+  segments?: TranscriptSegment[]
+): ClipSegment | null {
+  const title = typeof item.title === 'string' && item.title.trim() ? item.title : 'Clip'
+  const startId = coerceNumber(item.start_id)
+  const endId = coerceNumber(item.end_id)
+  let startMs: number | null = null
+  let endMs: number | null = null
+
+  if (
+    segments &&
+    startId != null &&
+    endId != null &&
+    segments[startId] &&
+    segments[endId]
+  ) {
+    startMs = segments[startId].startMs
+    endMs = segments[endId].endMs
+  } else {
+    startMs = coerceNumber(item.start_ms)
+    endMs = coerceNumber(item.end_ms)
+  }
+
+  if (startMs == null || endMs == null) return null
+  if (endMs < startMs) {
+    const tmp = startMs
+    startMs = endMs
+    endMs = tmp
+  }
+
+  const clip: ClipSegment = { title, startMs, endMs }
+  if (item.category === 'related' || item.category === 'standalone') {
+    clip.category = item.category
+  }
+  return clip
+}
+
+export function parseLLMResponse(text: string, segments?: TranscriptSegment[]): ClipSegment[] {
+  const parsed = extractJsonArray(text)
+  return parsed
+    .map((item) =>
+      item && typeof item === 'object'
+        ? clipFromParsedItem(item as Record<string, unknown>, segments)
+        : null
+    )
+    .filter((clip): clip is ClipSegment => clip != null)
 }
 
 // --- Helper functions for 3-phase pipeline ---
 
 export function parseTopicSegments(text: string): TopicSegment[] {
-  const jsonMatch = text.match(/\[[\s\S]*\]/)
-  if (!jsonMatch) throw new Error('No JSON array found in topic segmentation response')
+  const parsed = extractJsonArray(text)
 
-  const parsed = JSON.parse(jsonMatch[0])
-  if (!Array.isArray(parsed)) throw new Error('Topic segmentation response is not an array')
-
-  return parsed.map(
-    (item: { topic: string; start_ms: number; end_ms: number; description: string }) => ({
+  return parsed.map((raw) => {
+    const item = raw as { topic: string; start_ms: number; end_ms: number; description: string }
+    return {
       topic: item.topic,
-      startMs: item.start_ms,
-      endMs: item.end_ms,
+      startMs: coerceNumber(item.start_ms) ?? 0,
+      endMs: coerceNumber(item.end_ms) ?? 0,
       description: item.description
-    })
-  )
+    }
+  })
 }
 
 export function validateSegmentation(topics: TopicSegment[], totalDurationMs: number): boolean {
@@ -261,7 +371,8 @@ export function budgetCandidates(
 export function enforceCoverage(
   finalClips: ClipSegment[],
   allCandidates: CandidateClip[],
-  totalDurationMs: number
+  totalDurationMs: number,
+  minScore: number = 7
 ): ClipSegment[] {
   const thirdMs = totalDurationMs / 3
   const thirds = [
@@ -281,7 +392,7 @@ export function enforceCoverage(
 
     // Find candidates in this third
     const candidatesInThird = allCandidates.filter(
-      (c) => c.endMs > third.start && c.startMs < third.end
+      (c) => c.score >= minScore && c.endMs > third.start && c.startMs < third.end
     )
     if (candidatesInThird.length === 0) continue
 
@@ -470,123 +581,87 @@ async function callLLM(
   return callOpenAIChat(model, apiKey, systemPrompt, userMessage)
 }
 
+export type LLMCaller = (
+  provider: LLMProvider,
+  model: string,
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string
+) => Promise<string>
+
 // --- Prompts ---
 
-const SEGMENTATION_SYSTEM_PROMPT = `You are a video content analyst. You will receive a timestamped transcript of a video. Your job is to divide the transcript into 5-15 contiguous topic segments that cover the ENTIRE video.
+const HOOK_SYSTEM_PROMPT = `HOOK_FINDER. You are a video editor looking for hot points — the line you would put on a thumbnail.
+
+You will receive a numbered transcript. Each line starts with [#N ...]. N is the segment id.
+
+Find 8-15 peak moments: surprise, a strong claim, a punchline, a concrete tip, or an emotional turn.
+Do NOT pick greetings, filler, or "and then they discuss...".
+Do NOT try to cover the whole video. Only true peaks.
+
+Return a JSON array (no other text):
+[{"hook_id": 12, "score": 9, "reason": "one sentence why this line is the hook"}]
+
+hook_id MUST be a segment id from the transcript. If nothing is clip-worthy, return [].`
+
+const CLIP_EXPANDER_PROMPT = `CLIP_EXPANDER. You are a video editor. You will receive a numbered transcript window. Each line starts with [#N ...]. N is the segment id.
+
+Your job is to turn a hot moment into a complete social clip.
 
 RULES:
-- Each segment must have a clear topic or theme
-- Segments must be contiguous — no gaps allowed. The end of one segment must equal the start of the next.
-- The first segment must start at the beginning of the transcript
-- The last segment must end at the end of the transcript
-- Each segment should be at least 15 seconds long
+- Return start_id and end_id using the #N ids. Never invent milliseconds. Never convert timecodes.
+- Lines marked [CONTEXT] are adjacent material — do not start or end a clip on a CONTEXT line.
+- Duration: 20-90 seconds. ~45-60 seconds is ideal. Shorter punchlines (about 20s) are allowed.
+- Start on a complete thought, not mid-sentence. End after the payoff lands.
+- If a hook line is given, the clip MUST include that hook.
+- Skip greetings, setup-only, and "in this video we will..." material.
 
-TIMESTAMPS:
-- The transcript includes millisecond values after the pipe (|) character. Use these exact values for start_ms and end_ms. Do NOT convert or calculate — just copy the numbers directly.
+SCORING (integer 1-10):
+- 9-10: exceptional hook + payoff
+- 7-8: strong standalone clip
+- 5-6: decent
+- 1-4: weak / filler
 
-Return a JSON array (no other text) where each element has:
-- "topic": a short label for the segment's topic
-- "start_ms": start time in milliseconds
-- "end_ms": end time in milliseconds
-- "description": a 1-2 sentence description of what happens in this segment
+Return a JSON array (no other text):
+[{"title": "short catchy title", "start_id": 10, "end_id": 18, "score": 8, "justification": "one sentence"}]
 
-Example:
-[
-  {"topic": "Introduction", "start_ms": 0, "end_ms": 45000, "description": "The host introduces themselves and the topic of today's video."},
-  {"topic": "Main argument", "start_ms": 45000, "end_ms": 180000, "description": "A detailed walkthrough of the core thesis with examples."}
-]`
+If nothing is worth clipping, return [].`
 
-const CHUNK_CLIP_SYSTEM_PROMPT = `You are a video editor AI. You will receive a section of a video transcript. Your job is to find ALL clip-worthy moments in this section.
+const CLIP_SYSTEM_PROMPT = `You are a video editor AI. You will receive a numbered transcript. Each line starts with [#N ...]. N is the segment id.
 
-Lines marked with [CONTEXT] at the beginning are boundary context from adjacent sections — they help you understand transitions but clips should NOT start or end within context lines.
-
-CLIP GUIDELINES:
-- Target duration: 30-90 seconds per clip. ~60 seconds is ideal.
-- Each clip must have clean start and end points (not mid-sentence).
-- Each clip must tell a complete story or make a complete point.
-- Find ALL worthy moments — don't limit yourself.
-
-SCORING:
-- Assign each clip a score from 1 to 10 (integer) reflecting standalone clip quality:
-  - 9-10: Exceptional — viral potential, powerful insight, or peak entertainment
-  - 7-8: Strong — valuable content that stands well on its own
-  - 5-6: Good — decent content worth considering
-  - 3-4: Marginal — only worth including if few better options exist
-  - 1-2: Weak — filler or low-value content
-
-TIMESTAMPS:
-- The transcript includes millisecond values after the pipe (|) character. Use these exact values for start_ms and end_ms.
-
-Return a JSON array (no other text) where each element has:
-- "title": a short, catchy title for the clip
-- "start_ms": start time in milliseconds
-- "end_ms": end time in milliseconds
-- "score": integer 1-10 quality score
-- "justification": one sentence explaining why this is clip-worthy
-
-If no clips are worth extracting from this section, return an empty array: []`
-
-const CLIP_SYSTEM_PROMPT = `You are a video editor AI. You will receive:
-1. A structured analysis of a video (from a previous analysis phase)
-2. The original timestamped transcript
-
-Your job is to select the best clips from this video for social media.
-
-CLIP GUIDELINES:
-- Target duration: 30-90 seconds per clip. ~60 seconds is ideal.
-- Identify ALL high-value content worth clipping. Don't limit yourself to just 1-2 clips — if there are 5 great moments, return 5 clips.
-- If a great section is longer than 90 seconds, split it into multiple clips.
-- Each clip must have clean start and end points (not mid-sentence).
-- Each clip must tell a complete story or make a complete point.
-
-STRATEGY:
-- Use the KEY MOMENTS and HIGH-value sections from the analysis as your primary sources.
-- Avoid DEAD ZONES identified in the analysis.
-- Prioritize sections with standalone potential.
-
-CATEGORIES — assign each clip one of:
-- "related": This clip is about the video's main topic. It works well for promoting the full video.
-- "standalone": This clip delivers value entirely on its own. It works without any context about the source video.
-
-TIMESTAMPS:
-- The transcript includes millisecond values after the pipe (|) character. Use these exact values for start_ms and end_ms. Do NOT convert or calculate — just copy the numbers directly.
-
-Return a JSON array (no other text) where each element has:
-- "title": a short, catchy title for the clip
-- "start_ms": start time in milliseconds (must match a value from the transcript)
-- "end_ms": end time in milliseconds (must match a value from the transcript)
-- "category": either "related" or "standalone"
-
-Example:
-[
-  {"title": "The moment everything changed", "start_ms": 45000, "end_ms": 105000, "category": "standalone"},
-  {"title": "Best advice for beginners", "start_ms": 300000, "end_ms": 360000, "category": "related"}
-]`
-
-const RANKING_SYSTEM_PROMPT = `You are a video editor AI. You will receive a list of candidate clips extracted from different sections of a video. Each candidate has a title, time range, quality score, justification, and a transcript preview.
-
-Your job is to rank, deduplicate, and select the best clips for final output.
+Select the best social clips from this video.
 
 RULES:
-- Remove redundant clips that cover the same content
-- Ensure clips spread across the FULL video timeline — do not cluster clips in one section
-- Assign each clip a category:
-  - "related": This clip is about the video's main topic. It works well for promoting the full video.
-  - "standalone": This clip delivers value entirely on its own. It works without any context about the source video.
-- Prefer clips with higher scores, but balance quality with timeline coverage
-- Return 3-10 clips depending on video length and content quality
+- Target duration 20-90 seconds. ~45-60 seconds is ideal.
+- Each clip must be a complete thought with a hook and a payoff.
+- Use start_id and end_id from the #N ids. Do NOT invent milliseconds. Do NOT convert timecodes.
+- Skip filler, greetings, and weak coverage-for-coverage's-sake moments.
 
-Return a JSON array (no other text) where each element has:
-- "title": the clip title (may be refined from the candidate title)
-- "start_ms": start time in milliseconds
-- "end_ms": end time in milliseconds
-- "category": either "related" or "standalone"
+CATEGORIES:
+- "related": about the video's main topic, useful to promote the full video
+- "standalone": valuable with no extra context
 
-Example:
-[
-  {"title": "The key insight", "start_ms": 45000, "end_ms": 105000, "category": "standalone"},
-  {"title": "Practical advice", "start_ms": 300000, "end_ms": 360000, "category": "related"}
-]`
+Return a JSON array (no other text):
+[{"title": "short catchy title", "start_id": 10, "end_id": 18, "category": "standalone"}]
+
+If nothing is worth clipping, return [].`
+
+const RANKING_SYSTEM_PROMPT = `CLIP_RANKER. You will receive numbered candidate clips with full transcript text, scores, and reasons.
+
+Select the best final clips.
+
+RULES:
+- Choose candidates by id only. You may change title and category. Do NOT change timestamps. Do NOT invent new clips.
+- Remove redundant clips that cover the same take.
+- Prefer higher scores. Do not force weak clips just to spread across the timeline.
+- Return 3-10 clips depending on how many are actually good. If only 1-2 are great, return those.
+
+CATEGORIES:
+- "related": about the video's main topic
+- "standalone": valuable on its own
+
+Return a JSON array (no other text):
+[{"id": 1, "title": "refined title", "category": "standalone"}]`
 
 // --- Concurrency helper ---
 
@@ -615,216 +690,178 @@ function createSemaphore(maxConcurrent: number) {
 
 // --- Phase 2 response parser ---
 
-function parseCandidateClips(text: string, sourceTopic: string): CandidateClip[] {
-  const jsonMatch = text.match(/\[[\s\S]*\]/)
-  if (!jsonMatch) return []
-
+function parseCandidateClips(
+  text: string,
+  sourceTopic: string,
+  segments?: TranscriptSegment[]
+): CandidateClip[] {
   try {
-    const parsed = JSON.parse(jsonMatch[0])
-    if (!Array.isArray(parsed)) return []
-
+    const parsed = extractJsonArray(text)
     return parsed
-      .filter(
-        (item: any) =>
-          item.title && typeof item.start_ms === 'number' && typeof item.end_ms === 'number'
-      )
-      .map(
-        (item: {
-          title: string
-          start_ms: number
-          end_ms: number
-          score?: number
-          justification?: string
-        }) => ({
-          title: item.title,
-          startMs: item.start_ms,
-          endMs: item.end_ms,
-          score: typeof item.score === 'number' ? Math.max(1, Math.min(10, Math.round(item.score))) : 5,
-          justification: item.justification ?? '',
+      .map((raw) => {
+        if (!raw || typeof raw !== 'object') return null
+        const clip = clipFromParsedItem(raw as Record<string, unknown>, segments)
+        if (!clip) return null
+        const item = raw as { score?: unknown; justification?: unknown; title?: unknown }
+        return {
+          title: clip.title,
+          startMs: clip.startMs,
+          endMs: clip.endMs,
+          score: (() => {
+            const n = coerceNumber(item.score)
+            return n == null ? 5 : Math.max(1, Math.min(10, Math.round(n)))
+          })(),
+          justification: typeof item.justification === 'string' ? item.justification : '',
           sourceTopic
-        })
-      )
+        }
+      })
+      .filter((c): c is CandidateClip => c != null)
   } catch {
     return []
   }
 }
 
-// --- Main pipeline ---
+function formatWindow(
+  segments: TranscriptSegment[],
+  windowStartMs: number,
+  windowEndMs: number,
+  core?: { startMs: number; endMs: number }
+): string {
+  return segments
+    .map((seg, index) => ({ seg, index }))
+    .filter(({ seg }) => seg.endMs > windowStartMs && seg.startMs < windowEndMs)
+    .map(({ seg, index }) => {
+      const isContext = core
+        ? seg.endMs <= core.startMs || seg.startMs >= core.endMs
+        : false
+      const prefix = isContext ? '[CONTEXT] ' : ''
+      return `${prefix}[#${index} ${msToTimecode(seg.startMs)} -> ${msToTimecode(seg.endMs)} | ${seg.startMs} -> ${seg.endMs}] ${seg.text.trim()}`
+    })
+    .join('\n')
+}
 
-export async function analyzeTranscript(
+function parseHooks(
+  text: string,
+  segmentCount: number
+): { hookId: number; score: number; reason: string }[] {
+  try {
+    const parsed = extractJsonArray(text)
+    return parsed
+      .map((raw) => {
+        if (!raw || typeof raw !== 'object') return null
+        const item = raw as Record<string, unknown>
+        const hookId = coerceNumber(item.hook_id)
+        if (hookId == null || hookId < 0 || hookId >= segmentCount) return null
+        const score = coerceNumber(item.score)
+        return {
+          hookId,
+          score: score == null ? 5 : Math.max(1, Math.min(10, Math.round(score))),
+          reason: typeof item.reason === 'string' ? item.reason : ''
+        }
+      })
+      .filter((h): h is { hookId: number; score: number; reason: string } => h != null)
+  } catch {
+    return []
+  }
+}
+
+function parseRankedIds(
+  text: string
+): { id: number; title?: string; category?: 'related' | 'standalone' }[] {
+  try {
+    const parsed = extractJsonArray(text)
+    const rows: { id: number; title?: string; category?: 'related' | 'standalone' }[] = []
+    for (const raw of parsed) {
+      if (!raw || typeof raw !== 'object') continue
+      const item = raw as Record<string, unknown>
+      const id = coerceNumber(item.id) ?? coerceNumber(item.candidate_id)
+      if (id == null) continue
+      const row: { id: number; title?: string; category?: 'related' | 'standalone' } = { id }
+      if (typeof item.title === 'string') row.title = item.title
+      if (item.category === 'related' || item.category === 'standalone') {
+        row.category = item.category
+      }
+      rows.push(row)
+    }
+    return rows
+  } catch {
+    return []
+  }
+}
+
+interface MineWindow {
+  label: string
+  userMessage: string
+}
+
+async function mineWindows(
+  windows: MineWindow[],
   segments: TranscriptSegment[],
   provider: LLMProvider,
   model: string,
   apiKey: string,
-  userHint?: string,
-  onProgress?: (message: string, percent: number) => void
-): Promise<{ clips: ClipSegment[]; rawResponse: string }> {
-  const formattedTranscript = formatTranscriptForLLM(segments)
-  const totalDurationMs =
-    segments.length > 0 ? segments[segments.length - 1].endMs - segments[0].startMs : 0
+  llmCall: LLMCaller,
+  onProgress?: (message: string, percent: number) => void,
+  debugSink?: (chunk: string) => void
+): Promise<CandidateClip[]> {
+  if (windows.length === 0) return []
 
-  let debugOutput = ''
-
-  // --- Phase 1: Topic Segmentation ---
-  onProgress?.('Identifying video topics...', 5)
-
-  let segmentationMessage = `Here is the transcript:\n\n${formattedTranscript}\n\nDivide this video into topic segments.`
-  if (userHint?.trim()) {
-    segmentationMessage += `\n\nAdditional context from the user: ${userHint.trim()}`
-  }
-
-  const segmentationResponse = await callLLM(
-    provider, model, apiKey,
-    SEGMENTATION_SYSTEM_PROMPT, segmentationMessage
-  )
-
-  debugOutput += `=== PHASE 1: TOPIC SEGMENTATION ===\n${segmentationResponse}\n\n`
-
-  let topics: TopicSegment[]
-  try {
-    topics = parseTopicSegments(segmentationResponse)
-    if (!validateSegmentation(topics, totalDurationMs)) {
-      topics = fallbackToTimeChunks(segments)
-      debugOutput += `[Segmentation validation failed — using time chunks]\n\n`
-    }
-  } catch {
-    topics = fallbackToTimeChunks(segments)
-    debugOutput += `[Segmentation parse failed — using time chunks]\n\n`
-  }
-
-  onProgress?.('Identifying video topics...', 20)
-
-  // --- Phase 2: Per-Topic Clip Finding ---
   const semaphore = createSemaphore(3)
-  let allCandidates: CandidateClip[] = []
-  let completedChunks = 0
-
-  const chunkTasks = topics.map((topic, index) => async () => {
+  let completed = 0
+  const tasks = windows.map((window, index) => async () => {
     await semaphore.acquire()
     try {
-      // Get transcript for this topic with ±30s context
-      const contextStartMs = topic.startMs - 30000
-      const contextEndMs = topic.endMs + 30000
-      const topicSegments = getSegmentsInRange(segments, contextStartMs, contextEndMs)
-
-      // Format with [CONTEXT] markers for boundary lines
-      const formatted = topicSegments
-        .map((seg) => {
-          const isContext = seg.endMs <= topic.startMs || seg.startMs >= topic.endMs
-          const prefix = isContext ? '[CONTEXT] ' : ''
-          return `${prefix}[${msToTimecode(seg.startMs)} -> ${msToTimecode(seg.endMs)} | ${seg.startMs} -> ${seg.endMs}] ${seg.text.trim()}`
-        })
-        .join('\n')
-
-      let userMessage = `Section: ${topic.topic}. ${topic.description}\n\n${formatted}\n\nFind all clip-worthy moments in this section.`
-      if (userHint?.trim()) {
-        userMessage += `\n\nUser preferences: ${userHint.trim()}`
-      }
-
-      const response = await callLLM(
-        provider, model, apiKey,
-        CHUNK_CLIP_SYSTEM_PROMPT, userMessage
+      const response = await llmCall(
+        provider,
+        model,
+        apiKey,
+        CLIP_EXPANDER_PROMPT,
+        window.userMessage
       )
-
-      debugOutput += `=== PHASE 2: TOPIC ${index + 1} — ${topic.topic} ===\n${response}\n\n`
-
-      return parseCandidateClips(response, topic.topic)
+      debugSink?.(`=== PHASE 2: ${index + 1} — ${window.label} ===\n${response}\n\n`)
+      return parseCandidateClips(response, window.label, segments)
     } finally {
       semaphore.release()
-      completedChunks++
-      const chunkPercent = 20 + Math.round((completedChunks / topics.length) * 55)
-      onProgress?.(`Finding clips in: ${topic.topic}...`, chunkPercent)
+      completed++
+      const percent = 20 + Math.round((completed / windows.length) * 55)
+      onProgress?.(`Finding clips in: ${window.label}...`, percent)
     }
   })
 
-  const results = await Promise.allSettled(chunkTasks.map((task) => task()))
-
-  // Collect results, retry failed ones once
+  const results = await Promise.allSettled(tasks.map((task) => task()))
+  const candidates: CandidateClip[] = []
   const failedIndices: number[] = []
   for (let i = 0; i < results.length; i++) {
     const result = results[i]
     if (result.status === 'fulfilled' && result.value.length > 0) {
-      allCandidates.push(...result.value)
+      candidates.push(...result.value)
     } else if (result.status === 'rejected') {
       failedIndices.push(i)
     }
   }
 
-  // Retry failed chunks once with 1s backoff
   if (failedIndices.length > 0) {
     await new Promise((r) => setTimeout(r, 1000))
-    const retryResults = await Promise.allSettled(
-      failedIndices.map((idx) => chunkTasks[idx]())
-    )
+    const retryResults = await Promise.allSettled(failedIndices.map((idx) => tasks[idx]()))
     for (const result of retryResults) {
       if (result.status === 'fulfilled' && result.value.length > 0) {
-        allCandidates.push(...result.value)
+        candidates.push(...result.value)
       }
     }
   }
 
-  // --- Global Rescue Fallback ---
-  if (allCandidates.length === 0) {
-    debugOutput += `=== GLOBAL RESCUE (all chunks produced no candidates) ===\n`
+  return candidates
+}
 
-    let rescueMessage = `## ORIGINAL TRANSCRIPT\n\n${formattedTranscript}\n\nSelect the best clips from this video. Return only a JSON array.`
-    if (userHint?.trim()) {
-      rescueMessage += `\n\nUser preferences: ${userHint.trim()}`
-    }
-
-    const rescueResponse = await callLLM(
-      provider, model, apiKey,
-      CLIP_SYSTEM_PROMPT, rescueMessage
-    )
-    debugOutput += `${rescueResponse}\n\n`
-    onProgress?.('Ranking and selecting best clips...', 90)
-
-    const clips = parseLLMResponse(rescueResponse)
-    debugOutput += `=== FINAL OUTPUT (rescue) ===\n${rescueResponse}\n`
-    return { clips, rawResponse: debugOutput }
-  }
-
-  // Budget candidates before Phase 3
-  allCandidates = budgetCandidates(allCandidates, 5)
-
-  // --- Phase 3: Global Ranking ---
-  onProgress?.('Ranking and selecting best clips...', 75)
-
-  // Build numbered candidate list with transcript previews
-  const candidateList = allCandidates
-    .map((c, i) => {
-      const preview = generateTranscriptPreview(segments, c.startMs, c.endMs)
-      return `${i + 1}. "${c.title}" [${msToTimecode(c.startMs)} - ${msToTimecode(c.endMs)}] (${c.startMs}-${c.endMs}ms) Score: ${c.score}/10\n   Topic: ${c.sourceTopic}\n   Why: ${c.justification}\n   Preview: ${preview}`
-    })
-    .join('\n\n')
-
-  const rankingMessage = `Here are ${allCandidates.length} candidate clips from the video:\n\n${candidateList}\n\nRank and select the best clips. Ensure clips spread across the full video timeline. Return only a JSON array.`
-
-  const rankingResponse = await callLLM(
-    provider, model, apiKey,
-    RANKING_SYSTEM_PROMPT, rankingMessage
-  )
-
-  debugOutput += `=== PHASE 3: GLOBAL RANKING ===\n${rankingResponse}\n\n`
-
-  onProgress?.('Processing results...', 95)
-
-  let finalClips: ClipSegment[]
-  try {
-    finalClips = parseLLMResponse(rankingResponse)
-  } catch {
-    // If ranking parse fails, convert top candidates directly
-    finalClips = allCandidates
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8)
-      .map((c) => ({ title: c.title, startMs: c.startMs, endMs: c.endMs }))
-  }
-
-  // Deduplicate using IoU on candidate scores
+function assembleFinalClips(
+  finalClips: ClipSegment[],
+  allCandidates: CandidateClip[],
+  segments: TranscriptSegment[],
+  totalDurationMs: number
+): ClipSegment[] {
   const candidateMap = new Map<string, CandidateClip>()
   for (const c of allCandidates) {
-    const key = `${c.startMs}-${c.endMs}`
-    candidateMap.set(key, c)
+    candidateMap.set(`${c.startMs}-${c.endMs}`, c)
   }
 
   const asDedup: CandidateClip[] = finalClips.map((c) => {
@@ -840,22 +877,228 @@ export async function analyzeTranscript(
   })
 
   const deduped = deduplicateClips(asDedup)
-  finalClips = deduped.map((c) => {
-    const original = finalClips.find(
-      (f) => f.startMs === c.startMs && f.endMs === c.endMs
-    )
+  let clips: ClipSegment[] = deduped.map((c) => {
+    const original = finalClips.find((f) => f.startMs === c.startMs && f.endMs === c.endMs)
     const match = candidateMap.get(`${c.startMs}-${c.endMs}`)
-    return {
-      title: c.title,
-      startMs: c.startMs,
-      endMs: c.endMs,
-      category: original?.category,
-      topic: match?.sourceTopic
-    }
+    return refineClipBounds(
+      {
+        title: c.title,
+        startMs: c.startMs,
+        endMs: c.endMs,
+        category: original?.category,
+        topic: match?.sourceTopic
+      },
+      segments
+    )
   })
 
-  // Enforce coverage
-  finalClips = enforceCoverage(finalClips, allCandidates, totalDurationMs)
+  clips = enforceCoverage(clips, allCandidates, totalDurationMs, 7)
+  clips = clips
+    .map((c) => refineClipBounds(c, segments))
+    .filter((c) => c.endMs > c.startMs)
+
+  const afterSnap: CandidateClip[] = clips.map((c) => ({
+    title: c.title,
+    startMs: c.startMs,
+    endMs: c.endMs,
+    score: candidateMap.get(`${c.startMs}-${c.endMs}`)?.score ?? 5,
+    justification: '',
+    sourceTopic: c.topic ?? ''
+  }))
+  return deduplicateClips(afterSnap).map((c) => {
+    const original = clips.find((f) => f.startMs === c.startMs && f.endMs === c.endMs)
+    return (
+      original ?? {
+        title: c.title,
+        startMs: c.startMs,
+        endMs: c.endMs,
+        topic: c.sourceTopic
+      }
+    )
+  })
+}
+
+// --- Main pipeline ---
+
+export async function analyzeTranscript(
+  segments: TranscriptSegment[],
+  provider: LLMProvider,
+  model: string,
+  apiKey: string,
+  userHint?: string,
+  onProgress?: (message: string, percent: number) => void,
+  llmCall: LLMCaller = callLLM
+): Promise<{ clips: ClipSegment[]; rawResponse: string }> {
+  const formattedTranscript = formatTranscriptForLLM(segments)
+  const totalDurationMs =
+    segments.length > 0 ? segments[segments.length - 1].endMs - segments[0].startMs : 0
+  const hint = userHint?.trim()
+    ? `\n\nHard constraint from the user — discard anything that does not match: ${userHint.trim()}`
+    : ''
+
+  let debugOutput = ''
+  const debugSink = (chunk: string): void => {
+    debugOutput += chunk
+  }
+
+  // --- Phase 1: Hook finding ---
+  onProgress?.('Finding peak moments...', 5)
+
+  const hookResponse = await llmCall(
+    provider,
+    model,
+    apiKey,
+    HOOK_SYSTEM_PROMPT,
+    `Here is the numbered transcript:\n\n${formattedTranscript}\n\nReturn the hottest hook lines.${hint}`
+  )
+  debugOutput += `=== PHASE 1: HOOKS ===\n${hookResponse}\n\n`
+
+  const hooks = parseHooks(hookResponse, segments.length)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 15)
+
+  onProgress?.('Finding peak moments...', 20)
+
+  let allCandidates: CandidateClip[] = []
+
+  if (hooks.length > 0) {
+    const windows: MineWindow[] = hooks.map((hook) => {
+      const hookSeg = segments[hook.hookId]
+      const formatted = formatWindow(
+        segments,
+        hookSeg.startMs - 90000,
+        hookSeg.endMs + 90000
+      )
+      return {
+        label: `hook:${hook.hookId}`,
+        userMessage:
+          `Hook segment #${hook.hookId} (score ${hook.score}/10): "${hookSeg.text.trim()}"\nReason: ${hook.reason}\n\n${formatted}\n\nExpand this hook into a complete clip. Return a JSON array.${hint}`
+      }
+    })
+    allCandidates = await mineWindows(
+      windows,
+      segments,
+      provider,
+      model,
+      apiKey,
+      llmCall,
+      onProgress,
+      debugSink
+    )
+  } else {
+    debugOutput += `[No hooks found — falling back to time chunks]\n\n`
+    const topics = fallbackToTimeChunks(segments)
+    const windows: MineWindow[] = topics.map((topic) => {
+      const formatted = formatWindow(
+        segments,
+        topic.startMs - 30000,
+        topic.endMs + 30000,
+        { startMs: topic.startMs, endMs: topic.endMs }
+      )
+      return {
+        label: topic.topic,
+        userMessage:
+          `Section: ${topic.topic}. ${topic.description}\n\n${formatted}\n\nFind all clip-worthy moments in this section. Return a JSON array.${hint}`
+      }
+    })
+    allCandidates = await mineWindows(
+      windows,
+      segments,
+      provider,
+      model,
+      apiKey,
+      llmCall,
+      onProgress,
+      debugSink
+    )
+  }
+
+  // --- Global Rescue Fallback ---
+  if (allCandidates.length === 0) {
+    debugOutput += `=== GLOBAL RESCUE (no candidates) ===\n`
+    const rescueResponse = await llmCall(
+      provider,
+      model,
+      apiKey,
+      CLIP_SYSTEM_PROMPT,
+      `## NUMBERED TRANSCRIPT\n\n${formattedTranscript}\n\nSelect the best clips. Return only a JSON array.${hint}`
+    )
+    debugOutput += `${rescueResponse}\n\n`
+    onProgress?.('Ranking and selecting best clips...', 90)
+    const clips = parseLLMResponse(rescueResponse, segments).map((c) =>
+      refineClipBounds(c, segments)
+    )
+    debugOutput += `=== FINAL OUTPUT (rescue) ===\n${JSON.stringify(clips, null, 2)}\n`
+    return { clips, rawResponse: debugOutput }
+  }
+
+  allCandidates = budgetCandidates(allCandidates, 5)
+
+  // --- Phase 3: Global Ranking ---
+  onProgress?.('Ranking and selecting best clips...', 75)
+
+  const candidateList = allCandidates
+    .map((c, i) => {
+      const full = getSegmentsInRange(segments, c.startMs, c.endMs)
+        .map((s) => s.text.trim())
+        .join(' ')
+      return `${i + 1}. id=${i + 1} "${c.title}" [${msToTimecode(c.startMs)} - ${msToTimecode(c.endMs)}] Score: ${c.score}/10\n   Source: ${c.sourceTopic}\n   Why: ${c.justification}\n   Transcript: ${full}`
+    })
+    .join('\n\n')
+
+  const rankingResponse = await llmCall(
+    provider,
+    model,
+    apiKey,
+    RANKING_SYSTEM_PROMPT,
+    `Here are ${allCandidates.length} candidate clips:\n\n${candidateList}\n\nSelect the best clips by id. Return only a JSON array.`
+  )
+  debugOutput += `=== PHASE 3: GLOBAL RANKING ===\n${rankingResponse}\n\n`
+  onProgress?.('Processing results...', 95)
+
+  let finalClips: ClipSegment[] = []
+  const ranked = parseRankedIds(rankingResponse)
+  if (ranked.length > 0) {
+    for (const row of ranked) {
+      const cand = allCandidates[row.id - 1]
+      if (!cand) continue
+      finalClips.push({
+        title: row.title?.trim() ? row.title : cand.title,
+        startMs: cand.startMs,
+        endMs: cand.endMs,
+        category: row.category,
+        topic: cand.sourceTopic
+      })
+    }
+  } else {
+    try {
+      finalClips = parseLLMResponse(rankingResponse, segments)
+    } catch {
+      finalClips = allCandidates
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8)
+        .map((c) => ({
+          title: c.title,
+          startMs: c.startMs,
+          endMs: c.endMs,
+          topic: c.sourceTopic
+        }))
+    }
+  }
+
+  if (finalClips.length === 0) {
+    finalClips = allCandidates
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map((c) => ({
+        title: c.title,
+        startMs: c.startMs,
+        endMs: c.endMs,
+        topic: c.sourceTopic
+      }))
+  }
+
+  finalClips = assembleFinalClips(finalClips, allCandidates, segments, totalDurationMs)
 
   const finalJson = JSON.stringify(
     finalClips.map((c) => ({

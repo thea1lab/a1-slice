@@ -22,7 +22,7 @@ function mimeForVideo(filePath: string): string {
   return map[ext] || 'video/mp4'
 }
 import { extractAudio, splitWav, cutClip, getVideoDurationMs } from './ffmpeg'
-import { downloadModel, transcribeWithRetry, type AbortHandle } from './whisper'
+import { downloadModel, transcribeWithRetry, mergeChunkSegments, type AbortHandle } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
 import type {
@@ -216,9 +216,10 @@ secureHandle(
         message: 'Splitting audio into chunks...',
         percent: 0
       })
-      const chunks = await splitWav(wavPath, 180)
+      const overlapSec = 15
+      const chunks = await splitWav(wavPath, 180, overlapSec)
       const totalChunks = chunks.length
-      const allSegments: TranscriptSegment[] = []
+      const chunkResults: { offsetMs: number; durationMs: number; segments: TranscriptSegment[] }[] = []
 
       for (let i = 0; i < totalChunks; i++) {
         if (cancelled) throw new Error('Cancelled')
@@ -251,14 +252,11 @@ secureHandle(
 
         try {
           const chunkSegments = await handle.promise
-          // Offset timestamps by chunk position
-          for (const seg of chunkSegments) {
-            allSegments.push({
-              startMs: seg.startMs + chunk.offsetMs,
-              endMs: seg.endMs + chunk.offsetMs,
-              text: seg.text
-            })
-          }
+          chunkResults.push({
+            offsetMs: chunk.offsetMs,
+            durationMs: chunk.durationMs,
+            segments: chunkSegments
+          })
         } finally {
           activeWhisperHandle = null
         }
@@ -266,6 +264,8 @@ secureHandle(
         // Clean up chunk file
         try { unlinkSync(chunk.path) } catch {}
       }
+
+      const allSegments = mergeChunkSegments(chunkResults, overlapSec * 1000)
 
       // Clean up full WAV
       try { unlinkSync(wavPath) } catch {}

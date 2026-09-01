@@ -5,18 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Development Commands
 
 ```bash
-npm run dev          # Start electron-vite dev server with hot reload
-npm run build        # Compile to out/
-npm run dist         # Build + package installer for current platform
-npm run dist:mac     # macOS DMG
-npm run dist:win     # Windows NSIS
-npm run dist:linux   # Linux AppImage
-npm run test         # Run vitest once
-npm run test:watch   # Vitest in watch mode
-npm run build:whisper # Build whisper.cpp binaries (bash script)
+pnpm dev             # Start electron-vite dev server with hot reload
+pnpm build           # Compile to out/
+pnpm dist            # Build + package installer for current platform
+pnpm dist:mac        # macOS DMG
+pnpm dist:win        # Windows NSIS
+pnpm dist:linux      # Linux AppImage
+pnpm test            # Run vitest once
+pnpm test:watch      # Vitest in watch mode
+pnpm build:whisper   # Build whisper.cpp binaries (bash script)
 ```
 
-Requires Node.js >= 24.13.1. Uses npm (not yarn/pnpm).
+Requires Node.js >= 24.13.1. Uses pnpm (not npm/yarn).
 
 ## Architecture
 

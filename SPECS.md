@@ -64,7 +64,7 @@ git clone https://github.com/a1lab/a1slice
 
 cd a1slice
 
-npm install
+pnpm install
 
 ```
 
@@ -146,7 +146,7 @@ The AI is only used to identify which segments to cut — it reads the transcrip
 
 ```bash
 
-npm run dev
+pnpm dev
 
 ```
 
@@ -164,17 +164,17 @@ npm run dev
 
 # Build for current platform
 
-npm run dist
+pnpm dist
 
 
 
 # Build for specific platform
 
-npm run dist:win     # Windows installer (.exe)
+pnpm dist:win     # Windows installer (.exe)
 
-npm run dist:mac     # macOS disk image (.dmg)
+pnpm dist:mac     # macOS disk image (.dmg)
 
-npm run dist:linux   # Linux AppImage
+pnpm dist:linux   # Linux AppImage
 
 ```
 

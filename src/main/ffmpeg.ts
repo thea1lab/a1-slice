@@ -89,19 +89,46 @@ export async function extractAudio(
 
 export async function splitWav(
   wavPath: string,
-  chunkSec = 300
-): Promise<{ path: string; offsetMs: number }[]> {
+  chunkSec = 300,
+  overlapSec = 15
+): Promise<{ path: string; offsetMs: number; durationMs: number }[]> {
   const durationMs = await getVideoDurationMs(wavPath)
-  const chunks: { path: string; offsetMs: number }[] = []
-  for (let offsetSec = 0; offsetSec * 1000 < durationMs; offsetSec += chunkSec) {
+  const overlap = overlapSec >= chunkSec ? 0 : Math.max(0, overlapSec)
+  const hopSec = Math.max(1, chunkSec - overlap)
+  const chunks: { path: string; offsetMs: number; durationMs: number }[] = []
+  for (let offsetSec = 0; offsetSec * 1000 < durationMs; offsetSec += hopSec) {
     const chunkPath = wavPath.replace('.wav', `-chunk${chunks.length}.wav`)
     await spawnFfmpeg(
-      ['-ss', String(offsetSec), '-i', wavPath, '-t', String(chunkSec), '-c', 'copy', '-y', chunkPath],
+      [
+        '-ss', String(offsetSec),
+        '-i', wavPath,
+        '-t', String(chunkSec),
+        '-ar', '16000',
+        '-ac', '1',
+        '-y',
+        chunkPath
+      ],
       null
     )
-    chunks.push({ path: chunkPath, offsetMs: offsetSec * 1000 })
+    let chunkDurationMs = Math.min(chunkSec * 1000, Math.max(0, durationMs - offsetSec * 1000))
+    try {
+      chunkDurationMs = await getVideoDurationMs(chunkPath)
+    } catch {
+      // keep the nominal duration if ffprobe-style parse fails
+    }
+    chunks.push({ path: chunkPath, offsetMs: offsetSec * 1000, durationMs: chunkDurationMs })
   }
   return chunks
+}
+
+export function parseFfmpegDuration(stderr: string): number | null {
+  const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/)
+  if (!match) return null
+  const hours = parseInt(match[1], 10)
+  const minutes = parseInt(match[2], 10)
+  const seconds = parseInt(match[3], 10)
+  const ms = Math.round(parseFloat(`0.${match[4]}`) * 1000)
+  return hours * 3600000 + minutes * 60000 + seconds * 1000 + ms
 }
 
 export function getVideoDurationMs(videoPath: string): Promise<number> {
@@ -111,19 +138,50 @@ export function getVideoDurationMs(videoPath: string): Promise<number> {
     let stderr = ''
     proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
     proc.on('close', () => {
-      const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/)
-      if (match) {
-        const ms =
-          parseInt(match[1], 10) * 3600000 +
-          parseInt(match[2], 10) * 60000 +
-          parseInt(match[3], 10) * 1000 +
-          parseInt(match[4], 10) * 10
-        return resolve(ms)
-      }
+      const ms = parseFfmpegDuration(stderr)
+      if (ms != null) return resolve(ms)
       reject(new Error('Could not read video duration'))
     })
     proc.on('error', reject)
   })
+}
+
+export function buildCutClipArgs(
+  videoPath: string,
+  outputPath: string,
+  startSec: number,
+  durationSec: number
+): string[] {
+  return [
+    '-ss', String(startSec),
+    '-i', videoPath,
+    '-t', String(durationSec),
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '18',
+    '-c:a', 'aac',
+    '-movflags', '+faststart',
+    '-avoid_negative_ts', 'make_zero',
+    '-y',
+    outputPath
+  ]
+}
+
+function buildCopyClipArgs(
+  videoPath: string,
+  outputPath: string,
+  startSec: number,
+  durationSec: number
+): string[] {
+  return [
+    '-ss', String(startSec),
+    '-i', videoPath,
+    '-t', String(durationSec),
+    '-c', 'copy',
+    '-avoid_negative_ts', 'make_zero',
+    '-y',
+    outputPath
+  ]
 }
 
 export async function cutClip(
@@ -137,18 +195,20 @@ export async function cutClip(
   const startSec = startMs / 1000
   const durationSec = (endMs - startMs) / 1000
 
-  // Stream-copy (no re-encoding) for speed
-  await spawnFfmpeg(
-    [
-      '-ss', String(startSec),
-      '-i', videoPath,
-      '-t', String(durationSec),
-      '-c', 'copy',
-      '-y', outputPath
-    ],
-    durationSec,
-    onProgress
-  )
+  try {
+    await spawnFfmpeg(
+      buildCutClipArgs(videoPath, outputPath, startSec, durationSec),
+      durationSec,
+      onProgress
+    )
+  } catch {
+    // Some ffmpeg-static builds may lack libx264; keep export working.
+    await spawnFfmpeg(
+      buildCopyClipArgs(videoPath, outputPath, startSec, durationSec),
+      durationSec,
+      onProgress
+    )
+  }
 
   // Save SRT with subtitles shifted relative to clip start
   const shifted = subtitles
