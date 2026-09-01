@@ -10,7 +10,9 @@ import {
   generateTranscriptPreview,
   deduplicateClips,
   budgetCandidates,
-  enforceCoverage
+  enforceCoverage,
+  extractJsonArray,
+  analyzeTranscript
 } from '../analyzer'
 
 // --- Existing tests (unchanged) ---
@@ -44,7 +46,7 @@ describe('formatTranscriptForLLM', () => {
       { startMs: 5000, endMs: 10000, text: 'World' }
     ])
     expect(result).toBe(
-      '[00:00:00 -> 00:00:05 | 0 -> 5000] Hello\n[00:00:05 -> 00:00:10 | 5000 -> 10000] World'
+      '[#0 00:00:00 -> 00:00:05 | 0 -> 5000] Hello\n[#1 00:00:05 -> 00:00:10 | 5000 -> 10000] World'
     )
   })
 
@@ -56,7 +58,7 @@ describe('formatTranscriptForLLM', () => {
     const result = formatTranscriptForLLM([
       { startMs: 0, endMs: 1000, text: '  spaced  ' }
     ])
-    expect(result).toBe('[00:00:00 -> 00:00:01 | 0 -> 1000] spaced')
+    expect(result).toBe('[#0 00:00:00 -> 00:00:01 | 0 -> 1000] spaced')
   })
 })
 
@@ -95,6 +97,39 @@ describe('parseLLMResponse', () => {
     expect(() => parseLLMResponse('No clips found')).toThrow(
       'No JSON array found'
     )
+  })
+
+  it('parses start_id/end_id against transcript segments', () => {
+    const segments = [
+      { startMs: 0, endMs: 5000, text: 'A' },
+      { startMs: 5000, endMs: 12000, text: 'B' },
+      { startMs: 12000, endMs: 20000, text: 'C' }
+    ]
+    const text = JSON.stringify([
+      { title: 'From ids', start_id: 1, end_id: 2 }
+    ])
+    const result = parseLLMResponse(text, segments)
+    expect(result).toEqual([
+      { title: 'From ids', startMs: 5000, endMs: 20000 }
+    ])
+  })
+
+  it('coerces string millisecond values', () => {
+    const text = JSON.stringify([
+      { title: 'Strings', start_ms: '1000', end_ms: '5000' }
+    ])
+    const result = parseLLMResponse(text)
+    expect(result[0].startMs).toBe(1000)
+    expect(result[0].endMs).toBe(5000)
+  })
+
+  it('ignores a leading example array and parses the last JSON array', () => {
+    const text = `Example: [{"title": "Example", "start_ms": 0, "end_ms": 1}]
+Here are the clips:
+[{"title": "Real", "start_ms": 4000, "end_ms": 9000}]`
+    const result = parseLLMResponse(text)
+    expect(result).toHaveLength(1)
+    expect(result[0].title).toBe('Real')
   })
 
   it('parses category field when present', () => {
@@ -471,7 +506,7 @@ describe('enforceCoverage', () => {
     const candidates = [
       { title: 'A', startMs: 50000, endMs: 110000, score: 8, justification: '', sourceTopic: 'Intro' },
       { title: 'Mid', startMs: 350000, endMs: 410000, score: 7, justification: '', sourceTopic: 'Main Content' },
-      { title: 'End', startMs: 700000, endMs: 760000, score: 6, justification: '', sourceTopic: 'Conclusion' }
+      { title: 'End', startMs: 700000, endMs: 760000, score: 8, justification: '', sourceTopic: 'Conclusion' }
     ]
     const result = enforceCoverage(clips, candidates, totalDurationMs)
     expect(result).toHaveLength(3)
@@ -480,5 +515,131 @@ describe('enforceCoverage', () => {
     expect(midClip?.topic).toBe('Main Content')
     const endClip = result.find((c) => c.startMs === 700000)
     expect(endClip?.topic).toBe('Conclusion')
+  })
+
+  it('does not auto-fill a missing third with a weak candidate', () => {
+    const clips = [
+      { title: 'A', startMs: 50000, endMs: 110000 },
+      { title: 'B', startMs: 350000, endMs: 410000 }
+    ]
+    const candidates = [
+      makeCandidate(50000, 110000, 8),
+      makeCandidate(350000, 410000, 7),
+      makeCandidate(650000, 710000, 4)
+    ]
+    const result = enforceCoverage(clips, candidates, totalDurationMs)
+    expect(result).toHaveLength(2)
+  })
+})
+
+describe('extractJsonArray', () => {
+  it('extracts a fenced json array', () => {
+    const text = 'Sure.\n```json\n[{"a":1}]\n```\n'
+    expect(extractJsonArray(text)).toEqual([{ a: 1 }])
+  })
+
+  it('uses bracket matching instead of a greedy first-to-last match', () => {
+    const text = 'See [note] first. [{"title":"Ok","start_ms":1,"end_ms":2}] trailing [x]'
+    expect(extractJsonArray(text)).toEqual([
+      { title: 'Ok', start_ms: 1, end_ms: 2 }
+    ])
+  })
+
+  it('unwraps { clips: [...] } objects', () => {
+    expect(extractJsonArray('{"clips":[{"title":"A"}]}')).toEqual([
+      { title: 'A' }
+    ])
+  })
+
+  it('unwraps { items: [...] } objects', () => {
+    expect(extractJsonArray('{"items":[1,2]}')).toEqual([1, 2])
+  })
+})
+
+describe('analyzeTranscript hook pipeline', () => {
+  const segments = Array.from({ length: 12 }, (_, i) => ({
+    startMs: i * 5000,
+    endMs: (i + 1) * 5000,
+    text: `Line ${i}`
+  }))
+
+  it('resolves ranked candidate ids into snapped clip times', async () => {
+    const llm = async (
+      _provider: 'claude' | 'openai',
+      _model: string,
+      _apiKey: string,
+      systemPrompt: string,
+      _userMessage: string
+    ): Promise<string> => {
+      if (systemPrompt.includes('HOOK_FINDER')) {
+        return JSON.stringify([{ hook_id: 6, score: 9, reason: 'the punchline' }])
+      }
+      if (systemPrompt.includes('CLIP_EXPANDER')) {
+        return JSON.stringify([
+          {
+            title: 'The punchline',
+            start_id: 5,
+            end_id: 8,
+            score: 9,
+            justification: 'complete take'
+          }
+        ])
+      }
+      if (systemPrompt.includes('CLIP_RANKER')) {
+        return JSON.stringify([
+          { id: 1, title: 'The punchline', category: 'standalone' }
+        ])
+      }
+      throw new Error(`unexpected prompt: ${systemPrompt.slice(0, 80)}`)
+    }
+
+    const { clips } = await analyzeTranscript(
+      segments,
+      'claude',
+      'test-model',
+      'key',
+      undefined,
+      undefined,
+      llm
+    )
+
+    expect(clips.length).toBeGreaterThanOrEqual(1)
+    expect(clips[0].title).toBe('The punchline')
+    expect(clips[0].category).toBe('standalone')
+    expect(clips[0].startMs).toBeLessThanOrEqual(segments[5].startMs)
+    expect(clips[0].endMs).toBeGreaterThanOrEqual(segments[8].endMs)
+  })
+
+  it('falls back to time-chunk mining when hook finding returns nothing', async () => {
+    const llm = async (
+      _provider: 'claude' | 'openai',
+      _model: string,
+      _apiKey: string,
+      systemPrompt: string
+    ): Promise<string> => {
+      if (systemPrompt.includes('HOOK_FINDER')) return '[]'
+      if (systemPrompt.includes('CLIP_EXPANDER')) {
+        return JSON.stringify([
+          { title: 'Fallback clip', start_id: 0, end_id: 3, score: 8, justification: 'ok' }
+        ])
+      }
+      if (systemPrompt.includes('CLIP_RANKER')) {
+        return JSON.stringify([{ id: 1, title: 'Fallback clip', category: 'related' }])
+      }
+      return '[]'
+    }
+
+    const { clips } = await analyzeTranscript(
+      segments,
+      'claude',
+      'test-model',
+      'key',
+      undefined,
+      undefined,
+      llm
+    )
+
+    expect(clips[0].title).toBe('Fallback clip')
+    expect(clips[0].startMs).toBeLessThan(clips[0].endMs)
   })
 })

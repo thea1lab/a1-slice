@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatSrtTime, generateSrt } from '../ffmpeg'
+import { formatSrtTime, generateSrt, parseFfmpegDuration, buildCutClipArgs } from '../ffmpeg'
 
 describe('formatSrtTime', () => {
   it('formats zero', () => {
@@ -51,5 +51,32 @@ describe('generateSrt', () => {
     ])
     expect(result).toContain('spaced')
     expect(result).not.toContain('  spaced  ')
+  })
+})
+
+describe('parseFfmpegDuration', () => {
+  it('parses centiseconds as a fraction of a second', () => {
+    expect(parseFfmpegDuration('Duration: 00:01:23.45, start: 0.000000')).toBe(
+      83450
+    )
+  })
+
+  it('parses three-digit fractional seconds as milliseconds', () => {
+    expect(parseFfmpegDuration('  Duration: 01:00:00.500\n')).toBe(3600500)
+  })
+
+  it('returns null when duration is missing', () => {
+    expect(parseFfmpegDuration('no duration here')).toBeNull()
+  })
+})
+
+describe('buildCutClipArgs', () => {
+  it('re-encodes instead of stream-copying so cuts are frame-accurate', () => {
+    const args = buildCutClipArgs('/in.mp4', '/out.mp4', 12.5, 30)
+    expect(args).not.toContain('copy')
+    expect(args).toContain('libx264')
+    expect(args).toContain('aac')
+    expect(args[args.indexOf('-ss') + 1]).toBe('12.5')
+    expect(args[args.indexOf('-t') + 1]).toBe('30')
   })
 })

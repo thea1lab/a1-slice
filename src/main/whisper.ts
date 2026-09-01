@@ -254,6 +254,34 @@ export function parseTimestamp(ts: string): number {
   return hours * 3600000 + minutes * 60000 + seconds * 1000 + millis
 }
 
+export function mergeChunkSegments(
+  chunks: { offsetMs: number; durationMs: number; segments: TranscriptSegment[] }[],
+  overlapMs: number
+): TranscriptSegment[] {
+  const merged: TranscriptSegment[] = []
+  const halfOverlap = overlapMs / 2
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i]
+    const keepStart = i === 0 ? Number.NEGATIVE_INFINITY : chunk.offsetMs + halfOverlap
+    const keepEnd =
+      i === chunks.length - 1
+        ? Number.POSITIVE_INFINITY
+        : chunk.offsetMs + chunk.durationMs - halfOverlap
+
+    for (const seg of chunk.segments) {
+      const startMs = seg.startMs + chunk.offsetMs
+      const endMs = seg.endMs + chunk.offsetMs
+      if (startMs >= keepStart && startMs < keepEnd) {
+        merged.push({ startMs, endMs, text: seg.text })
+      }
+    }
+  }
+
+  merged.sort((a, b) => a.startMs - b.startMs)
+  return merged
+}
+
 export function parseWhisperJson(
   json: string
 ): TranscriptSegment[] {
@@ -327,7 +355,7 @@ function runWhisper(
       }, opts.timeoutMs)
     }
 
-    proc.stderr.on('data', (chunk: Buffer) => {
+    proc.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString()
       // whisper.cpp prints progress like "whisper_full: progress = 42%"
       const match = stderr.match(/progress\s*=\s*(\d+)%/g)
@@ -436,8 +464,7 @@ export function transcribeWithRetry(
         if (killed) throw new Error('Cancelled')
         const isRetryTimeout = retryErr instanceof Error && retryErr.message === 'Whisper timed out'
         if (isRetryTimeout) {
-          // Both attempts timed out — return empty segments (skip chunk)
-          return []
+          throw new Error('Whisper timed out after retry')
         }
         throw retryErr
       }
