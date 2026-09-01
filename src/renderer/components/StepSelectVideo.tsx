@@ -120,9 +120,23 @@ export default function StepSelectVideo({
             <button
               type="button"
               onClick={() => setShowAdvanced((v) => !v)}
-              className="text-xs text-neutral-500 hover:text-neutral-400 transition-colors flex items-center gap-1"
+              aria-expanded={showAdvanced}
+              className="text-xs text-neutral-500 hover:text-neutral-400 transition-colors flex items-center gap-1.5"
             >
-              <span className="text-[10px]">{showAdvanced ? '\u25BC' : '\u25B6'}</span>
+              <svg
+                viewBox="0 0 16 16"
+                fill="none"
+                className={`w-3 h-3 shrink-0 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
+                aria-hidden="true"
+              >
+                <path
+                  d="M6 4l4 4-4 4"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
               Advanced
             </button>
             {showAdvanced && (
