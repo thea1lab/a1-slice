@@ -7,13 +7,6 @@
     "node": ">=24.0.0",
     "pnpm": ">=10.0.0"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "esbuild",
-      "ffmpeg-static"
-    ]
-  },
   "main": "./out/main/main.js",
   "scripts": {
     "dev": "electron-vite dev",

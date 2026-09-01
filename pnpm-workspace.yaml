@@ -1,7 +1,5 @@
-onlyBuiltDependencies:
-  - electron
-  - esbuild
-  - ffmpeg-static
+nodeLinker: hoisted
+ignoreScripts: false
 
 allowBuilds:
   electron: true
