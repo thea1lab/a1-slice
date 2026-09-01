@@ -3,7 +3,7 @@
   Build A1 Slice for Windows with CPU + GPU (CUDA) whisper-cli binaries.
 
 .DESCRIPTION
-  Requires: cmake, nvcc (CUDA toolkit), node, npm, Visual Studio (MSVC).
+  Requires: cmake, nvcc (CUDA toolkit), node, pnpm, Visual Studio (MSVC).
   Clones whisper.cpp v1.8.3 into .cache/whisper.cpp/ (cached between runs).
   Builds CPU and GPU variants, copies CUDA runtime DLLs, packages Electron app.
   Final installer is placed in dist/.
@@ -30,7 +30,7 @@ $CudaArchitectures = "75;80;86;89;90"
 # --- Prerequisite checks ---
 Write-Host "==> Checking prerequisites..." -ForegroundColor Cyan
 $missing = @()
-foreach ($cmd in @("cmake", "nvcc", "node", "npm")) {
+foreach ($cmd in @("cmake", "nvcc", "node", "pnpm")) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
         $missing += $cmd
     }
@@ -43,7 +43,7 @@ if ($missing.Count -gt 0) {
 Write-Host "  cmake : $(cmake --version | Select-Object -First 1)"
 Write-Host "  nvcc  : $(nvcc --version | Select-String 'release' | ForEach-Object { $_.Line.Trim() })"
 Write-Host "  node  : $(node --version)"
-Write-Host "  npm   : $(npm --version)"
+Write-Host "  pnpm  : $(pnpm --version)"
 
 # --- Set up MSVC environment via vcvarsall.bat ---
 if (-not (Get-Command "cl" -ErrorAction SilentlyContinue)) {
@@ -188,12 +188,12 @@ if ($needBuild) {
 
 # --- Build Electron app ---
 Write-Host "==> Installing Node.js dependencies..." -ForegroundColor Cyan
-npm ci
-if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: npm ci failed" -ForegroundColor Red; exit 1 }
+pnpm install --frozen-lockfile
+if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: pnpm install failed" -ForegroundColor Red; exit 1 }
 
 Write-Host "==> Building and packaging Windows installer..." -ForegroundColor Cyan
-npm run dist:win -- --publish never
-if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: npm run dist:win failed" -ForegroundColor Red; exit 1 }
+pnpm dist:win -- --publish never
+if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: pnpm dist:win failed" -ForegroundColor Red; exit 1 }
 
 # --- Copy to dist/ ---
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null

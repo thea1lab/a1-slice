@@ -17,9 +17,10 @@ if [[ "$TARGET" == "linux" ]]; then
 fi
 
 # Install dependencies
-echo "==> Running npm ci..."
+echo "==> Running pnpm install..."
 cd /build
-npm ci
+corepack enable
+pnpm install --frozen-lockfile
 
 if [[ "$TARGET" == "win" ]]; then
   # Replace Linux ffmpeg binary with Windows one for cross-compile packaging
@@ -31,7 +32,7 @@ if [[ "$TARGET" == "win" ]]; then
 fi
 
 # Build and package
-echo "==> Running npm run dist:$TARGET..."
-npm run "dist:$TARGET"
+echo "==> Running pnpm dist:$TARGET..."
+pnpm "dist:$TARGET"
 
 echo "==> Done!"

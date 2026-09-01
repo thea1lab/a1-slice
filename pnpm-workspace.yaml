@@ -1,0 +1,9 @@
+onlyBuiltDependencies:
+  - electron
+  - esbuild
+  - ffmpeg-static
+
+allowBuilds:
+  electron: true
+  esbuild: true
+  ffmpeg-static: true

@@ -2,8 +2,17 @@
   "name": "a1-slice",
   "version": "1.0.21",
   "description": "Cut long videos into short, captioned reels using AI",
+  "packageManager": "pnpm@10.32.1",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "ffmpeg-static"
+    ]
   },
   "main": "./out/main/main.js",
   "scripts": {
@@ -14,6 +23,7 @@
     "dist:mac": "electron-vite build && electron-builder --mac",
     "dist:linux": "electron-vite build && electron-builder --linux",
     "build:whisper": "bash scripts/build-whisper.sh",
+    "postinstall": "node scripts/ensure-native-deps.cjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
