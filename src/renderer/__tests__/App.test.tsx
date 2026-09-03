@@ -15,6 +15,7 @@ function makeState(
     provider: LLMProvider
     model: string
     apiKey: string
+    apiKeys: Record<string, string>
     videoPath: string | null
     settingsLoaded: boolean
     transcribeStage: PipelineStage
@@ -41,6 +42,7 @@ function makeState(
     provider: 'claude' as LLMProvider,
     model: 'claude-haiku-4-5',
     apiKey: '',
+    apiKeys: {},
     settingsLoaded: false,
     videoPath: null,
     transcribeStage: 'idle' as PipelineStage,
@@ -105,6 +107,23 @@ describe('wizardReducer', () => {
       apiKey: 'sk-test'
     })
     expect(state.apiKey).toBe('sk-test')
+    expect(state.apiKeys.claude).toBe('sk-test')
+  })
+
+  it('keeps the api key when only the model changes', () => {
+    let state = wizardReducer(makeState(), { type: 'SET_API_KEY', apiKey: 'sk-haiku' })
+    state = wizardReducer(state, { type: 'SET_MODEL', model: 'claude-opus-4' })
+    expect(state.model).toBe('claude-opus-4')
+    expect(state.apiKey).toBe('sk-haiku')
+    expect(state.apiKeys.claude).toBe('sk-haiku')
+  })
+
+  it('clears the api key when switching providers and restores it when switching back', () => {
+    let state = wizardReducer(makeState(), { type: 'SET_API_KEY', apiKey: 'sk-ant' })
+    state = wizardReducer(state, { type: 'SET_PROVIDER', provider: 'opencode' })
+    expect(state.apiKey).toBe('')
+    state = wizardReducer(state, { type: 'SET_PROVIDER', provider: 'claude' })
+    expect(state.apiKey).toBe('sk-ant')
   })
 
   it('sets video path', () => {
@@ -277,6 +296,7 @@ describe('wizardReducer', () => {
     expect(state.provider).toBe('openai')
     expect(state.model).toBe('gpt-5-mini-2025-08-07')
     expect(state.apiKey).toBe('sk-test')
+    expect(state.apiKeys).toEqual({})
     expect(state.settingsLoaded).toBe(true)
     expect(state.videoPath).toBeNull()
     expect(state.outputDir).toBeNull()

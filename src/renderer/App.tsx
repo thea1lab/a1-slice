@@ -28,6 +28,7 @@ interface WizardState {
   provider: LLMProvider
   model: string
   apiKey: string
+  apiKeys: Record<string, string>
   userHint: string
   language: VideoLanguage
   entropyThold: number
@@ -65,7 +66,7 @@ interface WizardState {
 }
 
 type WizardAction =
-  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string; userHint: string; language: VideoLanguage; entropyThold: number; maxContext: number; beamSize: number; temperatureInc: number }
+  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string; apiKeys?: Record<string, string>; userHint: string; language: VideoLanguage; entropyThold: number; maxContext: number; beamSize: number; temperatureInc: number }
   | { type: 'SET_PROVIDER'; provider: LLMProvider }
   | { type: 'SET_MODEL'; model: string }
   | { type: 'SET_API_KEY'; apiKey: string }
@@ -101,6 +102,7 @@ const initialState: WizardState = {
   provider: 'claude',
   model: DEFAULT_MODELS.claude,
   apiKey: '',
+  apiKeys: {},
   userHint: '',
   language: 'auto',
   entropyThold: 2.8,
@@ -136,14 +138,40 @@ function addCompleted(steps: WizardStep[], step: WizardStep): WizardStep[] {
   return steps.includes(step) ? steps : [...steps, step]
 }
 
+function storedApiKey(
+  apiKeys: Record<string, string>,
+  provider: LLMProvider
+): string {
+  return apiKeys[provider] ?? ''
+}
+
+function withApiKey(
+  apiKeys: Record<string, string>,
+  provider: LLMProvider,
+  apiKey: string
+): Record<string, string> {
+  if (!apiKey) {
+    if (!(provider in apiKeys)) return apiKeys
+    const next = { ...apiKeys }
+    delete next[provider]
+    return next
+  }
+  return { ...apiKeys, [provider]: apiKey }
+}
+
 export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
-    case 'LOAD_SETTINGS':
+    case 'LOAD_SETTINGS': {
+      const apiKeys = { ...(action.apiKeys ?? {}) }
+      if (action.apiKey && !apiKeys[action.provider]) {
+        apiKeys[action.provider] = action.apiKey
+      }
       return {
         ...state,
         provider: action.provider,
         model: action.model,
-        apiKey: action.apiKey,
+        apiKey: apiKeys[action.provider] ?? action.apiKey,
+        apiKeys,
         userHint: action.userHint,
         language: action.language,
         entropyThold: action.entropyThold,
@@ -152,16 +180,25 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         temperatureInc: action.temperatureInc,
         settingsLoaded: true
       }
-    case 'SET_PROVIDER':
+    }
+    case 'SET_PROVIDER': {
+      if (action.provider === state.provider) return state
+      const model = DEFAULT_MODELS[action.provider]
       return {
         ...state,
         provider: action.provider,
-        model: DEFAULT_MODELS[action.provider]
+        model,
+        apiKey: storedApiKey(state.apiKeys, action.provider)
       }
+    }
     case 'SET_MODEL':
       return { ...state, model: action.model }
     case 'SET_API_KEY':
-      return { ...state, apiKey: action.apiKey }
+      return {
+        ...state,
+        apiKey: action.apiKey,
+        apiKeys: withApiKey(state.apiKeys, state.provider, action.apiKey)
+      }
     case 'SET_USER_HINT':
       return { ...state, userHint: action.userHint }
     case 'SET_LANGUAGE':
@@ -319,6 +356,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         provider: state.provider,
         model: state.model,
         apiKey: state.apiKey,
+        apiKeys: state.apiKeys,
         userHint: state.userHint,
         language: state.language,
         entropyThold: state.entropyThold,
@@ -346,6 +384,7 @@ export default function App(): React.JSX.Element {
         provider: s.provider,
         model: s.model,
         apiKey: s.apiKey,
+        apiKeys: s.apiKeys,
         userHint: s.userHint,
         language: s.language,
         entropyThold: s.entropyThold ?? 2.8,
@@ -363,6 +402,7 @@ export default function App(): React.JSX.Element {
       provider: state.provider,
       model: state.model,
       apiKey: state.apiKey,
+      apiKeys: state.apiKeys,
       userHint: state.userHint,
       language: state.language,
       entropyThold: state.entropyThold,
@@ -370,7 +410,7 @@ export default function App(): React.JSX.Element {
       beamSize: state.beamSize,
       temperatureInc: state.temperatureInc
     })
-  }, [state.provider, state.model, state.apiKey, state.userHint, state.language, state.entropyThold, state.maxContext, state.beamSize, state.temperatureInc, state.settingsLoaded])
+  }, [state.provider, state.model, state.apiKey, state.apiKeys, state.userHint, state.language, state.entropyThold, state.maxContext, state.beamSize, state.temperatureInc, state.settingsLoaded])
 
   // Listen for pipeline progress — route to the correct step
   useEffect(() => {
@@ -455,6 +495,7 @@ export default function App(): React.JSX.Element {
       provider: state.provider,
       model: state.model,
       apiKey: state.apiKey,
+      apiKeys: state.apiKeys,
       userHint: state.userHint,
       language: state.language,
       entropyThold: state.entropyThold,

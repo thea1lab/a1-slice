@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import TranscriptViewer from './TranscriptViewer'
 import ProgressBar from './ProgressBar'
 import type { TranscriptSegment, ClipSegment, LLMProvider } from '../../shared/types'
-import { DEFAULT_MODELS, OPENCODE_MODELS } from '../../shared/types'
+import { DEFAULT_MODELS } from '../../shared/types'
 
 interface StepReviewTranscriptProps {
   segments: TranscriptSegment[]
@@ -104,35 +104,16 @@ export default function StepReviewTranscript({
           </label>
           <label className="flex flex-col gap-1.5 text-xs text-neutral-400 flex-1">
             Model
-            {provider === 'opencode' ? (
-              <select
-                value={model}
-                onChange={(e) => onModelChange(e.target.value)}
-                disabled={analyzing}
-                className="appearance-none bg-bg-input border border-white/12 rounded-lg pl-3 pr-8 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors disabled:opacity-40 select-chevron"
-              >
-                {!OPENCODE_MODELS.some((m) => m.id === model) && model && (
-                  <option value={model}>{model}</option>
-                )}
-                {Array.from(new Set(OPENCODE_MODELS.map((m) => m.group))).map((group) => (
-                  <optgroup key={group} label={group}>
-                    {OPENCODE_MODELS.filter((m) => m.group === group).map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-            ) : (
-              <input
-                type="text"
-                value={model}
-                onChange={(e) => onModelChange(e.target.value)}
-                disabled={analyzing}
-                className="bg-bg-input border border-white/12 rounded-lg px-3 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors disabled:opacity-40"
-              />
-            )}
+            <input
+              type="text"
+              value={model}
+              onChange={(e) => onModelChange(e.target.value)}
+              placeholder={
+                provider === 'opencode' ? 'e.g. minimax-m2.7' : undefined
+              }
+              disabled={analyzing}
+              className="bg-bg-input border border-white/12 rounded-lg px-3 py-2 text-sm text-neutral-200 outline-none focus:border-accent transition-colors disabled:opacity-40"
+            />
           </label>
         </div>
         <label className="flex flex-col gap-1.5 text-xs text-neutral-400">
