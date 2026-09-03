@@ -7,6 +7,7 @@ import type {
   TranscribeResult,
   AnalyzeResult,
   CutResult,
+  ClipPreviewResult,
   CheckTranscriptResult,
   CheckAnalysisResult
 } from '../shared/types'
@@ -14,6 +15,22 @@ import type {
 contextBridge.exposeInMainWorld('api', {
   selectVideo: (): Promise<string | null> =>
     ipcRenderer.invoke('select-video'),
+
+  allowVideoPath: (videoPath: string): Promise<void> =>
+    ipcRenderer.invoke('allow-video-path', videoPath),
+
+  createClipPreview: (
+    videoPath: string,
+    startMs: number,
+    endMs: number
+  ): Promise<ClipPreviewResult> =>
+    ipcRenderer.invoke('create-clip-preview', videoPath, startMs, endMs),
+
+  releaseClipPreview: (previewPath: string): Promise<void> =>
+    ipcRenderer.invoke('release-clip-preview', previewPath),
+
+  readClipPreview: (previewPath: string): Promise<Uint8Array | null> =>
+    ipcRenderer.invoke('read-clip-preview', previewPath),
 
   transcribeVideo: (videoPath: string, language?: string, entropyThold?: number, maxContext?: number, beamSize?: number, temperatureInc?: number): Promise<TranscribeResult> =>
     ipcRenderer.invoke('transcribe-video', videoPath, language, entropyThold, maxContext, beamSize, temperatureInc),

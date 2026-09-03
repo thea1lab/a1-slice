@@ -4,32 +4,25 @@ import {
   ipcMain,
   dialog,
   shell,
-  protocol
+  protocol,
+  net,
+  session
 } from 'electron'
 import { join, basename, dirname, extname, resolve, normalize } from 'path'
-import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync, statSync, createReadStream } from 'fs'
-import { Readable } from 'stream'
+import { pathToFileURL } from 'url'
+import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync, statSync } from 'fs'
 
-function mimeForVideo(filePath: string): string {
-  const ext = extname(filePath).toLowerCase()
-  const map: Record<string, string> = {
-    '.mp4': 'video/mp4',
-    '.mov': 'video/quicktime',
-    '.mkv': 'video/x-matroska',
-    '.avi': 'video/x-msvideo',
-    '.webm': 'video/webm'
-  }
-  return map[ext] || 'video/mp4'
-}
-import { extractAudio, splitWav, cutClip, getVideoDurationMs } from './ffmpeg'
+import { extractAudio, splitWav, cutClip, getVideoDurationMs, extractPreviewClip } from './ffmpeg'
 import { downloadModel, transcribeWithRetry, mergeChunkSegments, type AbortHandle } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
+import { pathFromPreviewUrl } from '../shared/previewUrl'
 import type {
   AppSettings,
   ProgressUpdate,
   TranscriptSegment,
-  ClipSegment
+  ClipSegment,
+  ClipPreviewResult
 } from '../shared/types'
 
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
@@ -43,7 +36,9 @@ protocol.registerSchemesAsPrivileged([
       standard: true,
       secure: true,
       supportFetchAPI: true,
-      stream: true
+      stream: true,
+      bypassCSP: true,
+      corsEnabled: true
     }
   }
 ])
@@ -52,8 +47,30 @@ let mainWindow: BrowserWindow | null = null
 let cancelled = false
 let activeWhisperHandle: AbortHandle | null = null
 const allowedVideoPaths = new Set<string>()
+const previewFiles = new Set<string>()
+let previewRunning = 0
+const previewWaiters: Array<() => void> = []
 
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.mkv', '.avi', '.webm'])
+
+function allowVideoPath(videoPath: string): string {
+  const filePath = resolve(normalize(videoPath))
+  allowedVideoPaths.add(filePath)
+  allowedVideoPaths.add(normalize(videoPath))
+  return filePath
+}
+
+function isAllowedVideoPath(filePath: string): boolean {
+  if (allowedVideoPaths.has(filePath) || allowedVideoPaths.has(normalize(filePath))) {
+    return true
+  }
+  if (process.platform !== 'win32') return false
+  const lower = filePath.toLowerCase()
+  for (const allowed of allowedVideoPaths) {
+    if (allowed.toLowerCase() === lower) return true
+  }
+  return false
+}
 
 function secureHandle(
   channel: string,
@@ -109,20 +126,6 @@ function createWindow(): void {
     mainWindow.setMenuBarVisibility(false)
   }
 
-  // Content Security Policy
-  mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        'Content-Security-Policy': [
-          process.env['ELECTRON_RENDERER_URL']
-            ? "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* ws://localhost:*; media-src 'self' a1slice:; connect-src 'self' a1slice: http://localhost:* ws://localhost:*; img-src 'self' data:; font-src 'self' data:"
-            : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' a1slice:; connect-src 'self' a1slice:; img-src 'self' data:; font-src 'self' data:"
-        ]
-      }
-    })
-  })
-
   // Block navigation to external URLs
   mainWindow.webContents.on('will-navigate', (event, url) => {
     const devUrl = process.env['ELECTRON_RENDERER_URL']
@@ -154,13 +157,78 @@ secureHandle('select-video', async () => {
   })
   if (result.canceled) return null
   const selected = result.filePaths[0]
-  allowedVideoPaths.add(normalize(selected))
+  allowVideoPath(selected)
   return selected
 })
 
 // IPC: Open folder in native file manager
 secureHandle('open-folder', async (_event, folderPath: string) => {
   shell.showItemInFolder(folderPath)
+})
+
+secureHandle('allow-video-path', (_event, videoPath: string) => {
+  if (typeof videoPath !== 'string' || !videoPath) return
+  const ext = extname(videoPath).toLowerCase()
+  if (!VIDEO_EXTENSIONS.has(ext)) return
+  allowVideoPath(videoPath)
+})
+
+async function withPreviewSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (previewRunning >= 2) {
+    await new Promise<void>((resolve) => previewWaiters.push(resolve))
+  }
+  previewRunning++
+  try {
+    return await fn()
+  } finally {
+    previewRunning--
+    previewWaiters.shift()?.()
+  }
+}
+
+secureHandle(
+  'create-clip-preview',
+  async (_event, videoPath: string, startMs: number, endMs: number): Promise<ClipPreviewResult> => {
+    if (typeof videoPath !== 'string' || !videoPath) {
+      return { success: false, error: 'Missing video path' }
+    }
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+      return { success: false, error: 'Invalid clip range' }
+    }
+    allowVideoPath(videoPath)
+    try {
+      const previewPath = await withPreviewSlot(() =>
+        extractPreviewClip(videoPath, startMs, endMs)
+      )
+      allowVideoPath(previewPath)
+      previewFiles.add(previewPath)
+      return { success: true, previewPath }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Preview cut failed'
+      return { success: false, error: message }
+    }
+  }
+)
+
+secureHandle('release-clip-preview', (_event, previewPath: string) => {
+  if (typeof previewPath !== 'string' || !previewPath) return
+  if (!previewFiles.has(previewPath)) return
+  previewFiles.delete(previewPath)
+  try {
+    unlinkSync(previewPath)
+  } catch {
+    // already gone
+  }
+})
+
+secureHandle('read-clip-preview', (_event, previewPath: string): Uint8Array | null => {
+  if (typeof previewPath !== 'string' || !previewPath) return null
+  if (!previewFiles.has(previewPath)) return null
+  try {
+    return readFileSync(previewPath)
+  } catch {
+    return null
+  }
 })
 
 // IPC: Cancel pipeline
@@ -176,6 +244,7 @@ secureHandle(
   'transcribe-video',
   async (_event, videoPath: string, language?: string, entropyThold?: number, maxContext?: number, beamSize?: number, temperatureInc?: number) => {
     cancelled = false
+    allowVideoPath(videoPath)
 
     try {
       // Extract audio
@@ -296,6 +365,7 @@ secureHandle(
 
 // IPC: Check for cached transcript
 secureHandle('check-transcript', (_event, videoPath: string) => {
+  allowVideoPath(videoPath)
   try {
     const vName = basename(videoPath).replace(/\.[^.]+$/, '')
     const cachePath = join(dirname(videoPath), `${vName}.a1slice.json`)
@@ -310,6 +380,7 @@ secureHandle('check-transcript', (_event, videoPath: string) => {
 
 // IPC: Check for cached analysis
 secureHandle('check-analysis', (_event, videoPath: string) => {
+  allowVideoPath(videoPath)
   try {
     const vName = basename(videoPath).replace(/\.[^.]+$/, '')
     const dir = dirname(videoPath)
@@ -360,6 +431,7 @@ secureHandle(
     userHint?: string
   ) => {
     cancelled = false
+    allowVideoPath(videoPath)
 
     try {
       sendProgress({
@@ -418,6 +490,7 @@ secureHandle(
     segments: TranscriptSegment[]
   ) => {
     cancelled = false
+    allowVideoPath(videoPath)
 
     try {
       const videoName = basename(videoPath).replace(/\.[^.]+$/, '')
@@ -480,62 +553,61 @@ secureHandle(
   }
 )
 
+function applyContentSecurityPolicy(): void {
+  const isDev = Boolean(process.env['ELECTRON_RENDERER_URL'])
+  const policy = isDev
+    ? "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* ws://localhost:*; media-src 'self' blob: a1slice:; connect-src 'self' blob: a1slice: http://localhost:* ws://localhost:*; img-src 'self' data:; font-src 'self' data:"
+    : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob: a1slice:; connect-src 'self' blob: a1slice:; img-src 'self' data:; font-src 'self' data:"
+
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const headers = { ...details.responseHeaders }
+    for (const key of Object.keys(headers)) {
+      if (key.toLowerCase() === 'content-security-policy') delete headers[key]
+    }
+    headers['Content-Security-Policy'] = [policy]
+    callback({ responseHeaders: headers })
+  })
+}
+
 app.whenReady().then(() => {
+  applyContentSecurityPolicy()
+
   // Handle a1slice:// protocol for video preview (with range request support for seeking)
   protocol.handle('a1slice', (req) => {
-    const url = new URL(req.url)
-    const rawPath = decodeURIComponent(url.searchParams.get('path') || '')
+    const rawPath = pathFromPreviewUrl(req.url)
     if (!rawPath) return new Response('Missing path', { status: 400 })
 
     const filePath = resolve(normalize(rawPath))
     const ext = extname(filePath).toLowerCase()
-    if (!VIDEO_EXTENSIONS.has(ext) || !allowedVideoPaths.has(normalize(filePath))) {
+    if (!VIDEO_EXTENSIONS.has(ext) || !isAllowedVideoPath(filePath)) {
       return new Response('Forbidden', { status: 403 })
     }
 
-    let size: number
     try {
-      size = statSync(filePath).size
+      statSync(filePath)
     } catch {
       return new Response('File not found', { status: 404 })
     }
 
-    const mime = mimeForVideo(filePath)
-    const range = req.headers.get('range')
-
-    if (range) {
-      const m = range.match(/bytes=(\d+)-(\d*)/)
-      if (m) {
-        const start = parseInt(m[1], 10)
-        const end = m[2] ? parseInt(m[2], 10) : size - 1
-        return new Response(
-          Readable.toWeb(createReadStream(filePath, { start, end, highWaterMark: 256 * 1024 })) as ReadableStream,
-          {
-            status: 206,
-            headers: {
-              'Content-Range': `bytes ${start}-${end}/${size}`,
-              'Accept-Ranges': 'bytes',
-              'Content-Length': String(end - start + 1),
-              'Content-Type': mime
-            }
-          }
-        )
-      }
-    }
-
-    return new Response(
-      Readable.toWeb(createReadStream(filePath, { highWaterMark: 256 * 1024 })) as ReadableStream,
-      {
-        headers: {
-          'Accept-Ranges': 'bytes',
-          'Content-Length': String(size),
-          'Content-Type': mime
-        }
-      }
-    )
+    const range = req.headers.get('Range') ?? req.headers.get('range')
+    return net.fetch(pathToFileURL(filePath).href, {
+      ...(range ? { headers: { Range: range } } : {}),
+      bypassCustomProtocolHandlers: true
+    })
   })
 
   createWindow()
+})
+
+app.on('before-quit', () => {
+  for (const previewPath of previewFiles) {
+    try {
+      unlinkSync(previewPath)
+    } catch {
+      // ignore
+    }
+  }
+  previewFiles.clear()
 })
 
 app.on('window-all-closed', () => {

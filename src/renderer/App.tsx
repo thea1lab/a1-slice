@@ -376,6 +376,12 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 export default function App(): React.JSX.Element {
   const [state, dispatch] = useReducer(wizardReducer, initialState)
 
+  useEffect(() => {
+    if (state.videoPath) {
+      window.api.allowVideoPath(state.videoPath)
+    }
+  }, [state.videoPath])
+
   // Load settings on mount
   useEffect(() => {
     window.api.loadSettings().then((s) => {

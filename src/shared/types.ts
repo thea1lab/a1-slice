@@ -94,6 +94,12 @@ export interface CutResult {
   error?: string
 }
 
+export interface ClipPreviewResult {
+  success: boolean
+  previewPath?: string
+  error?: string
+}
+
 export interface ClipSegmentWithStatus extends ClipSegment {
   id: string
   approved: boolean

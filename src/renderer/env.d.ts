@@ -6,6 +6,7 @@ import type {
   TranscribeResult,
   AnalyzeResult,
   CutResult,
+  ClipPreviewResult,
   CheckTranscriptResult,
   CheckAnalysisResult
 } from '../shared/types'
@@ -14,6 +15,10 @@ declare global {
   interface Window {
     api: {
       selectVideo(): Promise<string | null>
+      allowVideoPath(videoPath: string): Promise<void>
+      createClipPreview(videoPath: string, startMs: number, endMs: number): Promise<ClipPreviewResult>
+      releaseClipPreview(previewPath: string): Promise<void>
+      readClipPreview(previewPath: string): Promise<Uint8Array | null>
       checkTranscript(videoPath: string): Promise<CheckTranscriptResult>
       checkAnalysis(videoPath: string): Promise<CheckAnalysisResult>
       transcribeVideo(videoPath: string, language?: string, entropyThold?: number, maxContext?: number, beamSize?: number, temperatureInc?: number): Promise<TranscribeResult>

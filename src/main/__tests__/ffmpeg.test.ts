@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatSrtTime, generateSrt, parseFfmpegDuration, buildCutClipArgs } from '../ffmpeg'
+import { formatSrtTime, generateSrt, parseFfmpegDuration, buildCutClipArgs, buildPreviewClipArgs } from '../ffmpeg'
 
 describe('formatSrtTime', () => {
   it('formats zero', () => {
@@ -78,5 +78,16 @@ describe('buildCutClipArgs', () => {
     expect(args).toContain('aac')
     expect(args[args.indexOf('-ss') + 1]).toBe('12.5')
     expect(args[args.indexOf('-t') + 1]).toBe('30')
+  })
+})
+
+describe('buildPreviewClipArgs', () => {
+  it('cuts a small H.264 preview from the original timeline', () => {
+    const args = buildPreviewClipArgs('/in.mp4', '/preview.mp4', 5, 8)
+    expect(args).toContain('libx264')
+    expect(args).toContain('ultrafast')
+    expect(args).toContain('scale=360:-2')
+    expect(args[args.indexOf('-ss') + 1]).toBe('5')
+    expect(args[args.indexOf('-t') + 1]).toBe('8')
   })
 })

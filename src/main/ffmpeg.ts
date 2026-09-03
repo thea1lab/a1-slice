@@ -146,6 +146,53 @@ export function getVideoDurationMs(videoPath: string): Promise<number> {
   })
 }
 
+export function buildPreviewClipArgs(
+  videoPath: string,
+  outputPath: string,
+  startSec: number,
+  durationSec: number
+): string[] {
+  return [
+    '-ss', String(startSec),
+    '-i', videoPath,
+    '-t', String(durationSec),
+    '-vf', 'scale=360:-2',
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-crf', '32',
+    '-c:a', 'aac',
+    '-b:a', '64k',
+    '-ac', '1',
+    '-threads', '0',
+    '-movflags', '+faststart',
+    '-avoid_negative_ts', 'make_zero',
+    '-y',
+    outputPath
+  ]
+}
+
+export async function extractPreviewClip(
+  videoPath: string,
+  startMs: number,
+  endMs: number
+): Promise<string> {
+  const startSec = Math.max(0, startMs / 1000)
+  const durationSec = Math.max(0.2, (endMs - startMs) / 1000)
+  const outPath = join(tmpdir(), `a1slice-preview-${randomUUID()}.mp4`)
+  try {
+    await spawnFfmpeg(
+      buildPreviewClipArgs(videoPath, outPath, startSec, durationSec),
+      durationSec
+    )
+  } catch {
+    await spawnFfmpeg(
+      buildCopyClipArgs(videoPath, outPath, startSec, durationSec),
+      durationSec
+    )
+  }
+  return outPath
+}
+
 export function buildCutClipArgs(
   videoPath: string,
   outputPath: string,
@@ -167,7 +214,7 @@ export function buildCutClipArgs(
   ]
 }
 
-function buildCopyClipArgs(
+export function buildCopyClipArgs(
   videoPath: string,
   outputPath: string,
   startSec: number,

@@ -1,172 +1,226 @@
 import React, { useRef, useEffect, useState } from 'react'
-import videojs from 'video.js'
-import Player from 'video.js/dist/types/player'
-import 'video.js/dist/video-js.css'
+import { paddedPreviewRange, previewCoversRange, toPreviewSrc } from '../../shared/previewUrl'
 
 interface VideoPreviewProps {
   videoPath: string
   startMs: number
   endMs: number
+  videoDurationMs?: number
 }
 
-function sourceTypeForPath(path: string): string {
-  const lower = path.toLowerCase()
-  if (lower.endsWith('.mov')) return 'video/quicktime'
-  if (lower.endsWith('.mkv')) return 'video/x-matroska'
-  if (lower.endsWith('.avi')) return 'video/x-msvideo'
-  if (lower.endsWith('.webm')) return 'video/webm'
-  return 'video/mp4'
+interface Cover {
+  fileStartMs: number
+  fileEndMs: number
+  src: string
+  previewPath: string
 }
 
 const VideoPreview = React.memo(function VideoPreview({
   videoPath,
   startMs,
-  endMs
+  endMs,
+  videoDurationMs
 }: VideoPreviewProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
-  const playerRef = useRef<Player | null>(null)
-  const boundsRef = useRef({ startSec: startMs / 1000, endSec: endMs / 1000 })
-  const [visible, setVisible] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const coverRef = useRef<Cover | null>(null)
+  const boundsRef = useRef({ startMs, endMs })
+  boundsRef.current = { startMs, endMs }
 
-  // Keep boundsRef in sync
-  boundsRef.current = { startSec: startMs / 1000, endSec: endMs / 1000 }
+  const [inView, setInView] = useState(false)
+  const [src, setSrc] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const src = `a1slice://video?path=${encodeURIComponent(videoPath)}`
-  const sourceType = sourceTypeForPath(videoPath)
-
-  // Init / dispose player when src changes — all listeners registered here
   useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
+    const el = containerRef.current
+    if (!el) return
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) setInView(true)
+      },
+      { rootMargin: '160px' }
+    )
+    io.observe(el)
+    return () => io.disconnect()
+  }, [])
 
-    setVisible(false)
+  useEffect(() => {
+    if (!inView || !videoPath || endMs <= startMs) return
 
-    // Create <video-js> element inside the container
-    const videoEl = document.createElement('video-js')
-    videoEl.classList.add('vjs-big-play-centered')
-    container.appendChild(videoEl)
+    const existing = coverRef.current
+    if (existing && previewCoversRange(existing, startMs, endMs)) {
+      return
+    }
 
-    const player = videojs(videoEl, {
-      controls: true,
-      muted: false,
-      preload: 'metadata',
-      sources: [{ src, type: sourceType }]
+    let cancelled = false
+    let adopted = false
+    let createdPath: string | null = null
+    let createdBlob: string | null = null
+    setBusy(true)
+    setError(null)
+
+    const range = paddedPreviewRange(startMs, endMs, videoDurationMs)
+
+    void (async () => {
+      const result = await window.api.createClipPreview(
+        videoPath,
+        range.fileStartMs,
+        range.fileEndMs
+      )
+      if (cancelled) {
+        if (result.previewPath) void window.api.releaseClipPreview(result.previewPath)
+        return
+      }
+      if (!result.success || !result.previewPath) {
+        setSrc(null)
+        setError(result.error || 'Preview failed')
+        setBusy(false)
+        return
+      }
+      createdPath = result.previewPath
+
+      let previewSrc = toPreviewSrc(result.previewPath)
+      const bytes = await window.api.readClipPreview(result.previewPath)
+      if (cancelled) {
+        void window.api.releaseClipPreview(result.previewPath)
+        return
+      }
+      if (bytes && bytes.byteLength > 0) {
+        const blobUrl = URL.createObjectURL(
+          new Blob([bytes as BlobPart], { type: 'video/mp4' })
+        )
+        createdBlob = blobUrl
+        previewSrc = blobUrl
+      }
+
+      const previous = coverRef.current
+      coverRef.current = {
+        fileStartMs: range.fileStartMs,
+        fileEndMs: range.fileEndMs,
+        src: previewSrc,
+        previewPath: result.previewPath
+      }
+      adopted = true
+      setSrc(previewSrc)
+      setError(null)
+      setBusy(false)
+      if (previous) {
+        if (previous.src.startsWith('blob:')) URL.revokeObjectURL(previous.src)
+        void window.api.releaseClipPreview(previous.previewPath)
+      }
+    })().catch((err: unknown) => {
+      if (cancelled) return
+      setError(err instanceof Error ? err.message : 'Preview failed')
+      setBusy(false)
     })
 
-    playerRef.current = player
-    const revealTimer = window.setTimeout(() => setVisible(true), 1500)
+    return () => {
+      cancelled = true
+      if (adopted) return
+      if (createdBlob) URL.revokeObjectURL(createdBlob)
+      if (createdPath) void window.api.releaseClipPreview(createdPath)
+    }
+  }, [inView, videoPath, startMs, endMs, videoDurationMs])
 
-    let seeking = false
+  useEffect(() => {
+    return () => {
+      const cover = coverRef.current
+      if (!cover) return
+      if (cover.src.startsWith('blob:')) URL.revokeObjectURL(cover.src)
+      void window.api.releaseClipPreview(cover.previewPath)
+      coverRef.current = null
+    }
+  }, [])
 
-    const seekToStart = (): void => {
-      player.currentTime(boundsRef.current.startSec)
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !src) return
+
+    const localStart = (): number => {
+      const cover = coverRef.current
+      if (!cover) return 0
+      return Math.max(0, (boundsRef.current.startMs - cover.fileStartMs) / 1000)
+    }
+    const localEnd = (): number => {
+      const cover = coverRef.current
+      if (!cover) return Number.isFinite(video.duration) ? video.duration : 0
+      return Math.max(localStart() + 0.2, (boundsRef.current.endMs - cover.fileStartMs) / 1000)
     }
 
     const onLoadedMetadata = (): void => {
-      seekToStart()
-      setVisible(true)
-    }
-
-    const onCanPlay = (): void => {
-      seekToStart()
-      setVisible(true)
-    }
-
-    const onSeeked = (): void => {
-      seeking = false
-      setVisible(true)
-    }
-
-    const loopToStart = (): void => {
-      player.currentTime(boundsRef.current.startSec)
-      player.play()
+      video.currentTime = localStart()
     }
 
     const onTimeUpdate = (): void => {
-      if (seeking) return
-      const current = player.currentTime()
-      if (current !== undefined && current >= boundsRef.current.endSec) {
-        loopToStart()
+      if (video.paused) return
+      if (video.currentTime >= localEnd()) {
+        video.pause()
+        video.currentTime = localStart()
       }
     }
 
     const onEnded = (): void => {
-      loopToStart()
+      video.currentTime = localStart()
     }
 
-    const onPlay = (): void => {
-      if (seeking) return
-      const current = player.currentTime()
-      const { startSec, endSec } = boundsRef.current
-      if (current !== undefined && (current < startSec || current >= endSec)) {
-        seeking = true
-        player.currentTime(startSec)
-      }
+    const onMediaError = (): void => {
+      const cover = coverRef.current
+      if (!cover || !cover.src.startsWith('blob:')) return
+      const fallback = toPreviewSrc(cover.previewPath)
+      cover.src = fallback
+      setSrc(fallback)
     }
 
-    player.one('loadedmetadata', onLoadedMetadata)
-    player.one('canplay', onCanPlay)
-    player.on('seeked', onSeeked)
-    player.on('timeupdate', onTimeUpdate)
-    player.on('play', onPlay)
-    player.on('ended', onEnded)
-    player.on('error', () => setVisible(true))
-
-    // Preserve scroll position across fullscreen toggle.
-    // The browser resets scroll BEFORE fullscreenchange fires, so we capture
-    // the scroll position on pointerdown (which always precedes fullscreen).
-    const scrollParent = container.closest('.overflow-y-auto') as HTMLElement | null
-    let savedScrollTop = scrollParent?.scrollTop ?? 0
-    const onPointerDown = (): void => {
-      savedScrollTop = scrollParent?.scrollTop ?? 0
-    }
-    container.addEventListener('pointerdown', onPointerDown, true)
-
-    const onFullscreenChange = (): void => {
-      if (!player.isFullscreen()) {
-        requestAnimationFrame(() => {
-          if (scrollParent) {
-            scrollParent.scrollTop = savedScrollTop
-          }
-        })
-      }
-    }
-    player.on('fullscreenchange', onFullscreenChange)
-
-    // If metadata already available (cached), seek immediately
-    if (player.readyState() >= 1) {
-      seekToStart()
-      setVisible(true)
-    }
+    video.addEventListener('loadedmetadata', onLoadedMetadata)
+    video.addEventListener('timeupdate', onTimeUpdate)
+    video.addEventListener('ended', onEnded)
+    video.addEventListener('error', onMediaError)
+    if (video.readyState >= 1) onLoadedMetadata()
 
     return () => {
-      window.clearTimeout(revealTimer)
-      container.removeEventListener('pointerdown', onPointerDown, true)
-      if (playerRef.current) {
-        playerRef.current.dispose()
-        playerRef.current = null
-      }
+      video.removeEventListener('loadedmetadata', onLoadedMetadata)
+      video.removeEventListener('timeupdate', onTimeUpdate)
+      video.removeEventListener('ended', onEnded)
+      video.removeEventListener('error', onMediaError)
     }
-  }, [src, sourceType])
+  }, [src])
 
-  // Re-seek when bounds change (player already exists)
   useEffect(() => {
-    const player = playerRef.current
-    if (!player) return
-
-    if (player.readyState() >= 1) {
-      player.currentTime(startMs / 1000)
+    const video = videoRef.current
+    const cover = coverRef.current
+    if (!video || !cover || video.readyState < 1) return
+    const t = Math.max(0, (startMs - cover.fileStartMs) / 1000)
+    if (Math.abs(video.currentTime - t) > 0.2) {
+      video.currentTime = t
     }
   }, [startMs, endMs])
 
   return (
-    <div className="w-full rounded-lg bg-black aspect-video overflow-hidden">
-      <div
-        ref={containerRef}
-        data-vjs-player
-        className="w-full h-full transition-opacity duration-150"
-        style={{ opacity: visible ? 1 : 0 }}
-      />
+    <div
+      ref={containerRef}
+      className="relative w-full rounded-lg bg-black aspect-video overflow-hidden"
+    >
+      {src && (
+        <video
+          ref={videoRef}
+          src={src}
+          controls
+          playsInline
+          preload="auto"
+          className="w-full h-full object-contain bg-black"
+        />
+      )}
+      {busy && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/55 text-xs text-neutral-400">
+          Cutting preview…
+        </div>
+      )}
+      {error && !busy && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-3 text-center text-xs text-neutral-400">
+          {error}
+        </div>
+      )}
     </div>
   )
 })

@@ -121,6 +121,7 @@ const ClipCard = React.memo(function ClipCard({
           videoPath={videoPath}
           startMs={clip.startMs}
           endMs={clip.endMs}
+          videoDurationMs={videoDurationMs}
         />
       </div>
       <div className="flex-1 p-4 flex flex-col justify-center gap-2 min-w-0">
