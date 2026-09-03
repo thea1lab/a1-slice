@@ -37,13 +37,16 @@ export function generateSrt(segments: TranscriptSegment[]): string {
     .join('\n')
 }
 
-function parseProgress(stderr: string): number | null {
-  // ffmpeg outputs "time=HH:MM:SS.mm" in progress lines
-  const match = stderr.match(/time=(\d+):(\d+):(\d+)\.(\d+)/)
-  if (!match) return null
-  const h = parseInt(match[1], 10)
-  const m = parseInt(match[2], 10)
-  const s = parseInt(match[3], 10)
+export function parseFfmpegProgress(stderr: string): number | null {
+  let last: RegExpExecArray | null = null
+  const re = /time=(\d+):(\d+):(\d+)\.(\d+)/g
+  for (let match = re.exec(stderr); match; match = re.exec(stderr)) {
+    last = match
+  }
+  if (!last) return null
+  const h = parseInt(last[1], 10)
+  const m = parseInt(last[2], 10)
+  const s = parseInt(last[3], 10)
   return h * 3600 + m * 60 + s
 }
 
@@ -59,7 +62,7 @@ function spawnFfmpeg(
     proc.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString()
       if (onProgress && durationSec && durationSec > 0) {
-        const currentSec = parseProgress(stderr)
+        const currentSec = parseFfmpegProgress(stderr)
         if (currentSec != null) {
           onProgress(Math.min(100, Math.round((currentSec / durationSec) * 100)))
         }
@@ -181,13 +184,13 @@ export function buildPreviewClipArgs(
     '-ss', String(startSec),
     '-i', videoPath,
     '-t', String(durationSec),
-    '-vf', 'scale=360:-2',
+    '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p',
     '-c:v', 'libx264',
-    '-preset', 'ultrafast',
-    '-crf', '32',
+    '-preset', 'veryfast',
+    '-crf', '18',
+    '-pix_fmt', 'yuv420p',
     '-c:a', 'aac',
-    '-b:a', '64k',
-    '-ac', '1',
+    '-b:a', '192k',
     '-threads', '0',
     '-movflags', '+faststart',
     '-avoid_negative_ts', 'make_zero',
@@ -199,7 +202,8 @@ export function buildPreviewClipArgs(
 export async function extractPreviewClip(
   videoPath: string,
   startMs: number,
-  endMs: number
+  endMs: number,
+  onProgress?: (percent: number) => void
 ): Promise<string> {
   const startSec = Math.max(0, startMs / 1000)
   const durationSec = Math.max(0.2, (endMs - startMs) / 1000)
@@ -207,12 +211,28 @@ export async function extractPreviewClip(
   try {
     await spawnFfmpeg(
       buildPreviewClipArgs(videoPath, outPath, startSec, durationSec),
-      durationSec
+      durationSec,
+      onProgress
     )
   } catch {
     await spawnFfmpeg(
-      buildCopyClipArgs(videoPath, outPath, startSec, durationSec),
-      durationSec
+      [
+        '-ss', String(startSec),
+        '-i', videoPath,
+        '-t', String(durationSec),
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p',
+        '-c:v', 'mpeg4',
+        '-q:v', '5',
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-movflags', '+faststart',
+        '-avoid_negative_ts', 'make_zero',
+        '-y',
+        outPath
+      ],
+      durationSec,
+      onProgress
     )
   }
   return outPath

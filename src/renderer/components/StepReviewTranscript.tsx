@@ -73,17 +73,25 @@ export default function StepReviewTranscript({
 
   return (
     <div className="flex flex-col gap-6 max-w-2xl mx-auto w-full py-4">
-      {/* Transcript */}
-      <h2 className="text-base font-semibold text-neutral-200 -mb-3">
-        Transcript ({segments.length} segments)
-      </h2>
-      <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-5 shadow-lg space-y-3">
+      <div>
+        <h2 className="text-lg font-medium text-neutral-100">
+          Transcript
+        </h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          Check the text, then find clips. {segments.length} segments.
+        </p>
+      </div>
+      <div className="w-full space-y-3">
         <TranscriptViewer segments={segments} />
       </div>
 
-      {/* LLM Settings */}
-      <h2 className="text-base font-semibold text-neutral-200 -mb-3">LLM Settings</h2>
-      <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-5 space-y-4 shadow-lg">
+      <div>
+        <h2 className="text-base font-medium text-neutral-100">Find clips</h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          The model reads the transcript and marks start and end times.
+        </p>
+      </div>
+      <div className="w-full space-y-4">
         <div className="flex gap-3">
           <label className="flex flex-col gap-1.5 text-xs text-neutral-400 w-40">
             Provider
@@ -209,7 +217,7 @@ export default function StepReviewTranscript({
                 disabled={!canAnalyze}
                 className="flex-1 bg-accent hover:bg-accent-hover text-black font-semibold rounded-lg py-2.5 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-accent"
               >
-                Analyze Transcript
+                Find clips
               </button>
             ) : (
               <button

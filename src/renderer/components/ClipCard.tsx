@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
-import VideoPreview from './VideoPreview'
+import VideoPreview, { type VideoPreviewHandle } from './VideoPreview'
 import type { ClipCrop, ClipSegmentWithStatus, CropRatio } from '../../shared/types'
 import { DEFAULT_CROP } from '../../shared/types'
 import { clamp, cropFromPrevious } from '../../shared/crop'
-import { PREVIEW_PAD_MS } from '../../shared/previewUrl'
+import { PREVIEW_PAD_MS, pointerToSourceMs } from '../../shared/previewUrl'
 
 const MIN_CLIP_MS = 500
 
@@ -73,12 +73,19 @@ const ClipCard = React.memo(function ClipCard({
   onUpdateCrop
 }: ClipCardProps): React.JSX.Element {
   const crop = clip.crop ?? DEFAULT_CROP
+  const playerRef = useRef<VideoPreviewHandle>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const [startInput, setStartInput] = useState(msToHMMSSs(clip.startMs))
   const [endInput, setEndInput] = useState(msToHMMSSs(clip.endMs))
   const [playMs, setPlayMs] = useState(clip.startMs)
   const [seekToMs, setSeekToMs] = useState(clip.startMs)
   const [seekNonce, setSeekNonce] = useState(0)
   const [toast, setToast] = useState<string | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const [volume, setVolume] = useState(1)
+  const [muted, setMuted] = useState(false)
+  const [mediaSize, setMediaSize] = useState<{ width: number; height: number } | null>(null)
+  const [fullscreen, setFullscreen] = useState(false)
   const trackRef = useRef<HTMLDivElement>(null)
 
   const maxMs =
@@ -89,6 +96,8 @@ const ClipCard = React.memo(function ClipCard({
   const srcStart = Math.max(0, clip.startMs - PREVIEW_PAD_MS)
   const srcEnd = Math.min(maxMs, clip.endMs + PREVIEW_PAD_MS)
   const span = Math.max(1, srcEnd - srcStart)
+  const effectiveVolume = muted ? 0 : volume
+  const inTail = playMs < clip.startMs - 40 || playMs > clip.endMs + 40
 
   useEffect(() => {
     setStartInput(msToHMMSSs(clip.startMs))
@@ -105,11 +114,39 @@ const ClipCard = React.memo(function ClipCard({
     setToast(null)
   }, [clip.id, clip.startMs])
 
+  useEffect(() => {
+    const onFs = (): void => {
+      setFullscreen(document.fullscreenElement === rootRef.current)
+    }
+    document.addEventListener('fullscreenchange', onFs)
+    return () => document.removeEventListener('fullscreenchange', onFs)
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault()
+        playerRef.current?.togglePlay()
+      } else if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault()
+        toggleFullscreen()
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault()
+        setMuted((on) => !on)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const seek = (ms: number): void => {
-    const next = clamp(ms, clip.startMs, clip.endMs)
+    const next = clamp(ms, srcStart, srcEnd)
     setPlayMs(next)
     setSeekToMs(next)
     setSeekNonce((n) => n + 1)
+    playerRef.current?.seek(next)
   }
 
   const handleStartBlur = (): void => {
@@ -143,39 +180,26 @@ const ClipCard = React.memo(function ClipCard({
   }
 
   const msToX = (ms: number, width: number): number => ((ms - srcStart) / span) * width
-  const xToMs = (x: number, width: number): number => srcStart + (x / width) * span
 
   const pointerMs = (clientX: number): number => {
     const track = trackRef.current
     if (!track) return clip.startMs
     const rect = track.getBoundingClientRect()
-    return xToMs(clamp(clientX - rect.left, 0, rect.width), rect.width)
+    return pointerToSourceMs(clientX, rect.left, rect.width, srcStart, srcEnd)
   }
 
-  const onTimelinePointer = (
-    e: React.PointerEvent,
-    mode: 'in' | 'out' | 'play' | 'auto'
-  ): void => {
-    if (!onUpdateTimes) return
+  const onTimelinePointer = (e: React.PointerEvent, mode: 'in' | 'out' | 'play'): void => {
+    if ((mode === 'in' || mode === 'out') && !onUpdateTimes) return
     e.preventDefault()
     e.stopPropagation()
-    let current: 'in' | 'out' | 'play'
-    if (mode === 'auto') {
-      const ms = pointerMs(e.clientX)
-      if (Math.abs(ms - clip.startMs) < 400) current = 'in'
-      else if (Math.abs(ms - clip.endMs) < 400) current = 'out'
-      else current = 'play'
-    } else {
-      current = mode
-    }
 
     const apply = (clientX: number): void => {
       const ms = pointerMs(clientX)
-      if (current === 'in') {
+      if (mode === 'in' && onUpdateTimes) {
         const startMs = clamp(ms, srcStart, clip.endMs - MIN_CLIP_MS)
         onUpdateTimes(clip.id, startMs, clip.endMs)
         seek(startMs)
-      } else if (current === 'out') {
+      } else if (mode === 'out' && onUpdateTimes) {
         const endMs = clamp(ms, clip.startMs + MIN_CLIP_MS, srcEnd)
         onUpdateTimes(clip.id, clip.startMs, endMs)
         seek(endMs)
@@ -194,129 +218,220 @@ const ClipCard = React.memo(function ClipCard({
     window.addEventListener('pointerup', up)
   }
 
+  const toggleFullscreen = (): void => {
+    const root = rootRef.current
+    if (!root) return
+    if (document.fullscreenElement === root) void document.exitFullscreen()
+    else void root.requestFullscreen()
+  }
+
   const trackWidth = 100
   const x0 = clamp(msToX(clip.startMs, trackWidth), 0, trackWidth)
   const x1 = clamp(msToX(clip.endMs, trackWidth), 0, trackWidth)
   const xp = clamp(msToX(playMs, trackWidth), 0, trackWidth)
 
   return (
-    <div className="flex flex-col">
-      <div className="relative">
+    <div ref={rootRef} data-player-root className="flex flex-col flex-1 min-h-0 bg-black">
+      <div className="relative flex-1 min-h-0">
         <VideoPreview
+          ref={playerRef}
           videoPath={videoPath}
           startMs={clip.startMs}
           endMs={clip.endMs}
+          playStartMs={srcStart}
+          playEndMs={srcEnd}
           videoDurationMs={videoDurationMs}
           crop={crop}
+          volume={effectiveVolume}
           onCropChange={onUpdateCrop ? (next) => onUpdateCrop(clip.id, next) : undefined}
           onPlayheadMs={setPlayMs}
+          onPlayingChange={setPlaying}
+          onMediaInfo={setMediaSize}
           seekToMs={seekToMs}
           seekNonce={seekNonce}
           editor
         />
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-black/55 to-transparent px-5 pt-4 pb-10">
+          <h3 className="text-[15px] font-medium text-white truncate">{clip.title}</h3>
+          <p className="text-[11px] text-white/55 truncate">
+            {formatDuration(clip.startMs, clip.endMs)}
+            {clip.topic ? ` · ${clip.topic}` : ''}
+            {mediaSize ? ` · ${mediaSize.width}×${mediaSize.height}` : ''}
+          </p>
+        </div>
         {toast && (
-          <div className="absolute left-3 top-3 z-20 bg-bg-card/95 border border-accent/45 text-accent text-xs font-semibold px-2.5 py-1.5 rounded-lg">
+          <div className="absolute left-4 top-14 z-20 bg-black/80 text-white text-xs px-2.5 py-1.5 rounded">
             {toast}
+          </div>
+        )}
+        {inTail && (
+          <div className="absolute right-4 top-3 z-20 text-[11px] text-white/70">
+            Outside clip
           </div>
         )}
       </div>
 
-      <div className="p-4 flex flex-col gap-3.5">
-        <div className="flex items-baseline justify-between gap-3">
-          <h3 className="text-lg font-semibold text-neutral-200 min-w-0 truncate">
-            {clip.title}
-            {clip.topic && (
-              <span className="ml-2 text-sm font-normal text-neutral-500">{clip.topic}</span>
-            )}
-          </h3>
-        </div>
-
-        {onUpdateTimes && (
-          <div className="flex flex-col gap-2">
-            <div
-              className="relative h-10 bg-bg-input border border-white/12 rounded-[10px] cursor-pointer select-none touch-none"
-              onPointerDown={(e) => onTimelinePointer(e, 'auto')}
-            >
+      <div className="shrink-0 bg-black px-4 pt-2 pb-3 flex flex-col gap-2">
+        <div
+          className="relative h-7 w-full cursor-pointer select-none touch-none"
+          onPointerDown={(e) => onTimelinePointer(e, 'play')}
+        >
+          <div
+            ref={trackRef}
+            className="absolute left-0 right-0 w-full top-1/2 h-1 -mt-0.5 bg-white/15 rounded-full"
+          >
               <div
-                ref={trackRef}
-                className="absolute left-[18px] right-[18px] top-1/2 h-1.5 -mt-[3px] bg-white/10 rounded-full"
-              >
-                <div
-                  className="absolute top-0 h-full bg-accent rounded-full"
-                  style={{ left: `${x0}%`, width: `${Math.max(1, x1 - x0)}%` }}
-                />
-                <button
-                  type="button"
-                  aria-label="Start"
-                  className="absolute top-1/2 w-3.5 h-[26px] -ml-[7px] -mt-[13px] bg-accent border-2 border-bg-base rounded-[5px] cursor-ew-resize z-[2]"
-                  style={{ left: `${x0}%` }}
-                  onPointerDown={(e) => onTimelinePointer(e, 'in')}
-                />
-                <button
-                  type="button"
-                  aria-label="End"
-                  className="absolute top-1/2 w-3.5 h-[26px] -ml-[7px] -mt-[13px] bg-accent border-2 border-bg-base rounded-[5px] cursor-ew-resize z-[2]"
-                  style={{ left: `${x1}%` }}
-                  onPointerDown={(e) => onTimelinePointer(e, 'out')}
-                />
-                <div
-                  className="absolute top-[-10px] bottom-[-10px] w-0.5 -ml-px bg-white rounded-sm z-[3] pointer-events-none"
-                  style={{ left: `${xp}%` }}
-                />
-              </div>
+                className="absolute top-0 h-full bg-accent rounded-full"
+                style={{ left: `${x0}%`, width: `${Math.max(1, x1 - x0)}%` }}
+              />
+              {onUpdateTimes && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Start"
+                    className="absolute top-1/2 w-2 h-5 -ml-1 -mt-2.5 bg-accent rounded-sm cursor-ew-resize z-[2]"
+                    style={{ left: `${x0}%` }}
+                    onPointerDown={(e) => onTimelinePointer(e, 'in')}
+                  />
+                  <button
+                    type="button"
+                    aria-label="End"
+                    className="absolute top-1/2 w-2 h-5 -ml-1 -mt-2.5 bg-accent rounded-sm cursor-ew-resize z-[2]"
+                    style={{ left: `${x1}%` }}
+                    onPointerDown={(e) => onTimelinePointer(e, 'out')}
+                  />
+                </>
+              )}
+              <div
+                className="absolute top-[-8px] bottom-[-8px] w-px bg-white z-[3] pointer-events-none"
+                style={{ left: `${xp}%` }}
+              />
             </div>
-            <div className="flex items-center justify-between gap-2">
+          </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => playerRef.current?.togglePlay()}
+            className="w-8 h-8 shrink-0 text-white grid place-items-center hover:text-accent"
+            aria-label={playing ? 'Pause' : 'Play'}
+          >
+            {playing ? (
+              <svg width="14" height="14" viewBox="0 0 12 12" fill="currentColor">
+                <rect x="2" y="1.5" width="2.5" height="9" rx="0.5" />
+                <rect x="7.5" y="1.5" width="2.5" height="9" rx="0.5" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 12 12" fill="currentColor">
+                <path d="M3 1.5v9l7.5-4.5L3 1.5z" />
+              </svg>
+            )}
+          </button>
+
+          <span className="text-xs font-mono tabular-nums text-neutral-200 min-w-[4.6rem]">
+            {msToHMMSSs(playMs)}
+          </span>
+          <span className="text-xs text-neutral-600">/</span>
+          <span className="text-xs font-mono tabular-nums text-neutral-400 min-w-[4.6rem]">
+            {msToHMMSSs(clip.endMs)}
+          </span>
+
+          <div className="flex-1" />
+
+          {onUpdateTimes && (
+            <div className="flex items-center gap-1">
               <input
                 type="text"
                 value={startInput}
                 onChange={(e) => setStartInput(e.target.value)}
                 onBlur={handleStartBlur}
                 aria-label="Start time"
-                className="w-[4.5rem] h-7 bg-bg-input border border-white/12 rounded-lg px-2 text-neutral-300 text-xs text-center font-mono"
+                className="w-[4.4rem] h-7 bg-transparent px-1 text-white/80 text-xs text-center font-mono outline-none focus:text-white"
               />
-              <span className="text-xs font-semibold text-accent bg-accent/12 border border-accent/30 rounded-full px-2.5 py-1">
-                {formatDuration(clip.startMs, clip.endMs)}
-              </span>
+              <span className="text-white/25">–</span>
               <input
                 type="text"
                 value={endInput}
                 onChange={(e) => setEndInput(e.target.value)}
                 onBlur={handleEndBlur}
                 aria-label="End time"
-                className="w-[4.5rem] h-7 bg-bg-input border border-white/12 rounded-lg px-2 text-neutral-300 text-xs text-center font-mono"
+                className="w-[4.4rem] h-7 bg-transparent px-1 text-white/80 text-xs text-center font-mono outline-none focus:text-white"
               />
             </div>
+          )}
+
+          <div className="flex items-center gap-1.5 min-w-[7.5rem]">
+            <button
+              type="button"
+              onClick={() => setMuted((on) => !on)}
+              className="w-8 h-8 rounded-md text-neutral-300 hover:text-white grid place-items-center"
+              aria-label={muted || volume === 0 ? 'Unmute' : 'Mute'}
+            >
+              {muted || volume === 0 ? (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                  <path d="M2 6.5h2.2L7 4v8L4.2 9.5H2v-3z" fill="currentColor" />
+                  <path d="M10 6l4 4M14 6l-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M2 6.5h2.2L7 4v8L4.2 9.5H2v-3z" />
+                  <path d="M9.2 6.2a3 3 0 010 3.6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                  <path d="M11 4.8a5 5 0 010 6.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                </svg>
+              )}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={effectiveVolume}
+              onChange={(e) => {
+                const next = Number(e.target.value)
+                setVolume(next)
+                if (next > 0) setMuted(false)
+              }}
+              aria-label="Volume"
+              className="volume-slider"
+            />
           </div>
-        )}
+
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="w-8 h-8 rounded-md text-neutral-300 hover:text-white grid place-items-center"
+            aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            {fullscreen ? (
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                <path d="M5 3v2H3M11 3v2h2M3 11h2v2M13 11h-2v2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                <path d="M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            )}
+          </button>
+        </div>
 
         {onUpdateCrop && (
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <span className="w-11 shrink-0 text-xs font-medium text-neutral-400">Crop</span>
-            <div className="flex gap-2 flex-wrap">
-              {RATIO_CHIPS.map((chip) => (
-                <button
-                  key={chip.key}
-                  type="button"
-                  onClick={() => setRatio(chip.key)}
-                  className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold border transition-colors ${
-                    crop.ratio === chip.key
-                      ? 'bg-accent/15 border-accent text-accent'
-                      : 'border-white/12 text-neutral-300 hover:border-accent/45'
-                  }`}
-                >
-                  <span className={`${chip.shape} border-[1.5px] border-current rounded-[2px]`} />
-                  {chip.label}
-                </button>
-              ))}
-            </div>
+          <div className="flex items-center gap-1">
+            {RATIO_CHIPS.map((chip) => (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={() => setRatio(chip.key)}
+                className={`px-2 py-1 text-[11px] ${
+                  crop.ratio === chip.key
+                    ? 'text-accent'
+                    : 'text-white/45 hover:text-white'
+                }`}
+              >
+                {chip.label}
+              </button>
+            ))}
           </div>
         )}
-
-        <p className="text-[11px] text-neutral-500">
-          {crop.ratio === 'original'
-            ? 'Original keeps the full frame. Pick a ratio, then drag the window onto the subject.'
-            : 'Drag the window to place it. Use + / −, a corner, or scroll to zoom.'}
-        </p>
       </div>
     </div>
   )

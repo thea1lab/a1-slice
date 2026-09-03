@@ -690,8 +690,11 @@ export default function App(): React.JSX.Element {
         background: 'radial-gradient(ellipse at top, #12121e 0%, #08080f 60%)'
       }}
     >
-      {/* Decorative background elements */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+      <div
+        className={`pointer-events-none absolute inset-0 overflow-hidden ${
+          state.currentStep === 'review-slices' ? 'hidden' : ''
+        }`}
+      >
         <div
           className="absolute -top-24 -right-24 w-72 h-72 rounded-full opacity-[0.06] blur-3xl"
           style={{ background: 'rgb(240, 154, 62)' }}
@@ -720,15 +723,21 @@ export default function App(): React.JSX.Element {
         </div>
       </div>
 
-      <TitleBar />
+      <TitleBar>
+        <Stepper
+          currentStep={state.currentStep}
+          completedSteps={completedSet}
+          onStepClick={handleStepClick}
+        />
+      </TitleBar>
 
-      <Stepper
-        currentStep={state.currentStep}
-        completedSteps={completedSet}
-        onStepClick={handleStepClick}
-      />
-
-      <div className="relative flex flex-col flex-1 px-6 pb-10 overflow-y-auto custom-scrollbar">
+      <div
+        className={`relative flex flex-col flex-1 ${
+          state.currentStep === 'review-slices'
+            ? 'overflow-hidden'
+            : 'px-6 pb-10 overflow-y-auto custom-scrollbar'
+        }`}
+      >
         {renderStep()}
       </div>
     </div>

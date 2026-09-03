@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatSrtTime, generateSrt, parseFfmpegDuration, parseFfmpegVideoSize, buildCutClipArgs, buildPreviewClipArgs } from '../ffmpeg'
+import { formatSrtTime, generateSrt, parseFfmpegDuration, parseFfmpegProgress, parseFfmpegVideoSize, buildCutClipArgs, buildPreviewClipArgs } from '../ffmpeg'
 
 describe('formatSrtTime', () => {
   it('formats zero', () => {
@@ -54,6 +54,18 @@ describe('generateSrt', () => {
   })
 })
 
+describe('parseFfmpegProgress', () => {
+  it('returns the last time= line from accumulated stderr', () => {
+    const stderr =
+      'frame=1 time=00:00:00.04 bitrate=N/A\nframe=40 time=00:00:03.20 bitrate=N/A\n'
+    expect(parseFfmpegProgress(stderr)).toBe(3)
+  })
+
+  it('returns null when time= is missing', () => {
+    expect(parseFfmpegProgress('frame=1 fps=30')).toBeNull()
+  })
+})
+
 describe('parseFfmpegDuration', () => {
   it('parses centiseconds as a fraction of a second', () => {
     expect(parseFfmpegDuration('Duration: 00:01:23.45, start: 0.000000')).toBe(
@@ -105,11 +117,16 @@ describe('buildCutClipArgs', () => {
 })
 
 describe('buildPreviewClipArgs', () => {
-  it('cuts a small H.264 preview from the original timeline', () => {
+  it('re-encodes at native size into Chromium-safe H.264 4:2:0', () => {
     const args = buildPreviewClipArgs('/in.mp4', '/preview.mp4', 5, 8)
     expect(args).toContain('libx264')
-    expect(args).toContain('ultrafast')
-    expect(args).toContain('scale=360:-2')
+    expect(args).toContain('veryfast')
+    expect(args).toContain('yuv420p')
+    expect(args[args.indexOf('-vf') + 1]).toBe(
+      'scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p'
+    )
+    expect(args.some((arg) => arg.includes('scale='))).toBe(true)
+    expect(args).not.toContain('copy')
     expect(args[args.indexOf('-ss') + 1]).toBe('5')
     expect(args[args.indexOf('-t') + 1]).toBe('8')
   })

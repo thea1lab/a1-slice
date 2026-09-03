@@ -5,18 +5,18 @@ import {
   dialog,
   shell,
   protocol,
-  net,
   session
 } from 'electron'
 import { join, basename, dirname, extname, resolve, normalize } from 'path'
-import { pathToFileURL } from 'url'
-import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync, statSync } from 'fs'
+import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync, statSync, createReadStream } from 'fs'
+import { Readable } from 'stream'
 
 import { extractAudio, splitWav, cutClip, getVideoDurationMs, getVideoSize, extractPreviewClip } from './ffmpeg'
 import { downloadModel, transcribeWithRetry, mergeChunkSegments, type AbortHandle } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
 import { pathFromPreviewUrl } from '../shared/previewUrl'
+import { parseByteRange, rangeResponseMeta, videoMimeForExt } from './httpRange'
 import type {
   AppSettings,
   ProgressUpdate,
@@ -102,7 +102,7 @@ function createWindow(): void {
       titleBarOverlay: {
         color: '#08080f',
         symbolColor: '#737373',
-        height: 40
+        height: 48
       }
     }),
     backgroundColor: '#0f0f1a',
@@ -188,7 +188,13 @@ async function withPreviewSlot<T>(fn: () => Promise<T>): Promise<T> {
 
 secureHandle(
   'create-clip-preview',
-  async (_event, videoPath: string, startMs: number, endMs: number): Promise<ClipPreviewResult> => {
+  async (
+    _event,
+    videoPath: string,
+    startMs: number,
+    endMs: number,
+    previewId?: string
+  ): Promise<ClipPreviewResult> => {
     if (typeof videoPath !== 'string' || !videoPath) {
       return { success: false, error: 'Missing video path' }
     }
@@ -198,7 +204,12 @@ secureHandle(
     allowVideoPath(videoPath)
     try {
       const previewPath = await withPreviewSlot(() =>
-        extractPreviewClip(videoPath, startMs, endMs)
+        extractPreviewClip(videoPath, startMs, endMs, (percent) => {
+          mainWindow?.webContents.send('preview-progress', {
+            previewId: typeof previewId === 'string' ? previewId : undefined,
+            percent
+          })
+        })
       )
       allowVideoPath(previewPath)
       previewFiles.add(previewPath)
@@ -580,7 +591,8 @@ function applyContentSecurityPolicy(): void {
 app.whenReady().then(() => {
   applyContentSecurityPolicy()
 
-  // Handle a1slice:// protocol for video preview (with range request support for seeking)
+  // Serve preview files ourselves so Range requests return 206.
+  // Chromium will not seek (currentTime stays 0) without Accept-Ranges + Content-Range.
   protocol.handle('a1slice', (req) => {
     const rawPath = pathFromPreviewUrl(req.url)
     if (!rawPath) return new Response('Missing path', { status: 400 })
@@ -591,16 +603,33 @@ app.whenReady().then(() => {
       return new Response('Forbidden', { status: 403 })
     }
 
+    let size: number
     try {
-      statSync(filePath)
+      size = statSync(filePath).size
     } catch {
       return new Response('File not found', { status: 404 })
     }
 
-    const range = req.headers.get('Range') ?? req.headers.get('range')
-    return net.fetch(pathToFileURL(filePath).href, {
-      ...(range ? { headers: { Range: range } } : {}),
-      bypassCustomProtocolHandlers: true
+    const rangeHeader = req.headers.get('Range') ?? req.headers.get('range')
+    const range = parseByteRange(rangeHeader, size)
+    if (rangeHeader && !range) {
+      return new Response(null, {
+        status: 416,
+        headers: {
+          'Content-Range': `bytes */${size}`,
+          'Accept-Ranges': 'bytes'
+        }
+      })
+    }
+
+    const mime = videoMimeForExt(ext)
+    const meta = rangeResponseMeta(size, range, mime)
+    const stream = range
+      ? createReadStream(filePath, { start: range.start, end: range.end })
+      : createReadStream(filePath)
+    return new Response(Readable.toWeb(stream) as unknown as ReadableStream, {
+      status: meta.status,
+      headers: meta.headers
     })
   })
 

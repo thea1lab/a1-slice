@@ -40,6 +40,39 @@ export function previewCoversRange(
   return startMs >= cover.fileStartMs && endMs <= cover.fileEndMs
 }
 
+export function previewLocalTime(sourceMs: number, fileStartMs: number): number {
+  return Math.max(0, (sourceMs - fileStartMs) / 1000)
+}
+
+const PLAY_SNAP_EPS = 0.05
+
+export function playbackTimeOnPlay(
+  currentTime: number,
+  inPoint: number,
+  outPoint: number
+): number {
+  if (!Number.isFinite(currentTime)) return inPoint
+  if (currentTime <= PLAY_SNAP_EPS && inPoint > PLAY_SNAP_EPS) return inPoint
+  if (currentTime >= outPoint - PLAY_SNAP_EPS) return inPoint
+  return currentTime
+}
+
+export function shouldPublishPlayhead(seeking: boolean, holding: boolean): boolean {
+  return !seeking && !holding
+}
+
+export function pointerToSourceMs(
+  clientX: number,
+  trackLeft: number,
+  trackWidth: number,
+  srcStart: number,
+  srcEnd: number
+): number {
+  if (!(trackWidth > 0) || !Number.isFinite(trackWidth)) return srcStart
+  const x = Math.min(trackWidth, Math.max(0, clientX - trackLeft))
+  return srcStart + (x / trackWidth) * Math.max(1, srcEnd - srcStart)
+}
+
 export function toPreviewSrc(filePath: string): string {
   const posix = filePath.replace(/\\/g, '/')
   return `a1slice://preview/${utf8ToBase64Url(posix)}`

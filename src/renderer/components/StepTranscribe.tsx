@@ -16,52 +16,46 @@ export default function StepTranscribe({
   onRetry
 }: StepTranscribeProps): React.JSX.Element {
   return (
-    <div className="flex flex-col items-center justify-center flex-1 gap-6 max-w-lg mx-auto w-full">
-      <h2 className="text-base font-semibold text-neutral-200 self-start -mb-3">Transcribing Video</h2>
-      <div className="w-full bg-bg-card border border-white/7 rounded-2xl p-6 space-y-5 shadow-lg">
-
-        {error ? (
-          <div className="space-y-4">
-            {error === 'Cancelled' ? (
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-neutral-400" />
-                <span className="text-sm text-neutral-400 font-medium">Cancelled</span>
-              </div>
-            ) : (
-              <>
-                <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-red-400" />
-                  <span className="text-sm text-red-300 font-medium">Error</span>
-                </div>
-                <p className="text-sm text-neutral-400">{error}</p>
-              </>
-            )}
-            <button
-              onClick={onRetry}
-              className="w-full bg-bg-input border border-white/12 hover:border-white/25 text-neutral-200 font-medium rounded-lg py-2 text-sm transition-colors"
-            >
-              Try Again
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <ProgressBar
-              percent={percent}
-              label={message}
-              sublabel={`${percent}%`}
-            />
-            <p className="text-[11px] text-neutral-600">
-              If transcription gets stuck or loops, cancel and adjust whisper parameters in Step 1 → Advanced (raise entropy threshold or lower max context).
-            </p>
-            <button
-              onClick={onCancel}
-              className="w-full bg-red-800 hover:bg-red-700 text-white font-medium rounded-lg py-2.5 text-sm transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        )}
+    <div className="flex flex-col justify-center flex-1 gap-5 max-w-lg mx-auto w-full">
+      <div>
+        <h2 className="text-lg font-medium text-neutral-100">Transcribing</h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          Turning the audio into text. Stay on this screen until it finishes.
+        </p>
       </div>
+
+      {error ? (
+        <div className="space-y-4">
+          {error === 'Cancelled' ? (
+            <p className="text-sm text-neutral-400">Cancelled.</p>
+          ) : (
+            <p className="text-sm text-red-300">{error}</p>
+          )}
+          <button
+            onClick={onRetry}
+            className="w-full bg-bg-input border border-white/12 hover:border-white/25 text-neutral-200 font-medium rounded-lg py-2 text-sm transition-colors"
+          >
+            Try again
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <ProgressBar
+            percent={percent}
+            label={message || 'Working'}
+            sublabel={`${percent}%`}
+          />
+          <p className="text-[11px] text-neutral-600">
+            If this stalls, cancel and raise entropy or lower max context under Advanced on Select.
+          </p>
+          <button
+            onClick={onCancel}
+            className="text-sm text-white/50 hover:text-white"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
     </div>
   )
 }

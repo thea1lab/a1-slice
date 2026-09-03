@@ -22,9 +22,10 @@ contextBridge.exposeInMainWorld('api', {
   createClipPreview: (
     videoPath: string,
     startMs: number,
-    endMs: number
+    endMs: number,
+    previewId?: string
   ): Promise<ClipPreviewResult> =>
-    ipcRenderer.invoke('create-clip-preview', videoPath, startMs, endMs),
+    ipcRenderer.invoke('create-clip-preview', videoPath, startMs, endMs, previewId),
 
   releaseClipPreview: (previewPath: string): Promise<void> =>
     ipcRenderer.invoke('release-clip-preview', previewPath),
@@ -67,6 +68,25 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('pipeline-progress', handler)
     return () => {
       ipcRenderer.removeListener('pipeline-progress', handler)
+    }
+  },
+
+  onPreviewProgress: (
+    callback: (update: { previewId?: string; percent: number }) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      update: { previewId?: string; percent: number } | number
+    ): void => {
+      if (typeof update === 'number') {
+        callback({ percent: update })
+        return
+      }
+      callback(update)
+    }
+    ipcRenderer.on('preview-progress', handler)
+    return () => {
+      ipcRenderer.removeListener('preview-progress', handler)
     }
   },
 

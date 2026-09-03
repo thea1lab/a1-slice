@@ -55,8 +55,8 @@ export default function StepReviewSlices({
 
   if (!clip) {
     return (
-      <div className="flex flex-col gap-4 w-full py-4 px-2">
-        <p className="text-sm text-neutral-400">No clips to review.</p>
+      <div className="flex flex-1 items-center justify-center">
+        <p className="text-sm text-white/50">No clips to review.</p>
       </div>
     )
   }
@@ -68,34 +68,9 @@ export default function StepReviewSlices({
   }
 
   return (
-    <div className="flex flex-col gap-4 w-full max-w-3xl mx-auto py-4 px-2">
-      <div className="flex items-center justify-between px-1">
-        <h2 className="text-base font-semibold text-neutral-200">
-          {approvedCount} of {clips.length} clips kept
-        </h2>
-        <span className="text-sm text-neutral-500">
-          Clip {safeIndex + 1} of {clips.length}
-        </span>
-      </div>
-
-      <div className="grid grid-cols-[48px_minmax(0,1fr)_48px] items-center gap-2">
-        <button
-          type="button"
-          aria-label="Previous clip"
-          disabled={safeIndex === 0}
-          onClick={() => setIndex(safeIndex - 1)}
-          className="w-12 h-12 rounded-full border border-white/12 bg-bg-card text-neutral-200 grid place-items-center hover:border-accent/50 hover:text-accent disabled:opacity-25 disabled:hover:border-white/12 disabled:hover:text-neutral-200"
-        >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
-
-        <article
-          className={`bg-bg-card border rounded-2xl overflow-hidden ${
-            clip.approved ? 'border-accent/30' : 'border-white/7 opacity-70'
-          }`}
-        >
+    <div className="flex flex-col flex-1 min-h-0 w-full bg-black">
+      <div className="relative flex-1 min-h-0">
+        <div className={`h-full min-h-0 flex flex-col ${clip.approved ? '' : 'opacity-50'}`}>
           <ClipCard
             clip={clip}
             clips={clips}
@@ -105,62 +80,63 @@ export default function StepReviewSlices({
             onUpdateTimes={onUpdateClipTimes}
             onUpdateCrop={onUpdateClipCrop}
           />
-          <div className="flex items-stretch gap-2.5 px-4 pb-4">
-            <button
-              type="button"
-              onClick={discard}
-              className="shrink-0 rounded-xl px-4 py-3 text-sm font-semibold border border-white/14 text-neutral-300 hover:border-red-400/70 hover:text-red-400"
-            >
-              {clip.approved ? 'Discard clip' : 'Restore clip'}
-            </button>
-            <button
-              type="button"
-              onClick={onSlice}
-              disabled={approvedCount === 0}
-              className="flex-1 bg-accent hover:bg-accent-hover text-black font-bold rounded-xl px-5 py-3.5 text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-accent"
-            >
-              Save {approvedCount} clip{approvedCount !== 1 ? 's' : ''}
-            </button>
-          </div>
-        </article>
+        </div>
 
+        <button
+          type="button"
+          aria-label="Previous clip"
+          disabled={safeIndex === 0}
+          onClick={() => setIndex(safeIndex - 1)}
+          className="absolute left-2 top-[42%] z-20 w-9 h-9 text-white/40 hover:text-white disabled:opacity-0"
+        >
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+            <path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
         <button
           type="button"
           aria-label="Next clip"
           disabled={safeIndex >= clips.length - 1}
           onClick={() => setIndex(safeIndex + 1)}
-          className="w-12 h-12 rounded-full border border-white/12 bg-bg-card text-neutral-200 grid place-items-center hover:border-accent/50 hover:text-accent disabled:opacity-25 disabled:hover:border-white/12 disabled:hover:text-neutral-200"
+          className="absolute right-2 top-[42%] z-20 w-9 h-9 text-white/40 hover:text-white disabled:opacity-0"
         >
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-            <path d="M7.5 4.5L13 10l-5.5 5.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+            <path d="M7.5 4.5L13 10l-5.5 5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
       </div>
 
-      <div className="flex justify-center gap-2">
-        {clips.map((c, i) => (
-          <button
-            key={c.id}
-            type="button"
-            title={c.title}
-            onClick={() => setIndex(i)}
-            className={`w-2.5 h-2.5 rounded-full border-0 ${
-              i === safeIndex
-                ? 'bg-accent scale-125'
-                : c.approved
-                  ? 'bg-white/20'
-                  : 'bg-transparent shadow-[inset_0_0_0_1.5px_rgba(240,113,120,0.8)]'
-            }`}
-          />
-        ))}
+      <div className="shrink-0 flex items-center gap-3 px-4 py-2.5 bg-black">
+        <span className="text-xs tabular-nums text-white/45 min-w-[3.5rem]">
+          {safeIndex + 1} / {clips.length}
+        </span>
+        <span className="text-xs text-white/35">
+          {approvedCount} kept
+        </span>
+        <div className="flex-1" />
+        <button
+          type="button"
+          onClick={discard}
+          className="text-sm text-white/50 hover:text-white px-2 py-1"
+        >
+          {clip.approved ? 'Drop' : 'Keep'}
+        </button>
+        <button
+          type="button"
+          onClick={onSlice}
+          disabled={approvedCount === 0}
+          className="text-sm font-medium text-black bg-accent hover:bg-accent-hover rounded px-3.5 py-1.5 disabled:opacity-35 disabled:hover:bg-accent"
+        >
+          Export {approvedCount}
+        </button>
       </div>
 
       {rawResponse && (
-        <details className="px-2">
-          <summary className="text-xs text-neutral-500 cursor-pointer hover:text-neutral-400 transition-colors">
-            View raw LLM response
+        <details className="px-4 pb-2 bg-black">
+          <summary className="text-[11px] text-white/30 cursor-pointer hover:text-white/50">
+            Model output
           </summary>
-          <pre className="mt-2 p-3 bg-bg-input border border-white/7 rounded-lg text-xs text-neutral-400 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap break-words">
+          <pre className="mt-2 p-2 text-[11px] text-white/45 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
             {rawResponse}
           </pre>
         </details>

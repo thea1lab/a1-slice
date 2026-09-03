@@ -16,7 +16,7 @@ declare global {
     api: {
       selectVideo(): Promise<string | null>
       allowVideoPath(videoPath: string): Promise<void>
-      createClipPreview(videoPath: string, startMs: number, endMs: number): Promise<ClipPreviewResult>
+      createClipPreview(videoPath: string, startMs: number, endMs: number, previewId?: string): Promise<ClipPreviewResult>
       releaseClipPreview(previewPath: string): Promise<void>
       readClipPreview(previewPath: string): Promise<Uint8Array | null>
       checkTranscript(videoPath: string): Promise<CheckTranscriptResult>
@@ -35,6 +35,7 @@ declare global {
       ): Promise<CutResult>
       cancelPipeline(): void
       onProgress(callback: (update: ProgressUpdate) => void): () => void
+      onPreviewProgress(callback: (update: { previewId?: string; percent: number }) => void): () => void
       openFolder(folderPath: string): Promise<void>
       loadSettings(): Promise<AppSettings>
       saveSettings(settings: AppSettings): Promise<void>

@@ -58,6 +58,27 @@ describe('snapCropCenter', () => {
     expect(snapped.cx).toBeCloseTo(r.x + r.w / 2)
     expect(snapped.cy).toBeCloseTo(r.y + r.h / 2)
   })
+
+  it('lets 4:3 reach the top of a portrait frame', () => {
+    const snapped = snapCropCenter(
+      { ratio: '4:3', cx: 0.5, cy: 0, zoom: 0 },
+      1080,
+      1920
+    )
+    const r = cropRect(snapped, 1080, 1920)
+    expect(r.y).toBeCloseTo(0)
+    expect(snapped.cy).toBeCloseTo(r.h / (2 * 1920))
+  })
+
+  it('does not pin 4:3 to the middle of a portrait frame', () => {
+    const wrongSpace = snapCropCenter(
+      { ratio: '4:3', cx: 0.5, cy: 0, zoom: 0 },
+      1,
+      1
+    )
+    const r = cropRect(wrongSpace, 1080, 1920)
+    expect(r.y).toBeGreaterThan(1)
+  })
 })
 
 describe('ffmpegCropFilter', () => {
