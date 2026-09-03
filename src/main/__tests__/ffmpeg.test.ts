@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatSrtTime, generateSrt, parseFfmpegDuration, buildCutClipArgs, buildPreviewClipArgs } from '../ffmpeg'
+import { formatSrtTime, generateSrt, parseFfmpegDuration, parseFfmpegVideoSize, buildCutClipArgs, buildPreviewClipArgs } from '../ffmpeg'
 
 describe('formatSrtTime', () => {
   it('formats zero', () => {
@@ -70,6 +70,18 @@ describe('parseFfmpegDuration', () => {
   })
 })
 
+describe('parseFfmpegVideoSize', () => {
+  it('reads width and height from a video stream line', () => {
+    const stderr =
+      'Stream #0:0(und): Video: h264 (High) (avc1 / 0x31637661), yuv420p, 1920x1080 [SAR 1:1 DAR 16:9]'
+    expect(parseFfmpegVideoSize(stderr)).toEqual({ width: 1920, height: 1080 })
+  })
+
+  it('returns null when no video size is present', () => {
+    expect(parseFfmpegVideoSize('Duration: 00:01:00.00')).toBeNull()
+  })
+})
+
 describe('buildCutClipArgs', () => {
   it('re-encodes instead of stream-copying so cuts are frame-accurate', () => {
     const args = buildCutClipArgs('/in.mp4', '/out.mp4', 12.5, 30)
@@ -78,6 +90,17 @@ describe('buildCutClipArgs', () => {
     expect(args).toContain('aac')
     expect(args[args.indexOf('-ss') + 1]).toBe('12.5')
     expect(args[args.indexOf('-t') + 1]).toBe('30')
+  })
+
+  it('adds a crop/scale filter when provided', () => {
+    const args = buildCutClipArgs(
+      '/in.mp4',
+      '/out.mp4',
+      0,
+      5,
+      'crop=608:1080:656:0,scale=1080:1920'
+    )
+    expect(args[args.indexOf('-vf') + 1]).toBe('crop=608:1080:656:0,scale=1080:1920')
   })
 })
 

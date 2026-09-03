@@ -4,7 +4,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { writeFileSync } from 'fs'
-import type { TranscriptSegment } from '../shared/types'
+import type { ClipCrop, TranscriptSegment } from '../shared/types'
+import { ffmpegCropFilter } from '../shared/crop'
 
 const FFMPEG = (ffmpegPath as string).replace('app.asar', 'app.asar.unpacked')
 
@@ -131,6 +132,14 @@ export function parseFfmpegDuration(stderr: string): number | null {
   return hours * 3600000 + minutes * 60000 + seconds * 1000 + ms
 }
 
+export function parseFfmpegVideoSize(
+  stderr: string
+): { width: number; height: number } | null {
+  const match = stderr.match(/Video:.*?(\d{2,5})x(\d{2,5})/)
+  if (!match) return null
+  return { width: parseInt(match[1], 10), height: parseInt(match[2], 10) }
+}
+
 export function getVideoDurationMs(videoPath: string): Promise<number> {
   return new Promise((resolve, reject) => {
     // ffmpeg -i with no output prints metadata (including Duration) then exits
@@ -141,6 +150,22 @@ export function getVideoDurationMs(videoPath: string): Promise<number> {
       const ms = parseFfmpegDuration(stderr)
       if (ms != null) return resolve(ms)
       reject(new Error('Could not read video duration'))
+    })
+    proc.on('error', reject)
+  })
+}
+
+export function getVideoSize(
+  videoPath: string
+): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(FFMPEG, ['-i', videoPath])
+    let stderr = ''
+    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+    proc.on('close', () => {
+      const size = parseFfmpegVideoSize(stderr)
+      if (size) return resolve(size)
+      reject(new Error('Could not read video size'))
     })
     proc.on('error', reject)
   })
@@ -197,12 +222,18 @@ export function buildCutClipArgs(
   videoPath: string,
   outputPath: string,
   startSec: number,
-  durationSec: number
+  durationSec: number,
+  videoFilter?: string
 ): string[] {
-  return [
+  const args = [
     '-ss', String(startSec),
     '-i', videoPath,
-    '-t', String(durationSec),
+    '-t', String(durationSec)
+  ]
+  if (videoFilter) {
+    args.push('-vf', videoFilter)
+  }
+  args.push(
     '-c:v', 'libx264',
     '-preset', 'veryfast',
     '-crf', '18',
@@ -211,7 +242,8 @@ export function buildCutClipArgs(
     '-avoid_negative_ts', 'make_zero',
     '-y',
     outputPath
-  ]
+  )
+  return args
 }
 
 export function buildCopyClipArgs(
@@ -237,14 +269,20 @@ export async function cutClip(
   startMs: number,
   endMs: number,
   subtitles: TranscriptSegment[],
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  crop?: ClipCrop,
+  videoSize?: { width: number; height: number }
 ): Promise<string> {
   const startSec = startMs / 1000
   const durationSec = (endMs - startMs) / 1000
+  const videoFilter =
+    crop && videoSize
+      ? ffmpegCropFilter(crop, videoSize.width, videoSize.height) ?? undefined
+      : undefined
 
   try {
     await spawnFfmpeg(
-      buildCutClipArgs(videoPath, outputPath, startSec, durationSec),
+      buildCutClipArgs(videoPath, outputPath, startSec, durationSec, videoFilter),
       durationSec,
       onProgress
     )

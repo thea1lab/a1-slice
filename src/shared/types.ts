@@ -14,12 +14,31 @@ export interface TranscriptSegment {
   text: string
 }
 
+export type CropRatio = 'original' | '4:3' | '9:16' | '1:1'
+
+export interface ClipCrop {
+  ratio: CropRatio
+  /** Center of the crop window in the source frame, 0–1. */
+  cx: number
+  cy: number
+  /** 0 = largest window that fits the ratio, 1 = punched in. */
+  zoom: number
+}
+
+export const DEFAULT_CROP: ClipCrop = {
+  ratio: 'original',
+  cx: 0.5,
+  cy: 0.5,
+  zoom: 0
+}
+
 export interface ClipSegment {
   title: string
   startMs: number
   endMs: number
   category?: 'related' | 'standalone'
   topic?: string
+  crop?: ClipCrop
 }
 
 export interface ProgressUpdate {

@@ -12,7 +12,7 @@ import { join, basename, dirname, extname, resolve, normalize } from 'path'
 import { pathToFileURL } from 'url'
 import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync, statSync } from 'fs'
 
-import { extractAudio, splitWav, cutClip, getVideoDurationMs, extractPreviewClip } from './ffmpeg'
+import { extractAudio, splitWav, cutClip, getVideoDurationMs, getVideoSize, extractPreviewClip } from './ffmpeg'
 import { downloadModel, transcribeWithRetry, mergeChunkSegments, type AbortHandle } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
@@ -506,6 +506,11 @@ secureHandle(
         videoDurationMs = await getVideoDurationMs(videoPath)
       } catch {}
 
+      let videoSize: { width: number; height: number } | undefined
+      try {
+        videoSize = await getVideoSize(videoPath)
+      } catch {}
+
       // Save transcript as a text file in the output directory
       const transcriptPath = join(outputDir, 'transcript.txt')
       writeFileSync(transcriptPath, formatTranscriptForLLM(segments), 'utf-8')
@@ -538,7 +543,10 @@ secureHandle(
           outputPath,
           clampedStartMs,
           clampedEndMs,
-          segments
+          segments,
+          undefined,
+          clip.crop,
+          videoSize
         )
       }
 

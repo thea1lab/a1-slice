@@ -314,6 +314,20 @@ describe('wizardReducer', () => {
     expect(state.rawResponse).toBe('{"raw":"data"}')
   })
 
+  it('updates clip crop', () => {
+    const clips: ClipSegmentWithStatus[] = [
+      { id: '0', title: 'A', startMs: 0, endMs: 10000, approved: true },
+      { id: '1', title: 'B', startMs: 20000, endMs: 30000, approved: true }
+    ]
+    const crop = { ratio: '9:16' as const, cx: 0.4, cy: 0.5, zoom: 0.2 }
+    const state = wizardReducer(
+      makeState({ clips }),
+      { type: 'UPDATE_CLIP_CROP', id: '0', crop }
+    )
+    expect(state.clips[0].crop).toEqual(crop)
+    expect(state.clips[1].crop).toBeUndefined()
+  })
+
   it('updates clip times', () => {
     const clips: ClipSegmentWithStatus[] = [
       { id: '0', title: 'A', startMs: 0, endMs: 10000, approved: true },

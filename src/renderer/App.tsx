@@ -13,9 +13,10 @@ import type {
   VideoLanguage,
   ProgressUpdate,
   TranscriptSegment,
-  ClipSegmentWithStatus
+  ClipSegmentWithStatus,
+  ClipCrop
 } from '../shared/types'
-import { DEFAULT_MODELS } from '../shared/types'
+import { DEFAULT_MODELS, DEFAULT_CROP } from '../shared/types'
 import { refineClipBounds } from '../shared/clipBounds'
 
 // --- State & Reducer ---
@@ -88,6 +89,7 @@ type WizardAction =
   | { type: 'ANALYZE_ERROR'; error: string }
   | { type: 'TOGGLE_CLIP'; id: string }
   | { type: 'UPDATE_CLIP_TIMES'; id: string; startMs: number; endMs: number }
+  | { type: 'UPDATE_CLIP_CROP'; id: string; crop: ClipCrop }
   | { type: 'LOAD_CACHED_TRANSCRIPT'; segments: TranscriptSegment[] }
   | { type: 'START_EXPORT' }
   | { type: 'EXPORT_PROGRESS'; update: ProgressUpdate }
@@ -302,6 +304,14 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         )
       }
 
+    case 'UPDATE_CLIP_CROP':
+      return {
+        ...state,
+        clips: state.clips.map((c) =>
+          c.id === action.id ? { ...c, crop: action.crop } : c
+        )
+      }
+
     // Load cached transcript (skip transcription)
     case 'LOAD_CACHED_TRANSCRIPT':
       return {
@@ -478,7 +488,8 @@ export default function App(): React.JSX.Element {
             startMs: Math.max(0, Math.min(refined.startMs, maxMs)),
             endMs: Math.max(0, Math.min(refined.endMs, maxMs)),
             id: String(i),
-            approved: true
+            approved: true,
+            crop: { ...DEFAULT_CROP }
           }
         })
         .filter((clip) => clip.endMs > clip.startMs)
@@ -532,7 +543,7 @@ export default function App(): React.JSX.Element {
     dispatch({ type: 'START_EXPORT' })
     const result = await window.api.cutClips(
       state.videoPath,
-      approved.map(({ title, startMs, endMs }) => ({ title, startMs, endMs })),
+      approved.map(({ title, startMs, endMs, crop }) => ({ title, startMs, endMs, crop })),
       state.segments
     )
     if (result.success && result.outputDir) {
@@ -571,6 +582,13 @@ export default function App(): React.JSX.Element {
   const handleUpdateClipTimes = useCallback(
     (id: string, startMs: number, endMs: number) => {
       dispatch({ type: 'UPDATE_CLIP_TIMES', id, startMs, endMs })
+    },
+    []
+  )
+
+  const handleUpdateClipCrop = useCallback(
+    (id: string, crop: ClipCrop) => {
+      dispatch({ type: 'UPDATE_CLIP_CROP', id, crop })
     },
     []
   )
@@ -645,6 +663,7 @@ export default function App(): React.JSX.Element {
             videoDurationMs={state.segments.length > 0 ? state.segments[state.segments.length - 1].endMs : 0}
             onToggle={(id) => dispatch({ type: 'TOGGLE_CLIP', id })}
             onUpdateClipTimes={handleUpdateClipTimes}
+            onUpdateClipCrop={handleUpdateClipCrop}
             onSlice={handleSlice}
           />
         )
