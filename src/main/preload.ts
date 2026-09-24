@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AppSettings,
+  CaptionLook,
+  CaptionProject,
+  ClipCrop,
+  CropRatio,
   ProgressUpdate,
   TranscriptSegment,
   ClipSegment,
@@ -9,7 +13,10 @@ import type {
   CutResult,
   ClipPreviewResult,
   CheckTranscriptResult,
-  CheckAnalysisResult
+  CheckAnalysisResult,
+  ProjectData,
+  RecentVideo,
+  SubtitleExport
 } from '../shared/types'
 
 contextBridge.exposeInMainWorld('api', {
@@ -53,9 +60,45 @@ contextBridge.exposeInMainWorld('api', {
   cutClips: (
     videoPath: string,
     clips: ClipSegment[],
-    segments: TranscriptSegment[]
+    segments: TranscriptSegment[],
+    subtitlesMode?: SubtitleExport,
+    burnLook?: CaptionLook
   ): Promise<CutResult> =>
-    ipcRenderer.invoke('cut-clips', videoPath, clips, segments),
+    ipcRenderer.invoke('cut-clips', videoPath, clips, segments, subtitlesMode, burnLook),
+
+  loadProject: (videoPath: string): Promise<ProjectData> =>
+    ipcRenderer.invoke('load-project', videoPath),
+
+  saveClips: (videoPath: string, clips: ClipSegment[], rawResponse?: string): Promise<void> =>
+    ipcRenderer.invoke('save-clips', videoPath, clips, rawResponse),
+
+  saveFraming: (
+    videoPath: string,
+    framing: Partial<Record<CropRatio, ClipCrop>>
+  ): Promise<void> => ipcRenderer.invoke('save-framing', videoPath, framing),
+
+  saveCaptions: (videoPath: string, captions: CaptionProject): Promise<void> =>
+    ipcRenderer.invoke('save-captions', videoPath, captions),
+
+  rememberVideo: (videoPath: string): Promise<void> =>
+    ipcRenderer.invoke('remember-video', videoPath),
+
+  listRecent: (): Promise<RecentVideo[]> => ipcRenderer.invoke('list-recent'),
+
+  openTranscript: (
+    videoPath: string,
+    segments: TranscriptSegment[]
+  ): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('open-transcript', videoPath, segments),
+
+  exportReframed: (videoPath: string, crop: ClipCrop): Promise<CutResult> =>
+    ipcRenderer.invoke('export-reframed', videoPath, crop),
+
+  exportCaptions: (
+    videoPath: string,
+    cues: TranscriptSegment[],
+    look: CaptionLook
+  ): Promise<CutResult> => ipcRenderer.invoke('export-captions', videoPath, cues, look),
 
   cancelPipeline: (): void => {
     ipcRenderer.send('cancel-pipeline')

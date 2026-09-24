@@ -2,16 +2,26 @@ import type { ClipCrop, CropRatio } from './types'
 import { DEFAULT_CROP } from './types'
 
 export const RATIO_PAIR: Record<Exclude<CropRatio, 'original'>, readonly [number, number]> = {
+  '16:9': [16, 9],
   '4:3': [4, 3],
   '9:16': [9, 16],
   '1:1': [1, 1]
 }
 
 export const CROP_OUTPUT_SIZE: Record<Exclude<CropRatio, 'original'>, readonly [number, number]> = {
+  '16:9': [1920, 1080],
   '4:3': [1440, 1080],
   '9:16': [1080, 1920],
   '1:1': [1080, 1080]
 }
+
+export const CROP_PRESETS: { ratio: CropRatio; label: string; detail: string }[] = [
+  { ratio: 'original', label: 'Original', detail: 'Full frame' },
+  { ratio: '9:16', label: 'Story', detail: '1080×1920' },
+  { ratio: '16:9', label: 'YouTube', detail: '1920×1080' },
+  { ratio: '1:1', label: 'Square', detail: '1080×1080' },
+  { ratio: '4:3', label: 'Classic', detail: '1440×1080' }
+]
 
 export const MAX_ZOOM_SCALE = 0.42
 

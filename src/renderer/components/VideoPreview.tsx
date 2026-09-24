@@ -105,6 +105,8 @@ const VideoPreview = React.memo(function VideoPreview({
   const [inView, setInView] = useState(editor)
   const [src, setSrc] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [proxyFor, setProxyFor] = useState<string | null>(null)
+  const useProxy = proxyFor === videoPath
   const [error, setError] = useState<string | null>(null)
   const [content, setContent] = useState({ x: 0, y: 0, w: 0, h: 0 })
   const [previewPercent, setPreviewPercent] = useState(0)
@@ -243,10 +245,43 @@ const VideoPreview = React.memo(function VideoPreview({
   }, [editor])
 
   useEffect(() => {
-    if (!inView || !videoPath || endMs <= startMs) return
+    if (!inView || !videoPath || useProxy) return
+    let cancelled = false
+    void (async () => {
+      await window.api.allowVideoPath(videoPath)
+      if (cancelled) return
+      const srcUrl = toPreviewSrc(videoPath)
+      const previous = coverRef.current
+      if (previous?.src === srcUrl && previous.previewPath === '') return
+      coverRef.current = {
+        fileStartMs: 0,
+        fileEndMs: Number.POSITIVE_INFINITY,
+        src: srcUrl,
+        previewPath: ''
+      }
+      setSrc(srcUrl)
+      setBusy(false)
+      setError(null)
+      setFrameReady(false)
+      if (previous?.previewPath) {
+        if (previous.src.startsWith('blob:')) URL.revokeObjectURL(previous.src)
+        void window.api.releaseClipPreview(previous.previewPath)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [inView, videoPath, useProxy])
+
+  useEffect(() => {
+    if (!inView || !videoPath || !useProxy || endMs <= startMs) return
 
     const existing = coverRef.current
-    if (existing && previewCoversRange(existing, startMs, endMs)) {
+    if (
+      existing &&
+      existing.previewPath &&
+      previewCoversRange(existing, startMs, endMs)
+    ) {
       return
     }
 
@@ -306,12 +341,12 @@ const VideoPreview = React.memo(function VideoPreview({
       if (adopted) return
       if (createdPath) void window.api.releaseClipPreview(createdPath)
     }
-  }, [inView, videoPath, startMs, endMs, videoDurationMs])
+  }, [inView, videoPath, startMs, endMs, videoDurationMs, useProxy])
 
   useEffect(() => {
     return () => {
       const cover = coverRef.current
-      if (!cover) return
+      if (!cover?.previewPath) return
       if (cover.src.startsWith('blob:')) URL.revokeObjectURL(cover.src)
       void window.api.releaseClipPreview(cover.previewPath)
       coverRef.current = null
@@ -545,6 +580,14 @@ const VideoPreview = React.memo(function VideoPreview({
           playsInline
           preload="auto"
           onError={() => {
+            const code = videoRef.current?.error?.code
+            const unsupported = code === 3 || code === 4
+            if (unsupported && proxyFor !== videoPath) {
+              setProxyFor(videoPath)
+              setError(null)
+              return
+            }
+            if (!unsupported && proxyFor !== videoPath) return
             setBusy(false)
             setError('This video could not be played')
           }}
@@ -607,9 +650,9 @@ const VideoPreview = React.memo(function VideoPreview({
       {busy && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div className="w-64 max-w-[70%] text-center">
-            <p className="text-sm text-white/80">Preparing clip</p>
+            <p className="text-sm text-white/80">Opening clip</p>
             <p className="mt-1 text-[11px] text-white/45">
-              Making a player copy at the original size. This can take a bit on long or 4K files.
+              This file needs a player copy. The next open of this range reuses it.
             </p>
             <div className="mt-3 h-px bg-white/15 overflow-hidden">
               <div

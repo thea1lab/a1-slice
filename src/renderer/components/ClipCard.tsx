@@ -2,17 +2,11 @@ import React, { useEffect, useRef, useState } from 'react'
 import VideoPreview, { type VideoPreviewHandle } from './VideoPreview'
 import type { ClipCrop, ClipSegmentWithStatus, CropRatio } from '../../shared/types'
 import { DEFAULT_CROP } from '../../shared/types'
-import { clamp, cropFromPrevious } from '../../shared/crop'
+import { clamp, CROP_PRESETS, cropFromPrevious } from '../../shared/crop'
+import { nudgeEdge } from '../../shared/clipBounds'
 import { PREVIEW_PAD_MS, pointerToSourceMs } from '../../shared/previewUrl'
 
 const MIN_CLIP_MS = 500
-
-const RATIO_CHIPS: { key: CropRatio; label: string; shape: string }[] = [
-  { key: 'original', label: 'Original', shape: 'w-3.5 h-2' },
-  { key: '4:3', label: '4:3', shape: 'w-3.5 h-2.5' },
-  { key: '9:16', label: '9:16', shape: 'w-2 h-3.5' },
-  { key: '1:1', label: '1:1', shape: 'w-2.5 h-2.5' }
-]
 
 function formatDuration(startMs: number, endMs: number): string {
   const totalSeconds = Math.round((endMs - startMs) / 1000)
@@ -59,6 +53,7 @@ interface ClipCardProps {
   index: number
   videoPath: string
   videoDurationMs?: number
+  framing?: Partial<Record<CropRatio, ClipCrop>>
   onUpdateTimes?: (id: string, startMs: number, endMs: number) => void
   onUpdateCrop?: (id: string, crop: ClipCrop) => void
 }
@@ -69,6 +64,7 @@ const ClipCard = React.memo(function ClipCard({
   index,
   videoPath,
   videoDurationMs,
+  framing,
   onUpdateTimes,
   onUpdateCrop
 }: ClipCardProps): React.JSX.Element {
@@ -169,14 +165,30 @@ const ClipCard = React.memo(function ClipCard({
 
   const setRatio = (ratio: CropRatio): void => {
     if (!onUpdateCrop || crop.ratio === ratio) return
+    if (ratio !== 'original') {
+      const saved = framing?.[ratio]
+      if (saved) {
+        onUpdateCrop(clip.id, { ...saved })
+        setToast('Using the saved frame')
+        window.setTimeout(() => setToast(null), 1800)
+        return
+      }
+    }
     const { crop: next, fromTitle } = cropFromPrevious(clips, index, ratio)
     onUpdateCrop(clip.id, next)
     if (fromTitle) {
-      setToast(`Crop copied from “${fromTitle}”`)
+      setToast(`Frame copied from “${fromTitle}”`)
       window.setTimeout(() => setToast(null), 1800)
     } else {
       setToast(null)
     }
+  }
+
+  const nudge = (edge: 'start' | 'end', deltaMs: number): void => {
+    if (!onUpdateTimes) return
+    const next = nudgeEdge(clip.startMs, clip.endMs, edge, deltaMs, maxMs)
+    onUpdateTimes(clip.id, next.startMs, next.endMs)
+    seek(edge === 'start' ? next.startMs : next.endMs)
   }
 
   const msToX = (ms: number, width: number): number => ((ms - srcStart) / span) * width
@@ -252,8 +264,8 @@ const ClipCard = React.memo(function ClipCard({
           editor
         />
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-black/55 to-transparent px-5 pt-4 pb-10">
-          <h3 className="text-[15px] font-medium text-white truncate">{clip.title}</h3>
-          <p className="text-[11px] text-white/55 truncate">
+          <h3 className="text-lg font-medium text-white truncate">{clip.title}</h3>
+          <p className="text-sm text-white/70 truncate">
             {formatDuration(clip.startMs, clip.endMs)}
             {clip.topic ? ` · ${clip.topic}` : ''}
             {mediaSize ? ` · ${mediaSize.width}×${mediaSize.height}` : ''}
@@ -265,13 +277,13 @@ const ClipCard = React.memo(function ClipCard({
           </div>
         )}
         {inTail && (
-          <div className="absolute right-4 top-3 z-20 text-[11px] text-white/70">
-            Outside clip
+          <div className="absolute right-4 top-3 z-20 text-sm text-white/80">
+            Outside the clip
           </div>
         )}
       </div>
 
-      <div className="shrink-0 bg-black px-4 pt-2 pb-3 flex flex-col gap-2">
+      <div className="shrink-0 bg-bg-base border-t border-white/8 px-4 pt-2 pb-3 flex flex-col gap-2">
         <div
           className="relative h-7 w-full cursor-pointer select-none touch-none"
           onPointerDown={(e) => onTimelinePointer(e, 'play')}
@@ -328,35 +340,40 @@ const ClipCard = React.memo(function ClipCard({
             )}
           </button>
 
-          <span className="text-xs font-mono tabular-nums text-neutral-200 min-w-[4.6rem]">
+          <span className="text-sm font-mono tabular-nums text-neutral-200 min-w-[4.6rem]">
             {msToHMMSSs(playMs)}
           </span>
-          <span className="text-xs text-neutral-600">/</span>
-          <span className="text-xs font-mono tabular-nums text-neutral-400 min-w-[4.6rem]">
+          <span className="text-sm text-neutral-600">/</span>
+          <span className="text-sm font-mono tabular-nums text-neutral-400 min-w-[4.6rem]">
             {msToHMMSSs(clip.endMs)}
           </span>
 
           <div className="flex-1" />
 
           {onUpdateTimes && (
-            <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="time-label">Start</span>
+              <button type="button" aria-label="Start one second earlier" onClick={() => nudge('start', -1000)} className="text-sm text-white/70 hover:text-white px-1">−1s</button>
+              <button type="button" aria-label="Start one second later" onClick={() => nudge('start', 1000)} className="text-sm text-white/70 hover:text-white px-1">+1s</button>
               <input
                 type="text"
                 value={startInput}
                 onChange={(e) => setStartInput(e.target.value)}
                 onBlur={handleStartBlur}
                 aria-label="Start time"
-                className="w-[4.4rem] h-7 bg-transparent px-1 text-white/80 text-xs text-center font-mono outline-none focus:text-white"
+                className="w-[5rem] h-8 bg-transparent px-1 text-white text-sm text-center font-mono outline-none"
               />
-              <span className="text-white/25">–</span>
+              <span className="time-label">End</span>
               <input
                 type="text"
                 value={endInput}
                 onChange={(e) => setEndInput(e.target.value)}
                 onBlur={handleEndBlur}
                 aria-label="End time"
-                className="w-[4.4rem] h-7 bg-transparent px-1 text-white/80 text-xs text-center font-mono outline-none focus:text-white"
+                className="w-[5rem] h-8 bg-transparent px-1 text-white text-sm text-center font-mono outline-none"
               />
+              <button type="button" aria-label="End one second earlier" onClick={() => nudge('end', -1000)} className="text-sm text-white/70 hover:text-white px-1">−1s</button>
+              <button type="button" aria-label="End one second later" onClick={() => nudge('end', 1000)} className="text-sm text-white/70 hover:text-white px-1">+1s</button>
             </div>
           )}
 
@@ -415,19 +432,15 @@ const ClipCard = React.memo(function ClipCard({
         </div>
 
         {onUpdateCrop && (
-          <div className="flex items-center gap-1">
-            {RATIO_CHIPS.map((chip) => (
+          <div className="option-row">
+            {CROP_PRESETS.map((preset) => (
               <button
-                key={chip.key}
+                key={preset.ratio}
                 type="button"
-                onClick={() => setRatio(chip.key)}
-                className={`px-2 py-1 text-[11px] ${
-                  crop.ratio === chip.key
-                    ? 'text-accent'
-                    : 'text-white/45 hover:text-white'
-                }`}
+                onClick={() => setRatio(preset.ratio)}
+                className={`option option-sm ${crop.ratio === preset.ratio ? 'is-selected' : ''}`}
               >
-                {chip.label}
+                {preset.label}
               </button>
             ))}
           </div>

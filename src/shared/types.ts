@@ -14,7 +14,7 @@ export interface TranscriptSegment {
   text: string
 }
 
-export type CropRatio = 'original' | '4:3' | '9:16' | '1:1'
+export type CropRatio = 'original' | '16:9' | '4:3' | '9:16' | '1:1'
 
 export interface ClipCrop {
   ratio: CropRatio
@@ -39,6 +39,8 @@ export interface ClipSegment {
   category?: 'related' | 'standalone'
   topic?: string
   crop?: ClipCrop
+  /** Missing on older cache files. Treated as kept. */
+  approved?: boolean
 }
 
 export interface ProgressUpdate {
@@ -74,14 +76,53 @@ export interface AppSettings {
   temperatureInc: number
 }
 
-// --- Wizard types ---
+// --- Screens ---
 
-export type WizardStep =
-  | 'select'
+export type ToolId = 'transcribe' | 'find' | 'reframe' | 'captions'
+
+export type Screen =
+  | 'home'
   | 'transcribe'
-  | 'review-transcript'
-  | 'review-slices'
+  | 'transcribe-done'
+  | 'find'
+  | 'review'
   | 'export'
+  | 'reframe'
+  | 'captions'
+
+export type SubtitleExport = 'off' | 'srt' | 'burn'
+
+export type CaptionLook = 'srt' | 'burn-large' | 'burn-small'
+
+export type CaptionSource = 'transcript' | 'manual'
+
+export interface CaptionProject {
+  source: CaptionSource
+  look: CaptionLook
+  cues: TranscriptSegment[]
+}
+
+export interface VideoInspection {
+  hasTranscript: boolean
+  segmentCount: number
+  hasClips: boolean
+  clipCount: number
+  hasFraming: boolean
+  hasCaptions: boolean
+}
+
+export interface RecentVideo extends VideoInspection {
+  path: string
+}
+
+export interface ProjectData {
+  segments: TranscriptSegment[]
+  clips: ClipSegment[]
+  rawResponse: string
+  framing: Partial<Record<CropRatio, ClipCrop>>
+  captions: CaptionProject | null
+  durationMs: number
+}
 
 export interface TranscribeResult {
   success: boolean
@@ -116,6 +157,7 @@ export interface CutResult {
 export interface ClipPreviewResult {
   success: boolean
   previewPath?: string
+  cached?: boolean
   error?: string
 }
 

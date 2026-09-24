@@ -1,28 +1,39 @@
 import { useEffect, useState } from 'react'
-import ClipCard from './ClipCard'
-import type { ClipCrop, ClipSegmentWithStatus } from '../../shared/types'
+import ClipCard from '../components/ClipCard'
+import SubtitleModePicker from '../components/SubtitleModePicker'
+import type { ClipCrop, ClipSegmentWithStatus, CropRatio, SubtitleExport } from '../../shared/types'
 
-interface StepReviewSlicesProps {
+interface ReviewScreenProps {
   clips: ClipSegmentWithStatus[]
   videoPath: string
   rawResponse?: string
   videoDurationMs?: number
+  framing?: Partial<Record<CropRatio, ClipCrop>>
+  exportSubtitles: SubtitleExport
   onToggle: (id: string) => void
   onUpdateClipTimes?: (id: string, startMs: number, endMs: number) => void
   onUpdateClipCrop?: (id: string, crop: ClipCrop) => void
+  onExportSubtitles: (mode: SubtitleExport) => void
   onSlice: () => void
+  onFindAgain: () => void
+  onAddRange: () => void
 }
 
-export default function StepReviewSlices({
+export default function ReviewScreen({
   clips,
   videoPath,
   rawResponse,
   videoDurationMs,
+  framing,
+  exportSubtitles,
   onToggle,
   onUpdateClipTimes,
   onUpdateClipCrop,
-  onSlice
-}: StepReviewSlicesProps): React.JSX.Element {
+  onExportSubtitles,
+  onSlice,
+  onFindAgain,
+  onAddRange
+}: ReviewScreenProps): React.JSX.Element {
   const [index, setIndex] = useState(0)
   const approvedCount = clips.filter((c) => c.approved).length
   const safeIndex = clips.length === 0 ? 0 : Math.min(index, clips.length - 1)
@@ -56,7 +67,7 @@ export default function StepReviewSlices({
   if (!clip) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <p className="text-sm text-white/50">No clips to review.</p>
+        <p className="text-base text-white/60">No clips to review yet.</p>
       </div>
     )
   }
@@ -77,6 +88,7 @@ export default function StepReviewSlices({
             index={safeIndex}
             videoPath={videoPath}
             videoDurationMs={videoDurationMs}
+            framing={framing}
             onUpdateTimes={onUpdateClipTimes}
             onUpdateCrop={onUpdateClipCrop}
           />
@@ -106,37 +118,47 @@ export default function StepReviewSlices({
         </button>
       </div>
 
-      <div className="shrink-0 flex items-center gap-3 px-4 py-2.5 bg-black">
-        <span className="text-xs tabular-nums text-white/45 min-w-[3.5rem]">
-          {safeIndex + 1} / {clips.length}
-        </span>
-        <span className="text-xs text-white/35">
-          {approvedCount} kept
-        </span>
-        <div className="flex-1" />
-        <button
-          type="button"
-          onClick={discard}
-          className="text-sm text-white/50 hover:text-white px-2 py-1"
-        >
-          {clip.approved ? 'Drop' : 'Keep'}
-        </button>
-        <button
-          type="button"
-          onClick={onSlice}
-          disabled={approvedCount === 0}
-          className="text-sm font-medium text-black bg-accent hover:bg-accent-hover rounded px-3.5 py-1.5 disabled:opacity-35 disabled:hover:bg-accent"
-        >
-          Export {approvedCount}
-        </button>
+      <div className="dock">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="dock-meta">
+            <span>
+              Clip {safeIndex + 1} of {clips.length}
+            </span>
+            <span>{approvedCount} kept</span>
+          </p>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-[15px] text-[#a8a8a8]">Subtitles on export</span>
+            <SubtitleModePicker value={exportSubtitles} onChange={onExportSubtitles} />
+          </div>
+        </div>
+        <p className="help">Keep the parts you want. Drop the rest, then export those clips.</p>
+        <div className="actions">
+          <button type="button" onClick={onFindAgain} className="btn btn-secondary">
+            Find again
+          </button>
+          <button type="button" onClick={onAddRange} className="btn btn-secondary">
+            Add a part
+          </button>
+          <button type="button" onClick={discard} className="btn btn-secondary">
+            {clip.approved ? 'Drop this one' : 'Keep this one'}
+          </button>
+          <button
+            type="button"
+            onClick={onSlice}
+            disabled={approvedCount === 0}
+            className="btn btn-primary"
+          >
+            Export {approvedCount} {approvedCount === 1 ? 'clip' : 'clips'}
+          </button>
+        </div>
       </div>
 
       {rawResponse && (
-        <details className="px-4 pb-2 bg-black">
-          <summary className="text-[11px] text-white/30 cursor-pointer hover:text-white/50">
-            Model output
+        <details className="px-5 pb-3 bg-[#161616]">
+          <summary className="text-sm text-white/40 cursor-pointer hover:text-white/70">
+            Model notes
           </summary>
-          <pre className="mt-2 p-2 text-[11px] text-white/45 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
+          <pre className="mt-2 p-2 text-sm text-white/55 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap break-words">
             {rawResponse}
           </pre>
         </details>

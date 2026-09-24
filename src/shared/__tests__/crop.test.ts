@@ -86,6 +86,28 @@ describe('ffmpegCropFilter', () => {
     expect(ffmpegCropFilter(DEFAULT_CROP, 1920, 1080)).toBeNull()
   })
 
+  it('covers a 16:9 frame at zoom 0', () => {
+    const rect = cropRect({ ratio: '16:9', cx: 0.5, cy: 0.5, zoom: 0 }, 1920, 1080)
+    expect(rect.w).toBeCloseTo(1920)
+    expect(rect.h).toBeCloseTo(1080)
+  })
+
+  it('emits even crop+scale for youtube 16:9 from a vertical source', () => {
+    const filter = ffmpegCropFilter(
+      { ratio: '16:9', cx: 0.5, cy: 0.5, zoom: 0 },
+      1080,
+      1920
+    )
+    expect(filter).toMatch(/^crop=\d+:\d+:\d+:\d+,scale=1920:1080$/)
+    const nums = filter!.match(/\d+/g)!.map(Number)
+    const [w, h, x, y] = nums
+    expect(w % 2).toBe(0)
+    expect(h % 2).toBe(0)
+    expect(x + w).toBeLessThanOrEqual(1080)
+    expect(y + h).toBeLessThanOrEqual(1920)
+    expect(h).toBeLessThan(1920)
+  })
+
   it('emits even crop+scale for 9:16', () => {
     const filter = ffmpegCropFilter(
       { ratio: '9:16', cx: 0.5, cy: 0.5, zoom: 0 },

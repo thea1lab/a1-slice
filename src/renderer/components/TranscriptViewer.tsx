@@ -15,13 +15,13 @@ export default function TranscriptViewer({
   segments
 }: TranscriptViewerProps): React.JSX.Element {
   return (
-    <div className="max-h-64 overflow-y-auto custom-scrollbar space-y-1 pr-2">
+    <div className="max-h-80 overflow-y-auto custom-scrollbar space-y-1 pr-2">
       {segments.map((seg, i) => (
-        <div key={i} className="flex gap-3 text-sm py-1.5">
-          <span className="text-neutral-500 tabular-nums shrink-0 text-xs pt-0.5">
+        <div key={i} className="flex gap-4 text-base py-2">
+          <span className="text-neutral-500 tabular-nums shrink-0 text-sm pt-0.5">
             {formatTime(seg.startMs)}
           </span>
-          <span className="text-neutral-300">{seg.text.trim()}</span>
+          <span className="text-neutral-200">{seg.text.trim()}</span>
         </div>
       ))}
     </div>

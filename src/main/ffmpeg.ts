@@ -3,8 +3,8 @@ import { spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import { writeFileSync } from 'fs'
-import type { ClipCrop, TranscriptSegment } from '../shared/types'
+import { existsSync, writeFileSync } from 'fs'
+import type { CaptionLook, ClipCrop, SubtitleExport, TranscriptSegment } from '../shared/types'
 import { ffmpegCropFilter } from '../shared/crop'
 
 const FFMPEG = (ffmpegPath as string).replace('app.asar', 'app.asar.unpacked')
@@ -24,6 +24,58 @@ export function formatSrtTime(ms: number): string {
     ',' +
     String(millis).padStart(3, '0')
   )
+}
+
+export function escapeFilterPath(filePath: string): string {
+  return filePath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, '\\\'')
+}
+
+export function captionBurnFilter(
+  srtPath: string,
+  fontsDir: string,
+  fontName: string,
+  look: Exclude<CaptionLook, 'srt'>
+): string {
+  const size = look === 'burn-large' ? 28 : 18
+  const margin = look === 'burn-large' ? 90 : 36
+  const style = [
+    `FontName=${fontName}`,
+    `FontSize=${size}`,
+    'PrimaryColour=&H00FFFFFF',
+    'OutlineColour=&H00000000',
+    'BorderStyle=1',
+    'Outline=2',
+    'Alignment=2',
+    `MarginV=${margin}`
+  ].join('\\,')
+  return `subtitles='${escapeFilterPath(srtPath)}':fontsdir='${escapeFilterPath(fontsDir)}':force_style='${style}'`
+}
+
+export function videoFilterForExport(
+  cropFilter: string | null,
+  mode: SubtitleExport,
+  burnFilter: string | null
+): string | undefined {
+  const burn = mode === 'burn' ? burnFilter : null
+  if (cropFilter && burn) return `${cropFilter},${burn}`
+  return burn ?? cropFilter ?? undefined
+}
+
+const FONT_CANDIDATES: { dir: string; name: string }[] = [
+  { dir: '/usr/share/fonts/truetype/dejavu', name: 'DejaVu Sans' },
+  { dir: '/usr/share/fonts/truetype/liberation', name: 'Liberation Sans' },
+  { dir: '/usr/share/fonts/truetype/freefont', name: 'FreeSans' },
+  { dir: '/System/Library/Fonts/Supplemental', name: 'Arial' },
+  { dir: '/Library/Fonts', name: 'Arial' },
+  { dir: 'C:\\Windows\\Fonts', name: 'Arial' }
+]
+
+export function findCaptionFont(extraDirs: string[] = []): { dir: string; name: string } | null {
+  const bundled = extraDirs.map((dir) => ({ dir, name: 'Noto Sans' }))
+  for (const candidate of [...bundled, ...FONT_CANDIDATES]) {
+    if (candidate.dir && existsSync(candidate.dir)) return candidate
+  }
+  return null
 }
 
 export function generateSrt(segments: TranscriptSegment[]): string {
@@ -283,6 +335,36 @@ export function buildCopyClipArgs(
   ]
 }
 
+export function shiftSubtitles(
+  subtitles: TranscriptSegment[],
+  startMs: number,
+  endMs: number
+): TranscriptSegment[] {
+  return subtitles
+    .filter((segment) => segment.endMs > startMs && segment.startMs < endMs)
+    .map((segment) => ({
+      startMs: Math.max(0, segment.startMs - startMs),
+      endMs: Math.min(endMs - startMs, segment.endMs - startMs),
+      text: segment.text
+    }))
+}
+
+export async function copyClip(
+  videoPath: string,
+  outputPath: string,
+  startMs: number,
+  endMs: number,
+  onProgress?: (percent: number) => void
+): Promise<void> {
+  const startSec = startMs / 1000
+  const durationSec = Math.max(0.2, (endMs - startMs) / 1000)
+  await spawnFfmpeg(
+    buildCopyClipArgs(videoPath, outputPath, startSec, durationSec),
+    durationSec,
+    onProgress
+  )
+}
+
 export async function cutClip(
   videoPath: string,
   outputPath: string,
@@ -291,14 +373,29 @@ export async function cutClip(
   subtitles: TranscriptSegment[],
   onProgress?: (percent: number) => void,
   crop?: ClipCrop,
-  videoSize?: { width: number; height: number }
+  videoSize?: { width: number; height: number },
+  subtitlesMode: SubtitleExport = 'srt',
+  burnLook: Exclude<CaptionLook, 'srt'> = 'burn-large',
+  fontDirs: string[] = []
 ): Promise<string> {
   const startSec = startMs / 1000
   const durationSec = (endMs - startMs) / 1000
-  const videoFilter =
-    crop && videoSize
-      ? ffmpegCropFilter(crop, videoSize.width, videoSize.height) ?? undefined
-      : undefined
+  const cropFilter =
+    crop && videoSize ? ffmpegCropFilter(crop, videoSize.width, videoSize.height) : null
+
+  const shifted = shiftSubtitles(subtitles, startMs, endMs)
+  let burnFilter: string | null = null
+  if (subtitlesMode !== 'off') {
+    const srtPath = outputPath.replace(/\.[^.]+$/, '.srt')
+    writeFileSync(srtPath, generateSrt(shifted), 'utf-8')
+    if (subtitlesMode === 'burn' && shifted.length > 0) {
+      const font = findCaptionFont(fontDirs)
+      if (!font) throw new Error('No caption font found on this computer')
+      burnFilter = captionBurnFilter(srtPath, font.dir, font.name, burnLook)
+    }
+  }
+
+  const videoFilter = videoFilterForExport(cropFilter, subtitlesMode, burnFilter)
 
   try {
     await spawnFfmpeg(
@@ -306,7 +403,8 @@ export async function cutClip(
       durationSec,
       onProgress
     )
-  } catch {
+  } catch (err) {
+    if (subtitlesMode === 'burn') throw err
     // Some ffmpeg-static builds may lack libx264; keep export working.
     await spawnFfmpeg(
       buildCopyClipArgs(videoPath, outputPath, startSec, durationSec),
@@ -314,17 +412,6 @@ export async function cutClip(
       onProgress
     )
   }
-
-  // Save SRT with subtitles shifted relative to clip start
-  const shifted = subtitles
-    .filter((s) => s.endMs > startMs && s.startMs < endMs)
-    .map((s) => ({
-      startMs: Math.max(0, s.startMs - startMs),
-      endMs: Math.min(endMs - startMs, s.endMs - startMs),
-      text: s.text
-    }))
-  const srtPath = outputPath.replace(/\.[^.]+$/, '.srt')
-  writeFileSync(srtPath, generateSrt(shifted), 'utf-8')
 
   return outputPath
 }

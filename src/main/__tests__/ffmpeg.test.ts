@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatSrtTime, generateSrt, parseFfmpegDuration, parseFfmpegProgress, parseFfmpegVideoSize, buildCutClipArgs, buildPreviewClipArgs } from '../ffmpeg'
+import { formatSrtTime, generateSrt, parseFfmpegDuration, parseFfmpegProgress, parseFfmpegVideoSize, buildCutClipArgs, buildPreviewClipArgs, captionBurnFilter, videoFilterForExport } from '../ffmpeg'
 
 describe('formatSrtTime', () => {
   it('formats zero', () => {
@@ -113,6 +113,21 @@ describe('buildCutClipArgs', () => {
       'crop=608:1080:656:0,scale=1080:1920'
     )
     expect(args[args.indexOf('-vf') + 1]).toBe('crop=608:1080:656:0,scale=1080:1920')
+  })
+})
+
+describe('caption burn filter', () => {
+  it('includes the subtitles filter only for a burn look', () => {
+    const burn = captionBurnFilter('/tmp/a.srt', '/usr/share/fonts', 'DejaVu Sans', 'burn-large')
+    expect(burn).toContain('subtitles=')
+    expect(burn).toContain('FontSize=28')
+    expect(videoFilterForExport('crop=1:1:0:0', 'burn', burn)).toBe(`crop=1:1:0:0,${burn}`)
+    expect(videoFilterForExport('crop=1:1:0:0', 'srt', burn)).toBe('crop=1:1:0:0')
+    expect(videoFilterForExport(null, 'off', burn)).toBeUndefined()
+  })
+
+  it('uses the smaller type for the youtube look', () => {
+    expect(captionBurnFilter('/tmp/a.srt', '/fonts', 'Arial', 'burn-small')).toContain('FontSize=18')
   })
 })
 

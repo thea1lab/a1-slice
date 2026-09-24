@@ -1,463 +1,147 @@
-import { useReducer, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useReducer, useRef } from 'react'
 import TitleBar from './TitleBar'
-import Stepper from './components/Stepper'
-import StepSelectVideo from './components/StepSelectVideo'
-import StepTranscribe from './components/StepTranscribe'
-import StepReviewTranscript from './components/StepReviewTranscript'
-import StepReviewSlices from './components/StepReviewSlices'
-import StepExport from './components/StepExport'
+import ToolHeader from './components/ToolHeader'
+import HomeScreen from './screens/HomeScreen'
+import ToolStart from './components/ToolStart'
+import TranscribeScreen from './screens/TranscribeScreen'
+import TranscribeDoneScreen from './screens/TranscribeDoneScreen'
+import FindScreen from './screens/FindScreen'
+import ReviewScreen from './screens/ReviewScreen'
+import ExportScreen from './screens/ExportScreen'
+import ReframeScreen from './screens/ReframeScreen'
+import CaptionsScreen from './screens/CaptionsScreen'
+import { initialWizardState, wizardReducer, type WizardState } from './state'
+import { useProject } from './hooks/useProject'
+import { fileNameOf } from './lib/fileName'
+import { isPlayerScreen, screenTitle } from './lib/screenTitle'
 import type {
-  WizardStep,
-  PipelineStage,
-  LLMProvider,
-  VideoLanguage,
+  AppSettings,
+  CaptionLook,
+  CaptionProject,
+  ClipCrop,
+  ClipSegment,
   ProgressUpdate,
-  TranscriptSegment,
-  ClipSegmentWithStatus,
-  ClipCrop
+  ToolId,
+  TranscriptSegment
 } from '../shared/types'
-import { DEFAULT_MODELS, DEFAULT_CROP } from '../shared/types'
 import { refineClipBounds } from '../shared/clipBounds'
+import { withClipStatus } from '../shared/project'
 
-// --- State & Reducer ---
-
-interface WizardState {
-  currentStep: WizardStep
-  completedSteps: WizardStep[]
-
-  // Settings
-  provider: LLMProvider
-  model: string
-  apiKey: string
-  apiKeys: Record<string, string>
-  userHint: string
-  language: VideoLanguage
-  entropyThold: number
-  maxContext: number
-  beamSize: number
-  temperatureInc: number
-  settingsLoaded: boolean
-
-  // Step 1: Select video
-  videoPath: string | null
-
-  // Step 2: Transcribe
-  transcribeStage: PipelineStage
-  transcribeMessage: string
-  transcribePercent: number
-  transcribeError: string | null
-
-  // Step 3: Review transcript
-  segments: TranscriptSegment[]
-  analyzing: boolean
-  analyzePercent: number
-  analyzeMessage: string
-  analyzeError: string | null
-
-  // Step 4: Review slices
-  clips: ClipSegmentWithStatus[]
-  rawResponse: string
-
-  // Step 5: Export
-  exportStage: PipelineStage
-  exportMessage: string
-  exportPercent: number
-  exportError: string | null
-  outputDir: string | null
-}
-
-type WizardAction =
-  | { type: 'LOAD_SETTINGS'; provider: LLMProvider; model: string; apiKey: string; apiKeys?: Record<string, string>; userHint: string; language: VideoLanguage; entropyThold: number; maxContext: number; beamSize: number; temperatureInc: number }
-  | { type: 'SET_PROVIDER'; provider: LLMProvider }
-  | { type: 'SET_MODEL'; model: string }
-  | { type: 'SET_API_KEY'; apiKey: string }
-  | { type: 'SET_USER_HINT'; userHint: string }
-  | { type: 'SET_LANGUAGE'; language: VideoLanguage }
-  | { type: 'SET_ENTROPY_THOLD'; entropyThold: number }
-  | { type: 'SET_MAX_CONTEXT'; maxContext: number }
-  | { type: 'SET_BEAM_SIZE'; beamSize: number }
-  | { type: 'SET_TEMPERATURE_INC'; temperatureInc: number }
-  | { type: 'SET_VIDEO'; videoPath: string }
-  | { type: 'GO_TO_STEP'; step: WizardStep }
-  | { type: 'START_TRANSCRIBE' }
-  | { type: 'TRANSCRIBE_PROGRESS'; update: ProgressUpdate }
-  | { type: 'TRANSCRIBE_DONE'; segments: TranscriptSegment[] }
-  | { type: 'TRANSCRIBE_ERROR'; error: string }
-  | { type: 'START_ANALYZE' }
-  | { type: 'ANALYZE_PROGRESS'; update: ProgressUpdate }
-  | { type: 'ANALYZE_DONE'; clips: ClipSegmentWithStatus[]; rawResponse: string }
-  | { type: 'ANALYZE_ERROR'; error: string }
-  | { type: 'TOGGLE_CLIP'; id: string }
-  | { type: 'UPDATE_CLIP_TIMES'; id: string; startMs: number; endMs: number }
-  | { type: 'UPDATE_CLIP_CROP'; id: string; crop: ClipCrop }
-  | { type: 'LOAD_CACHED_TRANSCRIPT'; segments: TranscriptSegment[] }
-  | { type: 'START_EXPORT' }
-  | { type: 'EXPORT_PROGRESS'; update: ProgressUpdate }
-  | { type: 'EXPORT_DONE'; outputDir: string }
-  | { type: 'EXPORT_ERROR'; error: string }
-  | { type: 'RESET' }
-
-const initialState: WizardState = {
-  currentStep: 'select',
-  completedSteps: [],
-
-  provider: 'claude',
-  model: DEFAULT_MODELS.claude,
-  apiKey: '',
-  apiKeys: {},
-  userHint: '',
-  language: 'auto',
-  entropyThold: 2.8,
-  maxContext: 64,
-  beamSize: 5,
-  temperatureInc: 0.1,
-  settingsLoaded: false,
-
-  videoPath: null,
-
-  transcribeStage: 'idle',
-  transcribeMessage: '',
-  transcribePercent: 0,
-  transcribeError: null,
-
-  segments: [],
-  analyzing: false,
-  analyzePercent: 0,
-  analyzeMessage: '',
-  analyzeError: null,
-
-  clips: [],
-  rawResponse: '',
-
-  exportStage: 'idle',
-  exportMessage: '',
-  exportPercent: 0,
-  exportError: null,
-  outputDir: null
-}
-
-function addCompleted(steps: WizardStep[], step: WizardStep): WizardStep[] {
-  return steps.includes(step) ? steps : [...steps, step]
-}
-
-function storedApiKey(
-  apiKeys: Record<string, string>,
-  provider: LLMProvider
-): string {
-  return apiKeys[provider] ?? ''
-}
-
-function withApiKey(
-  apiKeys: Record<string, string>,
-  provider: LLMProvider,
-  apiKey: string
-): Record<string, string> {
-  if (!apiKey) {
-    if (!(provider in apiKeys)) return apiKeys
-    const next = { ...apiKeys }
-    delete next[provider]
-    return next
-  }
-  return { ...apiKeys, [provider]: apiKey }
-}
-
-export function wizardReducer(state: WizardState, action: WizardAction): WizardState {
-  switch (action.type) {
-    case 'LOAD_SETTINGS': {
-      const apiKeys = { ...(action.apiKeys ?? {}) }
-      if (action.apiKey && !apiKeys[action.provider]) {
-        apiKeys[action.provider] = action.apiKey
-      }
-      return {
-        ...state,
-        provider: action.provider,
-        model: action.model,
-        apiKey: apiKeys[action.provider] ?? action.apiKey,
-        apiKeys,
-        userHint: action.userHint,
-        language: action.language,
-        entropyThold: action.entropyThold,
-        maxContext: action.maxContext,
-        beamSize: action.beamSize,
-        temperatureInc: action.temperatureInc,
-        settingsLoaded: true
-      }
-    }
-    case 'SET_PROVIDER': {
-      if (action.provider === state.provider) return state
-      const model = DEFAULT_MODELS[action.provider]
-      return {
-        ...state,
-        provider: action.provider,
-        model,
-        apiKey: storedApiKey(state.apiKeys, action.provider)
-      }
-    }
-    case 'SET_MODEL':
-      return { ...state, model: action.model }
-    case 'SET_API_KEY':
-      return {
-        ...state,
-        apiKey: action.apiKey,
-        apiKeys: withApiKey(state.apiKeys, state.provider, action.apiKey)
-      }
-    case 'SET_USER_HINT':
-      return { ...state, userHint: action.userHint }
-    case 'SET_LANGUAGE':
-      return { ...state, language: action.language }
-    case 'SET_ENTROPY_THOLD':
-      return { ...state, entropyThold: action.entropyThold }
-    case 'SET_MAX_CONTEXT':
-      return { ...state, maxContext: action.maxContext }
-    case 'SET_BEAM_SIZE':
-      return { ...state, beamSize: action.beamSize }
-    case 'SET_TEMPERATURE_INC':
-      return { ...state, temperatureInc: action.temperatureInc }
-    case 'SET_VIDEO':
-      return { ...state, videoPath: action.videoPath }
-    case 'GO_TO_STEP':
-      return { ...state, currentStep: action.step }
-
-    // Transcription
-    case 'START_TRANSCRIBE':
-      return {
-        ...state,
-        currentStep: 'transcribe',
-        completedSteps: addCompleted(state.completedSteps, 'select'),
-        transcribeStage: 'extracting',
-        transcribeMessage: '',
-        transcribePercent: 0,
-        transcribeError: null
-      }
-    case 'TRANSCRIBE_PROGRESS':
-      return {
-        ...state,
-        transcribeStage: action.update.stage,
-        transcribeMessage: action.update.message,
-        transcribePercent: action.update.percent
-      }
-    case 'TRANSCRIBE_DONE':
-      return {
-        ...state,
-        currentStep: 'review-transcript',
-        completedSteps: addCompleted(state.completedSteps, 'transcribe'),
-        transcribeStage: 'done',
-        transcribePercent: 100,
-        segments: action.segments
-      }
-    case 'TRANSCRIBE_ERROR':
-      return {
-        ...state,
-        transcribeStage: 'error',
-        transcribeError: action.error
-      }
-
-    // Analysis
-    case 'START_ANALYZE':
-      return {
-        ...state,
-        analyzing: true,
-        analyzePercent: 0,
-        analyzeMessage: 'AI is picking the best clips...',
-        analyzeError: null
-      }
-    case 'ANALYZE_PROGRESS':
-      return {
-        ...state,
-        analyzePercent: action.update.percent,
-        analyzeMessage: action.update.message
-      }
-    case 'ANALYZE_DONE':
-      return {
-        ...state,
-        currentStep: 'review-slices',
-        completedSteps: addCompleted(state.completedSteps, 'review-transcript'),
-        analyzing: false,
-        analyzePercent: 100,
-        clips: action.clips,
-        rawResponse: action.rawResponse
-      }
-    case 'ANALYZE_ERROR':
-      return {
-        ...state,
-        analyzing: false,
-        analyzeError: action.error
-      }
-
-    // Clip toggle
-    case 'TOGGLE_CLIP':
-      return {
-        ...state,
-        clips: state.clips.map((c) =>
-          c.id === action.id ? { ...c, approved: !c.approved } : c
-        )
-      }
-
-    // Clip time editing
-    case 'UPDATE_CLIP_TIMES':
-      return {
-        ...state,
-        clips: state.clips.map((c) =>
-          c.id === action.id
-            ? { ...c, startMs: action.startMs, endMs: action.endMs }
-            : c
-        )
-      }
-
-    case 'UPDATE_CLIP_CROP':
-      return {
-        ...state,
-        clips: state.clips.map((c) =>
-          c.id === action.id ? { ...c, crop: action.crop } : c
-        )
-      }
-
-    // Load cached transcript (skip transcription)
-    case 'LOAD_CACHED_TRANSCRIPT':
-      return {
-        ...state,
-        currentStep: 'review-transcript',
-        completedSteps: addCompleted(
-          addCompleted(state.completedSteps, 'select'),
-          'transcribe'
-        ),
-        transcribeStage: 'done',
-        transcribePercent: 100,
-        segments: action.segments
-      }
-
-    // Export
-    case 'START_EXPORT':
-      return {
-        ...state,
-        currentStep: 'export',
-        completedSteps: addCompleted(state.completedSteps, 'review-slices'),
-        exportStage: 'cutting',
-        exportMessage: '',
-        exportPercent: 0,
-        exportError: null,
-        outputDir: null
-      }
-    case 'EXPORT_PROGRESS':
-      return {
-        ...state,
-        exportStage: action.update.stage,
-        exportMessage: action.update.message,
-        exportPercent: action.update.percent
-      }
-    case 'EXPORT_DONE':
-      return {
-        ...state,
-        exportStage: 'done',
-        exportPercent: 100,
-        outputDir: action.outputDir,
-        completedSteps: addCompleted(state.completedSteps, 'export')
-      }
-    case 'EXPORT_ERROR':
-      return {
-        ...state,
-        exportStage: 'error',
-        exportError: action.error
-      }
-
-    case 'RESET':
-      return {
-        ...initialState,
-        provider: state.provider,
-        model: state.model,
-        apiKey: state.apiKey,
-        apiKeys: state.apiKeys,
-        userHint: state.userHint,
-        language: state.language,
-        entropyThold: state.entropyThold,
-        maxContext: state.maxContext,
-        beamSize: state.beamSize,
-        temperatureInc: state.temperatureInc,
-        settingsLoaded: state.settingsLoaded
-      }
-
-    default:
-      return state
+function settingsOf(state: WizardState): AppSettings {
+  return {
+    provider: state.provider,
+    model: state.model,
+    apiKey: state.apiKey,
+    apiKeys: state.apiKeys,
+    userHint: state.userHint,
+    language: state.language,
+    entropyThold: state.entropyThold,
+    maxContext: state.maxContext,
+    beamSize: state.beamSize,
+    temperatureInc: state.temperatureInc
   }
 }
-
-// --- Component ---
 
 export default function App(): React.JSX.Element {
-  const [state, dispatch] = useReducer(wizardReducer, initialState)
+  const [state, dispatch] = useReducer(wizardReducer, initialWizardState)
+  const { openTool, goHome } = useProject(dispatch)
+  const clipDirty = useRef(false)
 
   useEffect(() => {
-    if (state.videoPath) {
-      window.api.allowVideoPath(state.videoPath)
-    }
+    if (state.videoPath) void window.api.allowVideoPath(state.videoPath)
   }, [state.videoPath])
 
-  // Load settings on mount
   useEffect(() => {
-    window.api.loadSettings().then((s) => {
+    void window.api.loadSettings().then((saved) => {
       dispatch({
         type: 'LOAD_SETTINGS',
-        provider: s.provider,
-        model: s.model,
-        apiKey: s.apiKey,
-        apiKeys: s.apiKeys,
-        userHint: s.userHint,
-        language: s.language,
-        entropyThold: s.entropyThold ?? 2.8,
-        maxContext: s.maxContext ?? 64,
-        beamSize: s.beamSize ?? 5,
-        temperatureInc: s.temperatureInc ?? 0.1
+        provider: saved.provider,
+        model: saved.model,
+        apiKey: saved.apiKey,
+        apiKeys: saved.apiKeys,
+        userHint: saved.userHint,
+        language: saved.language,
+        entropyThold: saved.entropyThold ?? 2.8,
+        maxContext: saved.maxContext ?? 64,
+        beamSize: saved.beamSize ?? 5,
+        temperatureInc: saved.temperatureInc ?? 0.1
       })
     })
   }, [])
 
-  // Persist settings when they change
   useEffect(() => {
     if (!state.settingsLoaded) return
-    window.api.saveSettings({
-      provider: state.provider,
-      model: state.model,
-      apiKey: state.apiKey,
-      apiKeys: state.apiKeys,
-      userHint: state.userHint,
-      language: state.language,
-      entropyThold: state.entropyThold,
-      maxContext: state.maxContext,
-      beamSize: state.beamSize,
-      temperatureInc: state.temperatureInc
-    })
-  }, [state.provider, state.model, state.apiKey, state.apiKeys, state.userHint, state.language, state.entropyThold, state.maxContext, state.beamSize, state.temperatureInc, state.settingsLoaded])
+    void window.api.saveSettings(settingsOf(state))
+  }, [
+    state.settingsLoaded,
+    state.provider,
+    state.model,
+    state.apiKey,
+    state.apiKeys,
+    state.userHint,
+    state.language,
+    state.entropyThold,
+    state.maxContext,
+    state.beamSize,
+    state.temperatureInc
+  ])
 
-  // Listen for pipeline progress — route to the correct step
   useEffect(() => {
     const unsubscribe = window.api.onProgress((update: ProgressUpdate) => {
-      if (state.currentStep === 'transcribe') {
+      if (state.screen === 'transcribe') {
         dispatch({ type: 'TRANSCRIBE_PROGRESS', update })
-      } else if (
-        state.currentStep === 'review-transcript' &&
-        state.analyzing
-      ) {
+      } else if (state.screen === 'find' && state.analyzing) {
         dispatch({ type: 'ANALYZE_PROGRESS', update })
-      } else if (state.currentStep === 'export') {
+      } else if (
+        state.screen === 'export' ||
+        state.screen === 'reframe' ||
+        state.screen === 'captions'
+      ) {
         dispatch({ type: 'EXPORT_PROGRESS', update })
       }
     })
     return unsubscribe
-  }, [state.currentStep, state.analyzing])
+  }, [state.screen, state.analyzing])
 
-  const completedSet = new Set(state.completedSteps)
+  useEffect(() => {
+    if (!clipDirty.current || !state.videoPath || !state.projectReady) return
+    const path = state.videoPath
+    const clips = state.clips
+    const raw = state.rawResponse
+    const timer = window.setTimeout(() => {
+      clipDirty.current = false
+      void window.api.saveClips(path, clips, raw)
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [state.clips, state.videoPath, state.projectReady, state.rawResponse])
 
-  // --- Handlers ---
+  const markClips = (): void => {
+    clipDirty.current = true
+  }
 
-  const handleSelectVideo = useCallback(async () => {
-    const path = await window.api.selectVideo()
-    if (path) dispatch({ type: 'SET_VIDEO', videoPath: path })
+  const enterTool = useCallback((tool: ToolId) => {
+    dispatch({ type: 'ENTER_TOOL', tool })
   }, [])
 
-  const handleStartTranscribe = useCallback(async () => {
+  const chooseVideo = useCallback(
+    async (tool: ToolId) => {
+      const path = await window.api.selectVideo()
+      if (path) await openTool(tool, path)
+    },
+    [openTool]
+  )
+
+  const runTranscribe = useCallback(async () => {
     if (!state.videoPath) return
     dispatch({ type: 'START_TRANSCRIBE' })
-    const result = await window.api.transcribeVideo(state.videoPath, state.language, state.entropyThold, state.maxContext, state.beamSize, state.temperatureInc)
+    const result = await window.api.transcribeVideo(
+      state.videoPath,
+      state.language,
+      state.entropyThold,
+      state.maxContext,
+      state.beamSize,
+      state.temperatureInc
+    )
     if (result.success && result.segments) {
       dispatch({ type: 'TRANSCRIBE_DONE', segments: result.segments })
     } else {
@@ -466,280 +150,419 @@ export default function App(): React.JSX.Element {
         error: result.error || 'Transcription failed'
       })
     }
-  }, [state.videoPath, state.language, state.entropyThold, state.maxContext, state.beamSize, state.temperatureInc])
+  }, [
+    state.videoPath,
+    state.language,
+    state.entropyThold,
+    state.maxContext,
+    state.beamSize,
+    state.temperatureInc
+  ])
 
-  const clampClips = useCallback(
-    (clips: { title: string; startMs: number; endMs: number }[], rawResponse: string) => {
-      const maxMs = state.segments.length > 0
-        ? state.segments[state.segments.length - 1].endMs
-        : Infinity
-      const clipsWithStatus = clips
-        .map((clip, i) => {
-          const refined = refineClipBounds(
-            {
-              ...clip,
-              startMs: clip.startMs,
-              endMs: clip.endMs
-            },
-            state.segments
-          )
+  const showTranscribe = (returnTo: 'find' | 'captions'): void => {
+    dispatch({ type: 'PREPARE_TRANSCRIBE', returnTo })
+  }
+
+  const adoptSaved = useCallback((clips: ClipSegment[], rawResponse: string) => {
+    const withStatus = withClipStatus(clips)
+    dispatch({ type: 'ANALYZE_DONE', clips: withStatus, rawResponse })
+    if (state.videoPath) void window.api.saveClips(state.videoPath, withStatus, rawResponse)
+  }, [state.videoPath])
+
+  const adoptClips = useCallback(
+    (clips: ClipSegment[], rawResponse: string) => {
+      const maxMs =
+        state.segments.length > 0
+          ? state.segments[state.segments.length - 1].endMs
+          : state.videoDurationMs || Infinity
+      const prepared = clips
+        .map((clip) => {
+          const refined = refineClipBounds(clip, state.segments)
           return {
+            ...clip,
             ...refined,
             startMs: Math.max(0, Math.min(refined.startMs, maxMs)),
-            endMs: Math.max(0, Math.min(refined.endMs, maxMs)),
-            id: String(i),
-            approved: true,
-            crop: { ...DEFAULT_CROP }
+            endMs: Math.max(0, Math.min(refined.endMs, maxMs))
           }
         })
         .filter((clip) => clip.endMs > clip.startMs)
-      if (clipsWithStatus.length === 0) {
+      if (prepared.length === 0) {
         dispatch({
           type: 'ANALYZE_ERROR',
           error: 'No clips found. Try different suggestions or a different video.'
         })
         return
       }
-      dispatch({ type: 'ANALYZE_DONE', clips: clipsWithStatus, rawResponse })
+      const withStatus = withClipStatus(prepared)
+      dispatch({ type: 'ANALYZE_DONE', clips: withStatus, rawResponse })
+      if (state.videoPath) void window.api.saveClips(state.videoPath, withStatus, rawResponse)
     },
-    [state.segments]
+    [state.segments, state.videoDurationMs, state.videoPath]
   )
 
-  const handleAnalyze = useCallback(async (userHint?: string) => {
-    if (!state.videoPath) return
-    dispatch({ type: 'START_ANALYZE' })
-    const result = await window.api.analyzeTranscript(state.videoPath, state.segments, {
-      provider: state.provider,
-      model: state.model,
-      apiKey: state.apiKey,
-      apiKeys: state.apiKeys,
-      userHint: state.userHint,
-      language: state.language,
-      entropyThold: state.entropyThold,
-      maxContext: state.maxContext,
-      beamSize: state.beamSize,
-      temperatureInc: state.temperatureInc
-    }, userHint)
-    if (result.success && result.clips) {
-      clampClips(result.clips, result.rawResponse || '')
-    } else {
-      dispatch({
-        type: 'ANALYZE_ERROR',
-        error: result.error || 'Analysis failed'
-      })
-    }
-  }, [state.videoPath, state.segments, state.provider, state.model, state.apiKey, clampClips])
-
-  const handleLoadCachedAnalysis = useCallback(
-    (clips: { title: string; startMs: number; endMs: number }[], rawResponse: string) => {
-      clampClips(clips, rawResponse)
+  const handleAnalyze = useCallback(
+    async (userHint?: string) => {
+      if (!state.videoPath) return
+      dispatch({ type: 'START_ANALYZE' })
+      const result = await window.api.analyzeTranscript(
+        state.videoPath,
+        state.segments,
+        settingsOf(state),
+        userHint
+      )
+      if (result.success && result.clips) {
+        adoptClips(result.clips, result.rawResponse || '')
+      } else {
+        dispatch({ type: 'ANALYZE_ERROR', error: result.error || 'Analysis failed' })
+      }
     },
-    [clampClips]
+    [state, adoptClips]
   )
 
   const handleSlice = useCallback(async () => {
     if (!state.videoPath) return
-    const approved = state.clips.filter((c) => c.approved)
+    const approved = state.clips.filter((clip) => clip.approved)
+    const look: CaptionLook = state.captions?.look === 'burn-small' ? 'burn-small' : 'burn-large'
     dispatch({ type: 'START_EXPORT' })
     const result = await window.api.cutClips(
       state.videoPath,
-      approved.map(({ title, startMs, endMs, crop }) => ({ title, startMs, endMs, crop })),
-      state.segments
+      approved.map(({ title, startMs, endMs, crop, category, topic }) => ({
+        title,
+        startMs,
+        endMs,
+        crop,
+        category,
+        topic
+      })),
+      state.segments,
+      state.exportSubtitles,
+      look
     )
     if (result.success && result.outputDir) {
       dispatch({ type: 'EXPORT_DONE', outputDir: result.outputDir })
     } else {
-      dispatch({
-        type: 'EXPORT_ERROR',
-        error: result.error || 'Export failed'
-      })
+      dispatch({ type: 'EXPORT_ERROR', error: result.error || 'Export failed' })
     }
-  }, [state.videoPath, state.clips, state.segments])
+  }, [state.videoPath, state.clips, state.segments, state.exportSubtitles, state.captions])
 
-  const handleCancel = useCallback(() => {
-    window.api.cancelPipeline()
-  }, [])
-
-  const handleOpenFolder = useCallback(() => {
-    if (state.outputDir) window.api.openFolder(state.outputDir)
-  }, [state.outputDir])
-
-  const handleReset = useCallback(() => {
-    dispatch({ type: 'RESET' })
-  }, [])
-
-  const handleStepClick = useCallback((step: WizardStep) => {
-    dispatch({ type: 'GO_TO_STEP', step })
-  }, [])
-
-  const handleLoadCachedTranscript = useCallback(
-    (segments: TranscriptSegment[]) => {
-      dispatch({ type: 'LOAD_CACHED_TRANSCRIPT', segments })
+  const saveFraming = useCallback(
+    (crop: ClipCrop) => {
+      if (!state.videoPath || crop.ratio === 'original') return
+      const framing = { ...state.framing, [crop.ratio]: crop }
+      dispatch({ type: 'SET_FRAMING', framing })
+      void window.api.saveFraming(state.videoPath, framing)
     },
-    []
+    [state.videoPath, state.framing]
   )
 
-  const handleUpdateClipTimes = useCallback(
-    (id: string, startMs: number, endMs: number) => {
-      dispatch({ type: 'UPDATE_CLIP_TIMES', id, startMs, endMs })
-    },
-    []
-  )
-
-  const handleUpdateClipCrop = useCallback(
+  const handleClipCrop = useCallback(
     (id: string, crop: ClipCrop) => {
+      markClips()
       dispatch({ type: 'UPDATE_CLIP_CROP', id, crop })
+      if (crop.ratio !== 'original' && !state.framing[crop.ratio]) saveFraming(crop)
     },
-    []
+    [saveFraming, state.framing]
   )
 
-  // --- Render current step ---
+  const handleCaptions = useCallback(
+    (captions: CaptionProject) => {
+      dispatch({ type: 'SET_CAPTIONS', captions })
+      if (state.videoPath) void window.api.saveCaptions(state.videoPath, captions)
+    },
+    [state.videoPath]
+  )
 
-  function renderStep(): React.JSX.Element {
-    switch (state.currentStep) {
-      case 'select':
-        return (
-          <StepSelectVideo
-            videoPath={state.videoPath}
-            language={state.language}
-            entropyThold={state.entropyThold}
-            maxContext={state.maxContext}
-            beamSize={state.beamSize}
-            temperatureInc={state.temperatureInc}
-            onLanguageChange={(l) => dispatch({ type: 'SET_LANGUAGE', language: l })}
-            onEntropyTholdChange={(v) => dispatch({ type: 'SET_ENTROPY_THOLD', entropyThold: v })}
-            onMaxContextChange={(v) => dispatch({ type: 'SET_MAX_CONTEXT', maxContext: v })}
-            onBeamSizeChange={(v) => dispatch({ type: 'SET_BEAM_SIZE', beamSize: v })}
-            onTemperatureIncChange={(v) => dispatch({ type: 'SET_TEMPERATURE_INC', temperatureInc: v })}
-            onSelectVideo={handleSelectVideo}
-            onNext={handleStartTranscribe}
-            onLoadCachedTranscript={handleLoadCachedTranscript}
-          />
-        )
-      case 'transcribe':
-        return (
-          <StepTranscribe
-            message={state.transcribeMessage}
-            percent={state.transcribePercent}
-            error={state.transcribeError}
-            onCancel={handleCancel}
-            onRetry={handleStartTranscribe}
-          />
-        )
-      case 'review-transcript':
-        return (
-          <StepReviewTranscript
-            segments={state.segments}
-            videoPath={state.videoPath}
-            provider={state.provider}
-            model={state.model}
-            apiKey={state.apiKey}
-            userHint={state.userHint}
-            analyzing={state.analyzing}
-            analyzePercent={state.analyzePercent}
-            analyzeMessage={state.analyzeMessage}
-            error={state.analyzeError}
-            onProviderChange={(p) =>
-              dispatch({ type: 'SET_PROVIDER', provider: p })
-            }
-            onModelChange={(m) => dispatch({ type: 'SET_MODEL', model: m })}
-            onApiKeyChange={(k) =>
-              dispatch({ type: 'SET_API_KEY', apiKey: k })
-            }
-            onUserHintChange={(h) =>
-              dispatch({ type: 'SET_USER_HINT', userHint: h })
-            }
-            onAnalyze={handleAnalyze}
-            onLoadCachedAnalysis={handleLoadCachedAnalysis}
-            onCancel={handleCancel}
-          />
-        )
-      case 'review-slices':
-        return (
-          <StepReviewSlices
-            clips={state.clips}
-            videoPath={state.videoPath!}
-            rawResponse={state.rawResponse}
-            videoDurationMs={state.segments.length > 0 ? state.segments[state.segments.length - 1].endMs : 0}
-            onToggle={(id) => dispatch({ type: 'TOGGLE_CLIP', id })}
-            onUpdateClipTimes={handleUpdateClipTimes}
-            onUpdateClipCrop={handleUpdateClipCrop}
-            onSlice={handleSlice}
-          />
-        )
-      case 'export':
-        return (
-          <StepExport
-            stage={state.exportStage}
-            message={state.exportMessage}
-            percent={state.exportPercent}
-            outputDir={state.outputDir}
-            error={state.exportError}
-            onOpenFolder={handleOpenFolder}
-            onStartOver={handleReset}
-            onCancel={handleCancel}
-          />
-        )
-    }
-  }
+  const handleExportFrame = useCallback(
+    async (crop: ClipCrop) => {
+      if (!state.videoPath) return
+      if (crop.ratio !== 'original') saveFraming(crop)
+      dispatch({ type: 'START_RENDER' })
+      const result = await window.api.exportReframed(state.videoPath, crop)
+      if (result.success && result.outputDir) {
+        dispatch({ type: 'EXPORT_DONE', outputDir: result.outputDir })
+      } else {
+        dispatch({ type: 'EXPORT_ERROR', error: result.error || 'Reframe failed' })
+      }
+    },
+    [state.videoPath, saveFraming]
+  )
+
+  const handleExportCaptions = useCallback(
+    async (cues: TranscriptSegment[], look: CaptionLook) => {
+      if (!state.videoPath) return
+      dispatch({ type: 'START_RENDER' })
+      const result = await window.api.exportCaptions(state.videoPath, cues, look)
+      if (result.success && result.outputDir) {
+        dispatch({ type: 'EXPORT_DONE', outputDir: result.outputDir })
+      } else {
+        dispatch({ type: 'EXPORT_ERROR', error: result.error || 'Caption export failed' })
+      }
+    },
+    [state.videoPath]
+  )
+
+  const continueNote =
+    state.returnTo === 'find'
+      ? 'When it finishes, you return to Find best parts.'
+      : state.returnTo === 'captions'
+        ? 'When it finishes, you return to Captions.'
+        : null
+
+  const awaitingTool = toolAwaitingVideo(state)
+  const player = isPlayerScreen(state.screen)
+  const useSheet = state.screen !== 'home' && (!player || awaitingTool !== null)
 
   return (
     <div
-      className="relative flex flex-col h-screen bg-bg-base text-neutral-200 font-sans overflow-hidden"
-      style={{
-        background: 'radial-gradient(ellipse at top, #12121e 0%, #08080f 60%)'
-      }}
+      className="relative flex flex-col h-screen bg-bg-base text-[#f4f1ea] overflow-hidden"
     >
-      <div
-        className={`pointer-events-none absolute inset-0 overflow-hidden ${
-          state.currentStep === 'review-slices' ? 'hidden' : ''
-        }`}
-      >
-        <div
-          className="absolute -top-24 -right-24 w-72 h-72 rounded-full opacity-[0.06] blur-3xl"
-          style={{ background: 'rgb(240, 154, 62)' }}
-        />
-        <div
-          className="absolute -bottom-32 -left-32 w-80 h-80 rounded-full opacity-[0.04] blur-3xl"
-          style={{ background: 'rgb(240, 154, 62)' }}
-        />
-        <div
-          className="absolute inset-0 opacity-[0.03]"
-          style={{
-            backgroundImage:
-              'linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px)',
-            backgroundSize: '48px 48px'
-          }}
-        />
-        <div className="absolute top-20 left-3 flex flex-col gap-3 opacity-[0.06]">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="w-1 h-4 rounded-full bg-white" />
-          ))}
-        </div>
-        <div className="absolute top-20 right-3 flex flex-col gap-3 opacity-[0.06]">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="w-1 h-4 rounded-full bg-white" />
-          ))}
-        </div>
-      </div>
-
       <TitleBar>
-        <Stepper
-          currentStep={state.currentStep}
-          completedSteps={completedSet}
-          onStepClick={handleStepClick}
-        />
+        {state.screen !== 'home' && (
+          <ToolHeader
+            title={screenTitle(state.screen)}
+            fileName={fileNameOf(state.videoPath)}
+            onBack={goHome}
+          />
+        )}
       </TitleBar>
-
       <div
-        className={`relative flex flex-col flex-1 ${
-          state.currentStep === 'review-slices'
-            ? 'overflow-hidden'
-            : 'px-6 pb-10 overflow-y-auto custom-scrollbar'
-        }`}
+        className={
+          useSheet
+            ? 'stage custom-scrollbar'
+            : 'relative flex flex-col flex-1 min-h-0 overflow-hidden'
+        }
       >
-        {renderStep()}
+        {renderScreen(state, {
+          enterTool,
+          chooseVideo,
+          goHome,
+          openTool,
+          runTranscribe,
+          showTranscribe,
+          adoptClips,
+          handleAnalyze,
+          adoptSaved,
+          handleSlice,
+          saveFraming,
+          handleClipCrop,
+          handleCaptions,
+          handleExportFrame,
+          handleExportCaptions,
+          markClips,
+          continueNote,
+          dispatch
+        })}
       </div>
+      {(state.screen === 'home' || useSheet) && <div className="sunset" />}
     </div>
   )
 }
+
+interface ScreenHandlers {
+  enterTool: (tool: ToolId) => void
+  chooseVideo: (tool: ToolId) => Promise<void>
+  goHome: () => void
+  openTool: (tool: ToolId, videoPath: string) => Promise<void>
+  runTranscribe: () => Promise<void>
+  showTranscribe: (returnTo: 'find' | 'captions') => void
+  adoptClips: (clips: ClipSegment[], rawResponse: string) => void
+  adoptSaved: (clips: ClipSegment[], rawResponse: string) => void
+  handleAnalyze: (userHint?: string) => Promise<void>
+  handleSlice: () => Promise<void>
+  saveFraming: (crop: ClipCrop) => void
+  handleClipCrop: (id: string, crop: ClipCrop) => void
+  handleCaptions: (captions: CaptionProject) => void
+  handleExportFrame: (crop: ClipCrop) => Promise<void>
+  handleExportCaptions: (cues: TranscriptSegment[], look: CaptionLook) => Promise<void>
+  markClips: () => void
+  continueNote: string | null
+  dispatch: React.Dispatch<import('./state').WizardAction>
+}
+
+function toolAwaitingVideo(state: WizardState): ToolId | null {
+  if (state.videoPath) return null
+  if (state.screen === 'transcribe' && (state.transcribeStage === 'idle' || state.transcribeStage === 'done')) {
+    return 'transcribe'
+  }
+  if (state.screen === 'find') return 'find'
+  if (state.screen === 'reframe') return 'reframe'
+  if (state.screen === 'captions') return 'captions'
+  return null
+}
+
+function renderScreen(state: WizardState, handlers: ScreenHandlers): React.JSX.Element {
+  const path = state.videoPath
+  const awaiting = toolAwaitingVideo(state)
+  if (awaiting) {
+    return (
+      <ToolStart
+        tool={awaiting}
+        onChoose={() => void handlers.chooseVideo(awaiting)}
+        onUseRecent={(videoPath) => void handlers.openTool(awaiting, videoPath)}
+      />
+    )
+  }
+  switch (state.screen) {
+    case 'home':
+      return <HomeScreen onOpen={handlers.enterTool} />
+    case 'transcribe':
+      return (
+        <TranscribeScreen
+          projectReady={state.projectReady}
+          videoPath={path || ''}
+          language={state.language}
+          entropyThold={state.entropyThold}
+          maxContext={state.maxContext}
+          beamSize={state.beamSize}
+          temperatureInc={state.temperatureInc}
+          savedCount={state.segments.length}
+          continueNote={handlers.continueNote}
+          stage={state.transcribeStage}
+          message={state.transcribeMessage}
+          percent={state.transcribePercent}
+          error={state.transcribeError}
+          onLanguageChange={(language) => handlers.dispatch({ type: 'SET_LANGUAGE', language })}
+          onEntropyTholdChange={(entropyThold) =>
+            handlers.dispatch({ type: 'SET_ENTROPY_THOLD', entropyThold })
+          }
+          onMaxContextChange={(maxContext) => handlers.dispatch({ type: 'SET_MAX_CONTEXT', maxContext })}
+          onBeamSizeChange={(beamSize) => handlers.dispatch({ type: 'SET_BEAM_SIZE', beamSize })}
+          onTemperatureIncChange={(temperatureInc) =>
+            handlers.dispatch({ type: 'SET_TEMPERATURE_INC', temperatureInc })
+          }
+          onStart={() => void handlers.runTranscribe()}
+          onUseSaved={() => handlers.dispatch({ type: 'USE_SAVED_TRANSCRIPT' })}
+          onCancel={() => window.api.cancelPipeline()}
+        />
+      )
+    case 'transcribe-done':
+      return (
+        <TranscribeDoneScreen
+          videoPath={path || ''}
+          segments={state.segments}
+          onOpen={async () => {
+            if (!path) return { success: false, error: 'Missing video' }
+            return window.api.openTranscript(path, state.segments)
+          }}
+          onHome={handlers.goHome}
+        />
+      )
+    case 'find':
+      return (
+        <FindScreen
+          projectReady={state.projectReady}
+          segments={state.segments}
+          videoPath={path || ''}
+          provider={state.provider}
+          model={state.model}
+          apiKey={state.apiKey}
+          userHint={state.userHint}
+          analyzing={state.analyzing}
+          analyzePercent={state.analyzePercent}
+          analyzeMessage={state.analyzeMessage}
+          error={state.analyzeError}
+          hasClips={state.clips.length > 0}
+          onProviderChange={(provider) => handlers.dispatch({ type: 'SET_PROVIDER', provider })}
+          onModelChange={(model) => handlers.dispatch({ type: 'SET_MODEL', model })}
+          onApiKeyChange={(apiKey) => handlers.dispatch({ type: 'SET_API_KEY', apiKey })}
+          onUserHintChange={(userHint) => handlers.dispatch({ type: 'SET_USER_HINT', userHint })}
+          onAnalyze={(hint) => void handlers.handleAnalyze(hint)}
+          onLoadCachedAnalysis={handlers.adoptSaved}
+          onCancel={() => window.api.cancelPipeline()}
+          onAddRange={() => {
+            handlers.markClips()
+            handlers.dispatch({ type: 'ADD_CLIP' })
+          }}
+          onBackToClips={() => handlers.dispatch({ type: 'SHOW_SCREEN', screen: 'review' })}
+          onTranscribe={() => handlers.showTranscribe('find')}
+        />
+      )
+    case 'review':
+      return (
+        <ReviewScreen
+          clips={state.clips}
+          videoPath={path || ''}
+          rawResponse={state.rawResponse}
+          videoDurationMs={state.videoDurationMs || undefined}
+          framing={state.framing}
+          exportSubtitles={state.exportSubtitles}
+          onToggle={(id) => {
+            handlers.markClips()
+            handlers.dispatch({ type: 'TOGGLE_CLIP', id })
+          }}
+          onUpdateClipTimes={(id, startMs, endMs) => {
+            handlers.markClips()
+            handlers.dispatch({ type: 'UPDATE_CLIP_TIMES', id, startMs, endMs })
+          }}
+          onUpdateClipCrop={handlers.handleClipCrop}
+          onExportSubtitles={(exportSubtitles) =>
+            handlers.dispatch({ type: 'SET_EXPORT_SUBTITLES', exportSubtitles })
+          }
+          onSlice={() => void handlers.handleSlice()}
+          onFindAgain={() => handlers.dispatch({ type: 'SHOW_SCREEN', screen: 'find' })}
+          onAddRange={() => {
+            handlers.markClips()
+            handlers.dispatch({ type: 'ADD_CLIP' })
+          }}
+        />
+      )
+    case 'export':
+      return (
+        <ExportScreen
+          stage={state.exportStage}
+          message={state.exportMessage}
+          percent={state.exportPercent}
+          outputDir={state.outputDir}
+          error={state.exportError}
+          onOpenFolder={() => state.outputDir && void window.api.openFolder(state.outputDir)}
+          onStartOver={handlers.goHome}
+          onCancel={() => window.api.cancelPipeline()}
+          onReframe={() => path && void handlers.openTool('reframe', path)}
+          onCaptions={() => path && void handlers.openTool('captions', path)}
+        />
+      )
+    case 'reframe':
+      if (!state.projectReady || !path) {
+        return <p className="m-auto text-base text-neutral-400">Opening the video…</p>
+      }
+      return (
+        <ReframeScreen
+          videoPath={path}
+          durationMs={state.videoDurationMs}
+          framing={state.framing}
+          exportStage={state.exportStage}
+          exportMessage={state.exportMessage}
+          exportPercent={state.exportPercent}
+          outputDir={state.outputDir}
+          exportError={state.exportError}
+          onFramingChange={handlers.saveFraming}
+          onExport={(crop) => void handlers.handleExportFrame(crop)}
+          onOpenFolder={() => state.outputDir && void window.api.openFolder(state.outputDir)}
+        />
+      )
+    case 'captions':
+      if (!state.projectReady || !path) {
+        return <p className="m-auto text-base text-neutral-400">Opening the video…</p>
+      }
+      return (
+        <CaptionsScreen
+          videoPath={path}
+          durationMs={state.videoDurationMs}
+          segments={state.segments}
+          captions={state.captions}
+          exportStage={state.exportStage}
+          exportMessage={state.exportMessage}
+          exportPercent={state.exportPercent}
+          outputDir={state.outputDir}
+          exportError={state.exportError}
+          onChange={handlers.handleCaptions}
+          onTranscribe={() => handlers.showTranscribe('captions')}
+          onExport={(cues, look) => void handlers.handleExportCaptions(cues, look)}
+          onOpenFolder={() => state.outputDir && void window.api.openFolder(state.outputDir)}
+        />
+      )
+    default:
+      return <HomeScreen onOpen={handlers.enterTool} />
+  }
+}
+

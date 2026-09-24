@@ -1,4 +1,5 @@
 import type { ClipSegment, TranscriptSegment } from './types'
+import { clamp } from './crop'
 
 const PAUSE_MIN_MS = 400
 const PRE_ROLL_MS = 250
@@ -80,6 +81,30 @@ export function snapToPause<T extends { startMs: number; endMs: number }>(
   }
 
   return { ...clip, startMs, endMs }
+}
+
+export function nudgeEdge(
+  startMs: number,
+  endMs: number,
+  edge: 'start' | 'end',
+  deltaMs: number,
+  maxMs: number,
+  minLen = 500
+): { startMs: number; endMs: number } {
+  const limit = Number.isFinite(maxMs) && maxMs > 0 ? maxMs : Math.max(endMs, startMs)
+  let start = startMs + (edge === 'start' ? deltaMs : 0)
+  let end = endMs + (edge === 'end' ? deltaMs : 0)
+  start = clamp(start, 0, limit)
+  end = clamp(end, 0, limit)
+  if (end - start < minLen) {
+    if (edge === 'start') start = clamp(end - minLen, 0, limit)
+    else end = clamp(start + minLen, 0, limit)
+  }
+  if (end - start < minLen) {
+    if (edge === 'start') end = clamp(start + minLen, 0, limit)
+    else start = clamp(end - minLen, 0, limit)
+  }
+  return { startMs: Math.round(start), endMs: Math.round(end) }
 }
 
 export function refineClipBounds<T extends ClipSegment>(

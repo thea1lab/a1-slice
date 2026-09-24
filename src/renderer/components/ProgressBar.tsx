@@ -12,7 +12,7 @@ export default function ProgressBar({
   return (
     <div className="w-full space-y-2">
       {(label || sublabel) && (
-        <div className="flex items-center justify-between text-sm">
+        <div className="flex items-center justify-between gap-4 text-base">
           {label && (
             <span className="text-neutral-300 font-medium">{label}</span>
           )}
@@ -21,9 +21,9 @@ export default function ProgressBar({
           )}
         </div>
       )}
-      <div className="w-full h-2 bg-bg-input rounded-full overflow-hidden">
+      <div className="w-full h-[3px] bg-[#2c2c2c] overflow-hidden">
         <div
-          className="h-full bg-accent rounded-full transition-all duration-500 ease-out"
+          className="h-full bg-accent transition-all duration-500 ease-out"
           style={{ width: `${percent}%` }}
         />
       </div>

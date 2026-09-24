@@ -3,6 +3,7 @@ import {
   swapInvertedTimes,
   snapClipToSegments,
   snapToPause,
+  nudgeEdge,
   refineClipBounds
 } from '../clipBounds'
 import type { TranscriptSegment, ClipSegment } from '../types'
@@ -88,6 +89,20 @@ describe('snapToPause', () => {
     const result = snapToPause(clip, segments)
     expect(result.endMs).toBeGreaterThan(15000)
     expect(result.endMs).toBeLessThan(17000)
+  })
+})
+
+describe('nudgeEdge', () => {
+  it('moves the start one second earlier and clamps at zero', () => {
+    expect(nudgeEdge(500, 4000, 'start', -1000, 20000)).toEqual({ startMs: 0, endMs: 4000 })
+  })
+
+  it('moves the end one second later and keeps a minimum length', () => {
+    expect(nudgeEdge(0, 800, 'end', -1000, 20000)).toEqual({ startMs: 0, endMs: 500 })
+  })
+
+  it('does not run past the video', () => {
+    expect(nudgeEdge(1000, 2500, 'end', 1000, 3000)).toEqual({ startMs: 1000, endMs: 3000 })
   })
 })
 

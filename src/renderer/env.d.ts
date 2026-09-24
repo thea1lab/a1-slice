@@ -1,5 +1,9 @@
 import type {
   AppSettings,
+  CaptionLook,
+  CaptionProject,
+  ClipCrop,
+  CropRatio,
   ProgressUpdate,
   TranscriptSegment,
   ClipSegment,
@@ -8,7 +12,10 @@ import type {
   CutResult,
   ClipPreviewResult,
   CheckTranscriptResult,
-  CheckAnalysisResult
+  CheckAnalysisResult,
+  ProjectData,
+  RecentVideo,
+  SubtitleExport
 } from '../shared/types'
 
 declare global {
@@ -31,8 +38,19 @@ declare global {
       cutClips(
         videoPath: string,
         clips: ClipSegment[],
-        segments: TranscriptSegment[]
+        segments: TranscriptSegment[],
+        subtitlesMode?: SubtitleExport,
+        burnLook?: CaptionLook
       ): Promise<CutResult>
+      loadProject(videoPath: string): Promise<ProjectData>
+      saveClips(videoPath: string, clips: ClipSegment[], rawResponse?: string): Promise<void>
+      saveFraming(videoPath: string, framing: Partial<Record<CropRatio, ClipCrop>>): Promise<void>
+      saveCaptions(videoPath: string, captions: CaptionProject): Promise<void>
+      rememberVideo(videoPath: string): Promise<void>
+      listRecent(): Promise<RecentVideo[]>
+      openTranscript(videoPath: string, segments: TranscriptSegment[]): Promise<{ success: boolean; error?: string }>
+      exportReframed(videoPath: string, crop: ClipCrop): Promise<CutResult>
+      exportCaptions(videoPath: string, cues: TranscriptSegment[], look: CaptionLook): Promise<CutResult>
       cancelPipeline(): void
       onProgress(callback: (update: ProgressUpdate) => void): () => void
       onPreviewProgress(callback: (update: { previewId?: string; percent: number }) => void): () => void

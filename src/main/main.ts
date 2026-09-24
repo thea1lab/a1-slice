@@ -8,21 +8,42 @@ import {
   session
 } from 'electron'
 import { join, basename, dirname, extname, resolve, normalize } from 'path'
-import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync, statSync, createReadStream } from 'fs'
+import { mkdirSync, existsSync, unlinkSync, writeFileSync, readFileSync, statSync, createReadStream, copyFileSync } from 'fs'
 import { Readable } from 'stream'
 
-import { extractAudio, splitWav, cutClip, getVideoDurationMs, getVideoSize, extractPreviewClip } from './ffmpeg'
+import { extractAudio, splitWav, cutClip, copyClip, getVideoDurationMs, getVideoSize, extractPreviewClip, generateSrt } from './ffmpeg'
+import { ffmpegCropFilter } from '../shared/crop'
 import { downloadModel, transcribeWithRetry, mergeChunkSegments, type AbortHandle } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
 import { pathFromPreviewUrl } from '../shared/previewUrl'
+import { previewCacheKey } from '../shared/project'
 import { parseByteRange, rangeResponseMeta, videoMimeForExt } from './httpRange'
+import {
+  cachedPreviewPath,
+  inspectVideo,
+  isCachedPreview,
+  previewCacheDir,
+  readProjectFiles,
+  readRecent,
+  videoStem,
+  writeCaptions,
+  writeClips,
+  writeFraming,
+  writeRemembered,
+  writeTranscript
+} from './projectStore'
 import type {
   AppSettings,
+  CaptionLook,
+  CaptionProject,
+  ClipCrop,
   ProgressUpdate,
   TranscriptSegment,
   ClipSegment,
-  ClipPreviewResult
+  ClipPreviewResult,
+  CropRatio,
+  SubtitleExport
 } from '../shared/types'
 
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
@@ -100,12 +121,12 @@ function createWindow(): void {
     trafficLightPosition: isMac ? { x: 12, y: 12 } : undefined,
     ...(isMac ? {} : {
       titleBarOverlay: {
-        color: '#08080f',
-        symbolColor: '#737373',
+        color: '#161616',
+        symbolColor: '#f4f1ea',
         height: 48
       }
     }),
-    backgroundColor: '#0f0f1a',
+    backgroundColor: '#161616',
     maximizable: true,
     autoHideMenuBar: !isMac,
     icon: join(__dirname, '../../resources/icon.png'),
@@ -203,6 +224,20 @@ secureHandle(
     }
     allowVideoPath(videoPath)
     try {
+      const sourceStat = statSync(videoPath)
+      const key = previewCacheKey(
+        videoPath,
+        sourceStat.size,
+        sourceStat.mtimeMs,
+        startMs,
+        endMs
+      )
+      const cachePath = cachedPreviewPath(key)
+      if (existsSync(cachePath) && statSync(cachePath).size > 0) {
+        allowVideoPath(cachePath)
+        return { success: true, previewPath: cachePath, cached: true }
+      }
+
       const previewPath = await withPreviewSlot(() =>
         extractPreviewClip(videoPath, startMs, endMs, (percent) => {
           mainWindow?.webContents.send('preview-progress', {
@@ -211,9 +246,17 @@ secureHandle(
           })
         })
       )
-      allowVideoPath(previewPath)
-      previewFiles.add(previewPath)
-      return { success: true, previewPath }
+      try {
+        if (!existsSync(previewCacheDir())) mkdirSync(previewCacheDir(), { recursive: true })
+        copyFileSync(previewPath, cachePath)
+        unlinkSync(previewPath)
+        allowVideoPath(cachePath)
+        return { success: true, previewPath: cachePath, cached: false }
+      } catch {
+        allowVideoPath(previewPath)
+        previewFiles.add(previewPath)
+        return { success: true, previewPath, cached: false }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Preview cut failed'
       return { success: false, error: message }
@@ -223,6 +266,7 @@ secureHandle(
 
 secureHandle('release-clip-preview', (_event, previewPath: string) => {
   if (typeof previewPath !== 'string' || !previewPath) return
+  if (isCachedPreview(previewPath)) return
   if (!previewFiles.has(previewPath)) return
   previewFiles.delete(previewPath)
   try {
@@ -261,13 +305,13 @@ secureHandle(
       // Extract audio
       sendProgress({
         stage: 'extracting',
-        message: 'Extracting audio from video...',
+        message: 'Reading the audio…',
         percent: 0
       })
       const wavPath = await extractAudio(videoPath, (pct) => {
         sendProgress({
           stage: 'extracting',
-          message: 'Extracting audio from video...',
+          message: 'Reading the audio…',
           percent: pct
         })
       })
@@ -277,13 +321,13 @@ secureHandle(
       // Download whisper model if needed
       sendProgress({
         stage: 'downloading',
-        message: 'Checking whisper model...',
+        message: 'Checking the speech model…',
         percent: 0
       })
       await downloadModel((pct) => {
         sendProgress({
           stage: 'downloading',
-          message: 'Downloading whisper model...',
+          message: 'Downloading the speech model…',
           percent: pct
         })
       })
@@ -293,7 +337,7 @@ secureHandle(
       // Split audio into chunks for more reliable transcription
       sendProgress({
         stage: 'transcribing',
-        message: 'Splitting audio into chunks...',
+        message: 'Preparing the audio…',
         percent: 0
       })
       const overlapSec = 15
@@ -305,7 +349,10 @@ secureHandle(
         if (cancelled) throw new Error('Cancelled')
 
         const chunk = chunks[i]
-        const chunkLabel = `Transcribing chunk ${i + 1}/${totalChunks}...`
+        const chunkLabel =
+          totalChunks === 1
+            ? 'Writing the transcript…'
+            : `Writing the transcript, part ${i + 1} of ${totalChunks}…`
         sendProgress({
           stage: 'transcribing',
           message: chunkLabel,
@@ -352,11 +399,8 @@ secureHandle(
 
       if (cancelled) throw new Error('Cancelled')
 
-      // Cache transcript next to source video
       try {
-        const vName = basename(videoPath).replace(/\.[^.]+$/, '')
-        const cachePath = join(dirname(videoPath), `${vName}.a1slice.json`)
-        writeFileSync(cachePath, JSON.stringify(allSegments), 'utf-8')
+        writeTranscript(videoPath, allSegments)
       } catch {}
 
       sendProgress({ stage: 'done', message: '', percent: 100 })
@@ -377,15 +421,8 @@ secureHandle(
 // IPC: Check for cached transcript
 secureHandle('check-transcript', (_event, videoPath: string) => {
   allowVideoPath(videoPath)
-  try {
-    const vName = basename(videoPath).replace(/\.[^.]+$/, '')
-    const cachePath = join(dirname(videoPath), `${vName}.a1slice.json`)
-    if (existsSync(cachePath)) {
-      const data = readFileSync(cachePath, 'utf-8')
-      const segments = JSON.parse(data)
-      return { found: true, segments }
-    }
-  } catch {}
+  const segments = readProjectFiles(videoPath).segments
+  if (segments.length > 0) return { found: true, segments }
   return { found: false }
 })
 
@@ -393,39 +430,13 @@ secureHandle('check-transcript', (_event, videoPath: string) => {
 secureHandle('check-analysis', (_event, videoPath: string) => {
   allowVideoPath(videoPath)
   try {
-    const vName = basename(videoPath).replace(/\.[^.]+$/, '')
-    const dir = dirname(videoPath)
-    const clipsPath = join(dir, `${vName}.a1slice-clips.json`)
-    const analysisPath = join(dir, `${vName}.a1slice-analysis.txt`)
-
-    // Try new clips JSON cache first
-    if (existsSync(clipsPath)) {
-      const clipsData = JSON.parse(readFileSync(clipsPath, 'utf-8'))
-      const clips: ClipSegment[] = (clipsData as any[]).map((item: any) => {
-        const clip: ClipSegment = {
-          title: item.title,
-          startMs: item.startMs,
-          endMs: item.endMs
-        }
-        if (item.category === 'related' || item.category === 'standalone') {
-          clip.category = item.category
-        }
-        if (item.topic) {
-          clip.topic = item.topic
-        }
-        return clip
-      })
-      const rawResponse = existsSync(analysisPath)
-        ? readFileSync(analysisPath, 'utf-8')
-        : ''
-      return { found: true, clips, rawResponse }
-    }
-
-    // Backward compat: old .a1slice-analysis.txt format
+    const { clips, rawResponse } = readProjectFiles(videoPath)
+    if (clips.length > 0) return { found: true, clips, rawResponse }
+    const { dir, stem } = videoStem(videoPath)
+    const analysisPath = join(dir, `${stem}.a1slice-analysis.txt`)
     if (existsSync(analysisPath)) {
-      const rawResponse = readFileSync(analysisPath, 'utf-8')
-      const clips = parseLLMResponse(rawResponse)
-      return { found: true, clips, rawResponse }
+      const legacy = readFileSync(analysisPath, 'utf-8')
+      return { found: true, clips: parseLLMResponse(legacy), rawResponse: legacy }
     }
   } catch {}
   return { found: false }
@@ -447,7 +458,7 @@ secureHandle(
     try {
       sendProgress({
         stage: 'analyzing',
-        message: 'AI is picking the best clips...',
+        message: 'Reading the transcript and marking clips…',
         percent: 0
       })
 
@@ -462,22 +473,8 @@ secureHandle(
 
       if (cancelled) throw new Error('Cancelled')
 
-      // Cache analysis next to source video
       try {
-        const vName = basename(videoPath).replace(/\.[^.]+$/, '')
-        const dir = dirname(videoPath)
-        // Save clips as structured JSON for reliable re-parsing
-        writeFileSync(
-          join(dir, `${vName}.a1slice-clips.json`),
-          JSON.stringify(clips),
-          'utf-8'
-        )
-        // Save full debug output for inspection
-        writeFileSync(
-          join(dir, `${vName}.a1slice-analysis.txt`),
-          rawResponse,
-          'utf-8'
-        )
+        writeClips(videoPath, clips, rawResponse)
       } catch {}
 
       sendProgress({ stage: 'done', message: '', percent: 100 })
@@ -498,7 +495,9 @@ secureHandle(
     _event,
     videoPath: string,
     clips: ClipSegment[],
-    segments: TranscriptSegment[]
+    segments: TranscriptSegment[],
+    subtitlesMode?: SubtitleExport,
+    burnLook?: CaptionLook
   ) => {
     cancelled = false
     allowVideoPath(videoPath)
@@ -549,6 +548,11 @@ secureHandle(
           percent: overallPercent
         })
 
+        const mode: SubtitleExport =
+          subtitlesMode === 'off' || subtitlesMode === 'burn' || subtitlesMode === 'srt'
+            ? subtitlesMode
+            : 'srt'
+        const look = burnLook === 'burn-small' ? 'burn-small' : 'burn-large'
         await cutClip(
           videoPath,
           outputPath,
@@ -557,7 +561,10 @@ secureHandle(
           segments,
           undefined,
           clip.crop,
-          videoSize
+          videoSize,
+          mode,
+          look,
+          captionFontDirs()
         )
       }
 
@@ -566,6 +573,189 @@ secureHandle(
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Unknown error occurred'
+      sendProgress({ stage: 'error', message, percent: 0 })
+      return { success: false, error: message }
+    }
+  }
+)
+
+function captionFontDirs(): string[] {
+  return [
+    join(process.resourcesPath || '', 'fonts'),
+    join(__dirname, '../../resources/fonts')
+  ]
+}
+
+secureHandle('load-project', async (_event, videoPath: string) => {
+  if (typeof videoPath !== 'string' || !videoPath) {
+    return {
+      segments: [],
+      clips: [],
+      rawResponse: '',
+      framing: {},
+      captions: null,
+      durationMs: 0
+    }
+  }
+  allowVideoPath(videoPath)
+  const project = readProjectFiles(videoPath)
+  let durationMs = 0
+  try {
+    durationMs = await getVideoDurationMs(videoPath)
+  } catch {
+    durationMs = 0
+  }
+  return { ...project, durationMs }
+})
+
+secureHandle('save-clips', (_event, videoPath: string, clips: ClipSegment[], rawResponse?: string) => {
+  if (typeof videoPath !== 'string' || !videoPath || !Array.isArray(clips)) return
+  allowVideoPath(videoPath)
+  writeClips(videoPath, clips, rawResponse)
+})
+
+secureHandle(
+  'save-framing',
+  (_event, videoPath: string, framing: Partial<Record<CropRatio, ClipCrop>>) => {
+    if (typeof videoPath !== 'string' || !videoPath || !framing) return
+    allowVideoPath(videoPath)
+    writeFraming(videoPath, framing)
+  }
+)
+
+secureHandle('save-captions', (_event, videoPath: string, captions: CaptionProject) => {
+  if (typeof videoPath !== 'string' || !videoPath || !captions) return
+  allowVideoPath(videoPath)
+  writeCaptions(videoPath, captions)
+})
+
+secureHandle('remember-video', (_event, videoPath: string) => {
+  if (typeof videoPath !== 'string' || !videoPath) return
+  allowVideoPath(videoPath)
+  writeRemembered(videoPath)
+})
+
+secureHandle('list-recent', () => {
+  return readRecent()
+    .filter((path) => existsSync(path))
+    .map((path) => ({ path, ...inspectVideo(path) }))
+})
+
+secureHandle('open-transcript', async (_event, videoPath: string, segments: TranscriptSegment[]) => {
+  if (typeof videoPath !== 'string' || !videoPath || !Array.isArray(segments)) {
+    return { success: false, error: 'Missing transcript' }
+  }
+  allowVideoPath(videoPath)
+  try {
+    const txtPath = writeTranscript(videoPath, segments)
+    const error = await shell.openPath(txtPath)
+    if (error) return { success: false, error }
+    return { success: true }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Could not open the transcript'
+    return { success: false, error: message }
+  }
+})
+
+secureHandle('export-reframed', async (_event, videoPath: string, crop: ClipCrop) => {
+  if (typeof videoPath !== 'string' || !videoPath || !crop) {
+    return { success: false, error: 'Missing video' }
+  }
+  allowVideoPath(videoPath)
+  cancelled = false
+  try {
+    const durationMs = await getVideoDurationMs(videoPath)
+    let videoSize: { width: number; height: number } | undefined
+    try {
+      videoSize = await getVideoSize(videoPath)
+    } catch {
+      videoSize = undefined
+    }
+    const { dir, stem } = videoStem(videoPath)
+    const outputDir = join(dir, `a1slice-${stem}-reframe-${Date.now()}`)
+    mkdirSync(outputDir, { recursive: true })
+    const outputPath = join(outputDir, `${stem}.mp4`)
+    const filter = videoSize ? ffmpegCropFilter(crop, videoSize.width, videoSize.height) : null
+    sendProgress({ stage: 'cutting', message: 'Rendering the new frame', percent: 5 })
+    const onProgress = (percent: number): void => {
+      sendProgress({ stage: 'cutting', message: 'Rendering the new frame', percent })
+    }
+    if (!filter) {
+      await copyClip(videoPath, outputPath, 0, durationMs, onProgress)
+    } else {
+      await cutClip(
+        videoPath,
+        outputPath,
+        0,
+        durationMs,
+        [],
+        onProgress,
+        crop,
+        videoSize,
+        'off',
+        'burn-large',
+        captionFontDirs()
+      )
+    }
+    if (cancelled) throw new Error('Cancelled')
+    sendProgress({ stage: 'done', message: outputDir, percent: 100 })
+    return { success: true, outputDir }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Reframe failed'
+    sendProgress({ stage: 'error', message, percent: 0 })
+    return { success: false, error: message }
+  }
+})
+
+secureHandle(
+  'export-captions',
+  async (
+    _event,
+    videoPath: string,
+    cues: TranscriptSegment[],
+    look: CaptionLook
+  ) => {
+    if (typeof videoPath !== 'string' || !videoPath || !Array.isArray(cues)) {
+      return { success: false, error: 'Missing captions' }
+    }
+    allowVideoPath(videoPath)
+    cancelled = false
+    try {
+      const { dir, stem } = videoStem(videoPath)
+      if (look === 'srt') {
+        const srtPath = join(dir, `${stem}.srt`)
+        writeFileSync(srtPath, generateSrt(cues), 'utf-8')
+        return { success: true, outputDir: srtPath }
+      }
+      const durationMs = await getVideoDurationMs(videoPath)
+      let videoSize: { width: number; height: number } | undefined
+      try {
+        videoSize = await getVideoSize(videoPath)
+      } catch {
+        videoSize = undefined
+      }
+      const outputDir = join(dir, `a1slice-${stem}-captions-${Date.now()}`)
+      mkdirSync(outputDir, { recursive: true })
+      const outputPath = join(outputDir, `${stem}.mp4`)
+      sendProgress({ stage: 'cutting', message: 'Burning captions', percent: 5 })
+      await cutClip(
+        videoPath,
+        outputPath,
+        0,
+        durationMs,
+        cues,
+        (percent) => sendProgress({ stage: 'cutting', message: 'Burning captions', percent }),
+        undefined,
+        videoSize,
+        'burn',
+        look === 'burn-small' ? 'burn-small' : 'burn-large',
+        captionFontDirs()
+      )
+      if (cancelled) throw new Error('Cancelled')
+      sendProgress({ stage: 'done', message: outputDir, percent: 100 })
+      return { success: true, outputDir }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Caption export failed'
       sendProgress({ stage: 'error', message, percent: 0 })
       return { success: false, error: message }
     }
