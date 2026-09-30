@@ -20,7 +20,7 @@ const TOOLS: { id: ToolId; title: string; detail: string }[] = [
   {
     id: 'captions',
     title: 'Captions',
-    detail: 'Save a subtitle file, or put the words on the video.'
+    detail: 'Put the words on the video.'
   }
 ]
 

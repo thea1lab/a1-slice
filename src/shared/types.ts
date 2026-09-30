@@ -89,17 +89,46 @@ export type Screen =
   | 'export'
   | 'reframe'
   | 'captions'
+  | 'fix-words'
 
 export type SubtitleExport = 'off' | 'srt' | 'burn'
 
-export type CaptionLook = 'srt' | 'burn-large' | 'burn-small'
+export type CaptionLook = 'srt' | 'burn'
 
 export type CaptionSource = 'transcript' | 'manual'
+
+export type CaptionColor = 'white' | 'cream' | 'yellow' | 'black'
+export type CaptionPosition = 'bottom' | 'middle' | 'top'
+export type CaptionSize = 'small' | 'medium' | 'large'
+export type CaptionFont = 'sans' | 'serif' | 'mono'
+
+export interface CaptionStyle {
+  color: CaptionColor
+  /** `#rrggbb` when the colour is not one of the named presets. */
+  customColor?: string
+  position: CaptionPosition
+  size: CaptionSize
+  /**
+   * ASS script pixels at PlayResY 288. Overrides `size` when set.
+   * Preset sizes stay 18, 24, and 28.
+   */
+  fontSize?: number
+  font: CaptionFont
+}
 
 export interface CaptionProject {
   source: CaptionSource
   look: CaptionLook
+  style: CaptionStyle
   cues: TranscriptSegment[]
+  /** Caption file chosen in place of this video's transcript. */
+  filePath?: string
+}
+
+export interface CaptionFilePick {
+  path: string
+  text?: string
+  error?: string
 }
 
 export interface VideoInspection {

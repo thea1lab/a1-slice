@@ -92,6 +92,7 @@ export type WizardAction =
   | { type: 'ADD_CLIP' }
   | { type: 'SET_FRAMING'; framing: Partial<Record<CropRatio, ClipCrop>> }
   | { type: 'SET_CAPTIONS'; captions: CaptionProject }
+  | { type: 'SET_SEGMENTS'; segments: TranscriptSegment[] }
   | { type: 'SET_EXPORT_SUBTITLES'; exportSubtitles: SubtitleExport }
   | { type: 'START_EXPORT' }
   | { type: 'START_RENDER' }
@@ -416,6 +417,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
       return { ...state, framing: action.framing }
     case 'SET_CAPTIONS':
       return { ...state, captions: action.captions }
+    case 'SET_SEGMENTS':
+      return { ...state, segments: action.segments }
     case 'SET_EXPORT_SUBTITLES':
       return { ...state, exportSubtitles: action.exportSubtitles }
 

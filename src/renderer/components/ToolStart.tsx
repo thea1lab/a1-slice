@@ -33,11 +33,11 @@ const GUIDES: Record<ToolId, { title: string; lead: string; steps: string[] }> =
   },
   captions: {
     title: 'Captions',
-    lead: 'Put the words on the picture, or save a subtitle file you can edit later.',
+    lead: 'Put the words on the picture. You can see the color, size, and font on the video before you export.',
     steps: [
       'Pick the video.',
-      'Use a transcript that is already saved, make one now, or paste subtitles.',
-      'Choose how the words should look, then export.'
+      'The transcript saved with the video is loaded. Pick another caption file, or edit the words.',
+      'Set the color, position, size, and font, then export.'
     ]
   }
 }

@@ -7,6 +7,7 @@ import type {
   TranscriptSegment
 } from './types'
 import { DEFAULT_CROP } from './types'
+import { coerceCaptionLook, coerceCaptionStyle } from './captions'
 
 const CROP_RATIOS = new Set<CropRatio>(['original', '16:9', '4:3', '9:16', '1:1'])
 
@@ -106,10 +107,18 @@ export function parseCaptions(value: unknown): CaptionProject | null {
   if (!value || typeof value !== 'object') return null
   const row = value as Record<string, unknown>
   const source = row.source === 'manual' || row.source === 'transcript' ? row.source : null
-  const look =
-    row.look === 'srt' || row.look === 'burn-large' || row.look === 'burn-small' ? row.look : null
+  const look = coerceCaptionLook(row.look)
   if (!source || !look) return null
-  return { source, look, cues: parseSegments(row.cues) }
+  const filePath = source === 'manual' && typeof row.filePath === 'string' && row.filePath.trim()
+    ? row.filePath
+    : undefined
+  return {
+    source,
+    look,
+    style: coerceCaptionStyle(row.look, row.style),
+    cues: parseSegments(row.cues),
+    ...(filePath ? { filePath } : {})
+  }
 }
 
 export function rememberRecent(paths: string[], videoPath: string, max = 8): string[] {
@@ -152,6 +161,41 @@ function srtClockToMs(hours: string, minutes: string, seconds: string, fraction:
     parseInt(seconds, 10) * 1000 +
     millis
   )
+}
+
+const transcriptStamp = /^(?:(\d+):)?(\d+):(\d{2})(?:[.,](\d{1,3}))?\s+(.+)$/
+
+/** Lines shaped like `0:12  hello` or `1:02:03  hello`. The next stamp ends the line. */
+export function parseTranscriptLines(text: string): TranscriptSegment[] {
+  const rows: { startMs: number; text: string }[] = []
+  for (const raw of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const match = raw.trim().match(transcriptStamp)
+    if (!match) continue
+    const hours = match[1] ? parseInt(match[1], 10) : 0
+    const minutes = parseInt(match[2], 10)
+    const seconds = parseInt(match[3], 10)
+    const fraction = match[4] ?? ''
+    const millis = fraction
+      ? fraction.length >= 3
+        ? parseInt(fraction.slice(0, 3), 10)
+        : Math.round(parseInt(fraction, 10) * 10 ** (3 - fraction.length))
+      : 0
+    const spoken = match[5].trim()
+    if (!spoken) continue
+    rows.push({ startMs: ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis, text: spoken })
+  }
+  return rows.map((row, index) => {
+    const nextStart = rows[index + 1]?.startMs
+    const endMs = nextStart !== undefined && nextStart > row.startMs ? nextStart : row.startMs + 2000
+    return { startMs: row.startMs, endMs, text: row.text }
+  })
+}
+
+/** Subtitle files win. A transcript text file is the other shape this app writes. */
+export function parseCaptionDocument(text: string): TranscriptSegment[] {
+  const srt = parseSrt(text)
+  if (srt.length > 0) return srt
+  return parseTranscriptLines(text)
 }
 
 export function parseSrt(text: string): TranscriptSegment[] {

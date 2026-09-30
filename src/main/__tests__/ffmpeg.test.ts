@@ -1,5 +1,11 @@
+import { spawn } from 'child_process'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import ffmpegPath from 'ffmpeg-static'
 import { describe, it, expect } from 'vitest'
-import { formatSrtTime, generateSrt, parseFfmpegDuration, parseFfmpegProgress, parseFfmpegVideoSize, buildCutClipArgs, buildPreviewClipArgs, captionBurnFilter, videoFilterForExport } from '../ffmpeg'
+import { formatSrtTime, generateSrt, parseFfmpegDuration, parseFfmpegProgress, parseFfmpegVideoSize, buildCutClipArgs, buildPreviewClipArgs, captionBurnFilter, cutClip, findCaptionFont, fontCellRatio, videoFilterForExport } from '../ffmpeg'
+import { DEFAULT_CAPTION_STYLE } from '../../shared/captions'
 
 describe('formatSrtTime', () => {
   it('formats zero', () => {
@@ -118,18 +124,115 @@ describe('buildCutClipArgs', () => {
 
 describe('caption burn filter', () => {
   it('includes the subtitles filter only for a burn look', () => {
-    const burn = captionBurnFilter('/tmp/a.srt', '/usr/share/fonts', 'DejaVu Sans', 'burn-large')
+    const burn = captionBurnFilter('/tmp/a.srt', '/usr/share/fonts', 'DejaVu Sans', {
+      ...DEFAULT_CAPTION_STYLE,
+      size: 'large'
+    })
     expect(burn).toContain('subtitles=')
     expect(burn).toContain('FontSize=28')
+    expect(burn).toContain('Outline=0.55')
+    expect(burn).toContain('PrimaryColour=&H00FFFFFF')
+    expect(burn).toContain('Alignment=2')
+    expect(burn).toContain('MarginV=90')
+    const scaled = captionBurnFilter('/tmp/a.srt', '/usr/share/fonts', 'DejaVu Sans', {
+      ...DEFAULT_CAPTION_STYLE,
+      size: 'large'
+    }, 1.618)
+    expect(scaled).toContain('FontSize=45')
+    expect(scaled).toContain('MarginV=90')
     expect(videoFilterForExport('crop=1:1:0:0', 'burn', burn)).toBe(`crop=1:1:0:0,${burn}`)
     expect(videoFilterForExport('crop=1:1:0:0', 'srt', burn)).toBe('crop=1:1:0:0')
     expect(videoFilterForExport(null, 'off', burn)).toBeUndefined()
   })
 
-  it('uses the smaller type for the youtube look', () => {
-    expect(captionBurnFilter('/tmp/a.srt', '/fonts', 'Arial', 'burn-small')).toContain('FontSize=18')
+  it('writes the chosen colour, place, and size into the filter', () => {
+    const burn = captionBurnFilter('/tmp/a.srt', '/fonts', 'Noto Serif', {
+      color: 'yellow',
+      position: 'top',
+      size: 'small',
+      font: 'serif'
+    })
+    expect(burn).toContain('FontName=Noto Serif')
+    expect(burn).toContain('FontSize=18')
+    expect(burn).toContain('PrimaryColour=&H004AE1FF')
+    expect(burn).toContain('Alignment=8')
+    expect(burn).toContain('MarginV=36')
+  })
+
+  it('prefers a bundled face file over a system font', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'a1-fonts-'))
+    try {
+      writeFileSync(join(dir, 'NotoSerif-Regular.ttf'), '')
+      expect(findCaptionFont('serif', [dir])).toEqual({
+        dir,
+        name: 'Noto Serif',
+        file: join(dir, 'NotoSerif-Regular.ttf'),
+        cellRatio: 1
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('prefers the medium face the preview uses at weight 500', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'a1-fonts-'))
+    try {
+      writeFileSync(join(dir, 'NotoSansMono-Regular.ttf'), '')
+      writeFileSync(join(dir, 'NotoSansMono-Medium.ttf'), '')
+      expect(findCaptionFont('mono', [dir])).toMatchObject({
+        name: 'Noto Sans Mono Medium',
+        file: join(dir, 'NotoSansMono-Medium.ttf')
+      })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(!existsSync('/usr/share/fonts/noto/NotoSansMono-Medium.ttf'))(
+    'reads the Noto Sans Mono cell height',
+    () => {
+      expect(fontCellRatio('/usr/share/fonts/noto/NotoSansMono-Medium.ttf')).toBeCloseTo(1.618, 3)
+      expect(fontCellRatio('/usr/share/fonts/noto/NotoSans-Medium.ttf')).toBeCloseTo(1.519, 3)
+    }
+  )
+
+  it('writes a subtitle file beside a soft export and not beside a burn', async () => {
+    if (!findCaptionFont('sans')) return
+    const dir = mkdtempSync(join(tmpdir(), 'a1-burn-'))
+    const cue = [{ startMs: 0, endMs: 400, text: 'Hello' }]
+    try {
+      const src = join(dir, 'in.mp4')
+      await runFfmpeg([
+        '-f', 'lavfi', '-i', 'color=c=black:s=320x180:d=0.5',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', src
+      ])
+      const burned = join(dir, 'burned.mp4')
+      await cutClip(src, burned, 0, 400, cue, undefined, undefined, undefined, 'burn')
+      expect(existsSync(burned)).toBe(true)
+      expect(existsSync(join(dir, 'burned.srt'))).toBe(false)
+      const soft = join(dir, 'soft.mp4')
+      await cutClip(src, soft, 0, 400, cue, undefined, undefined, undefined, 'srt')
+      expect(existsSync(join(dir, 'soft.srt'))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
+
+function runFfmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegPath as string, args)
+    let stderr = ''
+    proc.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+    proc.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(stderr.slice(-400)))
+    })
+    proc.on('error', reject)
+  })
+}
 
 describe('buildPreviewClipArgs', () => {
   it('re-encodes at native size into Chromium-safe H.264 4:2:0', () => {

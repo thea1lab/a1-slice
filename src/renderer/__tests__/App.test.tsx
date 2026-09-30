@@ -59,6 +59,15 @@ describe('wizardReducer', () => {
     expect(state.videoPath).toBe('/path/to/video.mp4')
   })
 
+  it('replaces the transcript lines', () => {
+    const segments: TranscriptSegment[] = [{ startMs: 0, endMs: 1000, text: 'Hello the world' }]
+    const state = wizardReducer(makeState({ segments: [{ startMs: 0, endMs: 1000, text: 'Hello teh world' }] }), {
+      type: 'SET_SEGMENTS',
+      segments
+    })
+    expect(state.segments).toEqual(segments)
+  })
+
   it('loads settings from persistence', () => {
     const state = wizardReducer(makeState(), {
       type: 'LOAD_SETTINGS',

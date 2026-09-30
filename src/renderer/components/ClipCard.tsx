@@ -262,6 +262,7 @@ const ClipCard = React.memo(function ClipCard({
           seekToMs={seekToMs}
           seekNonce={seekNonce}
           editor
+          transport={false}
         />
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-black/55 to-transparent px-5 pt-4 pb-10">
           <h3 className="text-lg font-medium text-white truncate">{clip.title}</h3>

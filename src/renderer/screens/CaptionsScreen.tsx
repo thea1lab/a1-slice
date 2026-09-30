@@ -1,16 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import VideoPreview from '../components/VideoPreview'
 import ExportJob from '../components/ExportJob'
-import ChoiceCard from '../components/ChoiceCard'
 import CaptionOverlay from '../components/CaptionOverlay'
-import type { CaptionLook, CaptionProject, CaptionSource, PipelineStage, TranscriptSegment } from '../../shared/types'
-import { parseSrt } from '../../shared/project'
-
-const LOOKS: { id: CaptionLook; title: string; detail: string }[] = [
-  { id: 'srt', title: 'Subtitle file', detail: 'An .srt you can edit later. The picture stays as it is.' },
-  { id: 'burn-large', title: 'On the video, large', detail: 'Big type at the bottom, for stories and reels.' },
-  { id: 'burn-small', title: 'On the video, small', detail: 'Smaller type, for a YouTube frame.' }
-]
+import CaptionStylePicker from '../components/CaptionStylePicker'
+import type { CaptionProject, CaptionStyle, PipelineStage, TranscriptSegment } from '../../shared/types'
+import { presentCaptionProject } from '../../shared/captions'
+import { parseCaptionDocument, transcriptTextPath } from '../../shared/project'
 
 interface CaptionsScreenProps {
   videoPath: string
@@ -23,9 +18,19 @@ interface CaptionsScreenProps {
   outputDir: string | null
   exportError: string | null
   onChange: (captions: CaptionProject) => void
-  onTranscribe: () => void
-  onExport: (cues: TranscriptSegment[], look: CaptionLook) => void
-  onOpenFolder: () => void
+  onExport: (cues: TranscriptSegment[], look: 'burn', style: CaptionStyle) => void
+  onFixWords: () => void
+}
+
+function sameFile(left: string, right: string): boolean {
+  const norm = (value: string): string => value.replace(/\\/g, '/').replace(/\/+$/, '')
+  return norm(left) === norm(right)
+}
+
+function remembered(project: CaptionProject, patch: Partial<CaptionProject>): CaptionProject {
+  const next: CaptionProject = { ...project, ...patch, look: 'burn' }
+  if (next.source !== 'manual') delete next.filePath
+  return next
 }
 
 export default function CaptionsScreen({
@@ -39,38 +44,45 @@ export default function CaptionsScreen({
   outputDir,
   exportError,
   onChange,
-  onTranscribe,
   onExport,
-  onOpenFolder
+  onFixWords
 }: CaptionsScreenProps): React.JSX.Element {
-  const project: CaptionProject = captions ?? {
-    source: segments.length > 0 ? 'transcript' : 'manual',
-    look: 'srt',
-    cues: []
-  }
+  const project: CaptionProject = presentCaptionProject(captions, segments.length > 0)
   const [playMs, setPlayMs] = useState(0)
-  const [paste, setPaste] = useState('')
-  const [pasteError, setPasteError] = useState<string | null>(null)
+  const [fileError, setFileError] = useState<string | null>(null)
   const cues = project.source === 'transcript' ? segments : project.cues
   const active = cues.find((cue) => playMs >= cue.startMs && playMs <= cue.endMs)
   const endMs = durationMs > 0 ? durationMs : Math.max(1000, cues.at(-1)?.endMs ?? 1000)
   const rendering = exportStage === 'cutting'
   const done = exportStage === 'done' && outputDir
+  const sample = active?.text ?? cues[0]?.text ?? ''
+  const transcriptPath = transcriptTextPath(videoPath)
+  const loadedPath = project.source === 'transcript'
+    ? (segments.length > 0 ? transcriptPath : '')
+    : (project.filePath ?? '')
+  const loadedLabel = loadedPath || (project.cues.length > 0 ? 'Pasted subtitles' : 'No caption file yet')
 
-  const sample = useMemo(() => active?.text ?? cues[0]?.text ?? 'Caption preview', [active, cues])
-
-  const setSource = (source: CaptionSource): void => {
-    onChange({ ...project, source })
-  }
-
-  const applyPaste = (): void => {
-    const parsed = parseSrt(paste)
-    if (parsed.length === 0) {
-      setPasteError('That was not a subtitle file. Keep the time lines like 00:00:01,000 --> 00:00:03,000.')
-      return
-    }
-    setPasteError(null)
-    onChange({ ...project, source: 'manual', cues: parsed })
+  const chooseFile = (): void => {
+    void window.api.selectCaptionFile().then((picked) => {
+      if (!picked) return
+      if (picked.error || !picked.text) {
+        setFileError(picked.error || 'That file could not be read.')
+        return
+      }
+      const parsed = parseCaptionDocument(picked.text)
+      if (parsed.length === 0) {
+        setFileError('That file has no captions. Use a subtitle file or a transcript.')
+        return
+      }
+      setFileError(null)
+      if (segments.length > 0 && sameFile(picked.path, transcriptPath)) {
+        onChange(remembered(project, { source: 'transcript', cues: [] }))
+        return
+      }
+      onChange(remembered(project, { source: 'manual', cues: parsed, filePath: picked.path }))
+    }).catch(() => {
+      setFileError('That file could not be read.')
+    })
   }
 
   return (
@@ -83,68 +95,51 @@ export default function CaptionsScreen({
           videoDurationMs={durationMs || undefined}
           editor
           onPlayheadMs={setPlayMs}
-        />
-        <CaptionOverlay text={sample} look={project.look} />
+        >
+          <CaptionOverlay text={sample} style={project.style} />
+        </VideoPreview>
       </div>
 
-      <div className="dock overflow-y-auto max-h-[52%] custom-scrollbar">
+      <div className="dock overflow-y-auto max-h-[68%] custom-scrollbar">
+        <CaptionStylePicker
+          style={project.style}
+          onChange={(style) => onChange(remembered(project, { style }))}
+        />
+
         <div className="block">
           <h2 className="section-label">Where do the words come from?</h2>
-          <p className="help">
-            Use a transcript already saved with this video, write one now, or paste subtitles.
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 w-full">
-            <ChoiceCard
-              title="Saved transcript"
-              detail={segments.length > 0 ? `${segments.length} lines` : 'None yet'}
-              selected={project.source === 'transcript'}
-              disabled={segments.length === 0}
-              onClick={() => setSource('transcript')}
-            />
-            <ChoiceCard
-              title="Transcribe now"
-              detail="Write the words, then come back here."
-              onClick={onTranscribe}
-            />
-            <ChoiceCard
-              title="Type or paste"
-              detail={project.cues.length > 0 ? `${project.cues.length} lines` : 'Paste a subtitle file'}
-              selected={project.source === 'manual'}
-              onClick={() => setSource('manual')}
-            />
+          <div className="caption-file">
+            <p className="caption-file-name" title={loadedPath || undefined}>
+              {loadedLabel}
+            </p>
+            <div className="caption-file-actions">
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Choose another caption file"
+                title="Choose another caption file"
+                onClick={chooseFile}
+              >
+                <FolderIcon />
+              </button>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Edit these captions"
+                title="Edit these captions"
+                disabled={cues.length === 0}
+                onClick={onFixWords}
+              >
+                <PencilIcon />
+              </button>
+            </div>
           </div>
-        </div>
-
-        {project.source === 'manual' && (
-          <div className="space-y-2">
-            <textarea
-              value={paste}
-              onChange={(event) => setPaste(event.target.value)}
-              rows={4}
-              placeholder={'1\n00:00:01,000 --> 00:00:03,000\nHello'}
-              className="field font-mono text-[15px]"
-            />
-            <button type="button" onClick={applyPaste} className="btn btn-secondary">
-              Use this subtitle file
-            </button>
-            {pasteError && <p className="text-base text-red-300">{pasteError}</p>}
-          </div>
-        )}
-
-        <div className="block">
-          <h2 className="section-label">How should they look?</h2>
-          <p className="help">Save a subtitle file, or write the words onto the picture.</p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 w-full">
-            {LOOKS.map((look) => (
-              <ChoiceCard
-                key={look.id}
-                title={look.title}
-                detail={look.detail}
-                selected={project.look === look.id}
-                onClick={() => onChange({ ...project, look: look.id })}
-              />
-            ))}
-          </div>
+          {cues.length === 0 && (
+            <p className="help">
+              If you don't have the captions yet, open Transcribe on the home page.
+            </p>
+          )}
+          {fileError && <p className="text-base text-red-300">{fileError}</p>}
         </div>
 
         <ExportJob
@@ -152,13 +147,42 @@ export default function CaptionsScreen({
           percent={exportPercent}
           message={exportMessage}
           error={exportError}
-          done={Boolean(done)}
+          done={false}
           actionLabel="Export captions"
           disabled={cues.length === 0}
-          onAction={() => onExport(cues, project.look)}
-          onShow={onOpenFolder}
+          resultPath={done && outputDir ? outputDir : null}
+          onAction={() => onExport(cues, 'burn', project.style)}
         />
       </div>
     </div>
+  )
+}
+
+function FolderIcon(): React.JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M2 4.5h4l1.2 1.5H14V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function PencilIcon(): React.JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M9.2 3.2 12.8 6.8 5.5 14.1 2 14.9 2.8 11.4 9.2 3.2Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <path d="M8.2 4.2 11.8 7.8" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
   )
 }

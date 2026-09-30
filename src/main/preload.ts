@@ -1,8 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { CaptionEditRequest } from '../shared/captionEdit'
 import type {
   AppSettings,
+  CaptionFilePick,
   CaptionLook,
   CaptionProject,
+  CaptionStyle,
   ClipCrop,
   CropRatio,
   ProgressUpdate,
@@ -22,6 +25,9 @@ import type {
 contextBridge.exposeInMainWorld('api', {
   selectVideo: (): Promise<string | null> =>
     ipcRenderer.invoke('select-video'),
+
+  selectCaptionFile: (): Promise<CaptionFilePick | null> =>
+    ipcRenderer.invoke('select-caption-file'),
 
   allowVideoPath: (videoPath: string): Promise<void> =>
     ipcRenderer.invoke('allow-video-path', videoPath),
@@ -62,9 +68,9 @@ contextBridge.exposeInMainWorld('api', {
     clips: ClipSegment[],
     segments: TranscriptSegment[],
     subtitlesMode?: SubtitleExport,
-    burnLook?: CaptionLook
+    burnStyle?: CaptionStyle
   ): Promise<CutResult> =>
-    ipcRenderer.invoke('cut-clips', videoPath, clips, segments, subtitlesMode, burnLook),
+    ipcRenderer.invoke('cut-clips', videoPath, clips, segments, subtitlesMode, burnStyle),
 
   loadProject: (videoPath: string): Promise<ProjectData> =>
     ipcRenderer.invoke('load-project', videoPath),
@@ -97,11 +103,42 @@ contextBridge.exposeInMainWorld('api', {
   exportCaptions: (
     videoPath: string,
     cues: TranscriptSegment[],
-    look: CaptionLook
-  ): Promise<CutResult> => ipcRenderer.invoke('export-captions', videoPath, cues, look),
+    look: CaptionLook,
+    style: CaptionStyle
+  ): Promise<CutResult> => ipcRenderer.invoke('export-captions', videoPath, cues, look, style),
+
+  listCaptionAgents: (): Promise<{ id: string; label: string }[]> =>
+    ipcRenderer.invoke('list-caption-agents'),
+
+  fixCaptions: (
+    agentId: string,
+    segments: TranscriptSegment[],
+    request: CaptionEditRequest
+  ): Promise<{ success: boolean; segments?: TranscriptSegment[]; error?: string }> =>
+    ipcRenderer.invoke('fix-captions', agentId, segments, request),
+
+  cancelCaptionFix: (): void => {
+    ipcRenderer.send('cancel-caption-fix')
+  },
+
+  saveTranscript: (
+    videoPath: string,
+    segments: TranscriptSegment[]
+  ): Promise<{ success: boolean; path?: string; error?: string }> =>
+    ipcRenderer.invoke('save-transcript', videoPath, segments),
 
   cancelPipeline: (): void => {
     ipcRenderer.send('cancel-pipeline')
+  },
+
+  onCaptionFixLog: (callback: (line: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, line: string): void => {
+      callback(line)
+    }
+    ipcRenderer.on('caption-fix-log', handler)
+    return () => {
+      ipcRenderer.removeListener('caption-fix-log', handler)
+    }
   },
 
   onProgress: (callback: (update: ProgressUpdate) => void): (() => void) => {

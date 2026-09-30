@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useImperativeHandle } from 'react'
+import PlaybackBar from './PlaybackBar'
 import {
   paddedPreviewRange,
   playbackTimeOnPlay,
@@ -35,7 +36,10 @@ interface VideoPreviewProps {
   seekToMs?: number
   seekNonce?: number
   editor?: boolean
+  /** Editor players hide the browser controls. The bar replaces them. Clip review has its own. */
+  transport?: boolean
   className?: string
+  children?: React.ReactNode
   ref?: React.Ref<VideoPreviewHandle>
 }
 
@@ -62,7 +66,9 @@ const VideoPreview = React.memo(function VideoPreview({
   seekToMs,
   seekNonce,
   editor = false,
+  transport = true,
   className,
+  children,
   ref
 }: VideoPreviewProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -111,6 +117,7 @@ const VideoPreview = React.memo(function VideoPreview({
   const [content, setContent] = useState({ x: 0, y: 0, w: 0, h: 0 })
   const [previewPercent, setPreviewPercent] = useState(0)
   const [frameReady, setFrameReady] = useState(false)
+  const [playheadMs, setPlayheadMs] = useState(startMs)
   const contentRef = useRef(content)
   contentRef.current = content
 
@@ -361,8 +368,10 @@ const VideoPreview = React.memo(function VideoPreview({
     const emitPlayhead = (): void => {
       if (!shouldPublishPlayhead(video.seeking, holdPlayheadRef.current)) return
       const cover = coverRef.current
-      if (!cover || !playheadRef.current) return
-      playheadRef.current(cover.fileStartMs + video.currentTime * 1000)
+      if (!cover) return
+      const ms = cover.fileStartMs + video.currentTime * 1000
+      setPlayheadMs(ms)
+      playheadRef.current?.(ms)
     }
 
     const applyInPoint = (): void => {
@@ -545,15 +554,23 @@ const VideoPreview = React.memo(function VideoPreview({
 
   const cropped = editor && crop.ratio !== 'original' && frameReady && !busy
   const box = cropped ? cropRect(crop, content.w, content.h) : null
+  const showTransport = editor && transport
+
+  const seekFromBar = (ms: number): void => {
+    setPlayheadMs(ms)
+    seekToSourceMs(ms)
+    playheadRef.current?.(ms)
+  }
 
   return (
+    <div className={`${editor ? 'flex h-full min-h-0 w-full flex-col' : ''} ${className ?? ''}`}>
     <div
       ref={containerRef}
       className={`relative w-full bg-black overflow-hidden ${
         editor
-          ? `h-full min-h-0 ${cropped ? 'cursor-grab active:cursor-grabbing select-none' : 'select-none cursor-pointer'}`
+          ? `min-h-0 flex-1 ${cropped ? 'cursor-grab active:cursor-grabbing select-none' : 'select-none cursor-pointer'}`
           : 'aspect-video rounded-lg'
-      } ${className ?? ''}`}
+      }`}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -594,6 +611,7 @@ const VideoPreview = React.memo(function VideoPreview({
           className="w-full h-full object-contain bg-black"
         />
       )}
+      {children && <div className="pointer-events-none absolute inset-0">{children}</div>}
       {box && content.w > 0 && (
         <div
           className="absolute border-2 border-accent pointer-events-none shadow-[0_0_0_9999px_rgba(0,0,0,0.62)]"
@@ -671,6 +689,10 @@ const VideoPreview = React.memo(function VideoPreview({
           {error}
         </div>
       )}
+    </div>
+    {showTransport && (
+      <PlaybackBar startMs={startMs} endMs={endMs} playheadMs={playheadMs} onSeek={seekFromBar} />
+    )}
     </div>
   )
 })

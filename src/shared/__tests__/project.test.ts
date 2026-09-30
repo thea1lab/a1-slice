@@ -4,7 +4,9 @@ import {
   parseCaptions,
   parseClipsCache,
   parseFraming,
+  parseCaptionDocument,
   parseSrt,
+  parseTranscriptLines,
   previewCacheKey,
   rememberRecent,
   toStoredClip,
@@ -82,8 +84,61 @@ describe('captions round trip', () => {
 
   it('reads a saved caption project', () => {
     expect(
-      parseCaptions({ source: 'manual', look: 'burn-large', cues: segments })
-    ).toEqual({ source: 'manual', look: 'burn-large', cues: segments })
+      parseCaptions({
+        source: 'manual',
+        look: 'burn',
+        style: { color: 'yellow', position: 'top', size: 'medium', font: 'serif' },
+        cues: segments
+      })
+    ).toEqual({
+      source: 'manual',
+      look: 'burn',
+      style: { color: 'yellow', position: 'top', size: 'medium', font: 'serif' },
+      cues: segments
+    })
+  })
+
+  it('reads a chosen caption file only for pasted words', () => {
+    expect(
+      parseCaptions({
+        source: 'manual',
+        look: 'burn',
+        cues: segments,
+        filePath: '/videos/other.srt'
+      })?.filePath
+    ).toBe('/videos/other.srt')
+    expect(
+      parseCaptions({
+        source: 'transcript',
+        look: 'srt',
+        cues: [],
+        filePath: '/videos/other.srt'
+      })?.filePath
+    ).toBeUndefined()
+  })
+
+  it('reads a transcript file and prefers a subtitle file', () => {
+    expect(parseTranscriptLines('0:00  Hello world\n0:02  Second\n')).toEqual([
+      { startMs: 0, endMs: 2000, text: 'Hello world' },
+      { startMs: 2000, endMs: 4000, text: 'Second' }
+    ])
+    expect(parseTranscriptLines('1:02:03  Hello').map((line) => line.startMs)).toEqual([3723000])
+    const srt = ['1', '00:00:01,000 --> 00:00:03,000', 'Hello', ''].join('\n')
+    expect(parseCaptionDocument(srt)).toEqual([{ startMs: 1000, endMs: 3000, text: 'Hello' }])
+    expect(parseCaptionDocument('0:12  Hello there')).toEqual([
+      { startMs: 12000, endMs: 14000, text: 'Hello there' }
+    ])
+  })
+
+  it('keeps an older burn preset as a size', () => {
+    expect(parseCaptions({ source: 'manual', look: 'burn-large', cues: segments })?.style.size).toBe('large')
+    expect(parseCaptions({ source: 'manual', look: 'burn-small', cues: [] })?.style).toMatchObject({
+      color: 'white',
+      position: 'bottom',
+      size: 'small',
+      font: 'sans'
+    })
+    expect(parseCaptions({ source: 'transcript', look: 'srt', cues: [] })?.look).toBe('srt')
   })
 
   it('writes a readable transcript', () => {

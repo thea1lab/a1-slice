@@ -14,6 +14,8 @@ export function screenTitle(screen: Screen): string {
       return 'Reframe'
     case 'captions':
       return 'Captions'
+    case 'fix-words':
+      return 'Fix the words'
     default:
       return ''
   }

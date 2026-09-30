@@ -1,10 +1,11 @@
 import ffmpegPath from 'ffmpeg-static'
 import { spawn } from 'child_process'
 import { tmpdir } from 'os'
-import { join } from 'path'
 import { randomUUID } from 'crypto'
-import { existsSync, writeFileSync } from 'fs'
-import type { CaptionLook, ClipCrop, SubtitleExport, TranscriptSegment } from '../shared/types'
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
+import { dirname, join } from 'path'
+import type { CaptionFont, CaptionStyle, ClipCrop, SubtitleExport, TranscriptSegment } from '../shared/types'
+import { captionForceStyle, DEFAULT_CAPTION_STYLE } from '../shared/captions'
 import { ffmpegCropFilter } from '../shared/crop'
 
 const FFMPEG = (ffmpegPath as string).replace('app.asar', 'app.asar.unpacked')
@@ -34,21 +35,11 @@ export function captionBurnFilter(
   srtPath: string,
   fontsDir: string,
   fontName: string,
-  look: Exclude<CaptionLook, 'srt'>
+  style: CaptionStyle = DEFAULT_CAPTION_STYLE,
+  cellRatio = 1
 ): string {
-  const size = look === 'burn-large' ? 28 : 18
-  const margin = look === 'burn-large' ? 90 : 36
-  const style = [
-    `FontName=${fontName}`,
-    `FontSize=${size}`,
-    'PrimaryColour=&H00FFFFFF',
-    'OutlineColour=&H00000000',
-    'BorderStyle=1',
-    'Outline=2',
-    'Alignment=2',
-    `MarginV=${margin}`
-  ].join('\\,')
-  return `subtitles='${escapeFilterPath(srtPath)}':fontsdir='${escapeFilterPath(fontsDir)}':force_style='${style}'`
+  const force = captionForceStyle(style, fontName, cellRatio).replace(/,/g, '\\,')
+  return `subtitles='${escapeFilterPath(srtPath)}':fontsdir='${escapeFilterPath(fontsDir)}':force_style='${force}'`
 }
 
 export function videoFilterForExport(
@@ -61,21 +52,141 @@ export function videoFilterForExport(
   return burn ?? cropFilter ?? undefined
 }
 
-const FONT_CANDIDATES: { dir: string; name: string }[] = [
-  { dir: '/usr/share/fonts/truetype/dejavu', name: 'DejaVu Sans' },
-  { dir: '/usr/share/fonts/truetype/liberation', name: 'Liberation Sans' },
-  { dir: '/usr/share/fonts/truetype/freefont', name: 'FreeSans' },
-  { dir: '/System/Library/Fonts/Supplemental', name: 'Arial' },
-  { dir: '/Library/Fonts', name: 'Arial' },
-  { dir: 'C:\\Windows\\Fonts', name: 'Arial' }
+interface FontFile {
+  file: string
+  name: string
+}
+
+const SANS_FILES: FontFile[] = [
+  { file: '/usr/share/fonts/noto/NotoSans-Medium.ttf', name: 'Noto Sans Medium' },
+  { file: '/usr/share/fonts/noto/NotoSans-Regular.ttf', name: 'Noto Sans' },
+  { file: '/usr/share/fonts/liberation/LiberationSans-Regular.ttf', name: 'Liberation Sans' },
+  { file: '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf', name: 'Liberation Sans' },
+  { file: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', name: 'DejaVu Sans' },
+  { file: '/usr/share/fonts/truetype/freefont/FreeSans.ttf', name: 'FreeSans' },
+  { file: '/System/Library/Fonts/Supplemental/Arial.ttf', name: 'Arial' },
+  { file: '/Library/Fonts/Arial.ttf', name: 'Arial' },
+  { file: 'C:\\Windows\\Fonts\\arial.ttf', name: 'Arial' }
 ]
 
-export function findCaptionFont(extraDirs: string[] = []): { dir: string; name: string } | null {
-  const bundled = extraDirs.map((dir) => ({ dir, name: 'Noto Sans' }))
-  for (const candidate of [...bundled, ...FONT_CANDIDATES]) {
-    if (candidate.dir && existsSync(candidate.dir)) return candidate
+const SERIF_FILES: FontFile[] = [
+  { file: '/usr/share/fonts/noto/NotoSerif-Medium.ttf', name: 'Noto Serif Medium' },
+  { file: '/usr/share/fonts/noto/NotoSerif-Regular.ttf', name: 'Noto Serif' },
+  { file: '/usr/share/fonts/liberation/LiberationSerif-Regular.ttf', name: 'Liberation Serif' },
+  { file: '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf', name: 'Liberation Serif' },
+  { file: '/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf', name: 'DejaVu Serif' },
+  { file: '/usr/share/fonts/truetype/freefont/FreeSerif.ttf', name: 'FreeSerif' },
+  { file: '/System/Library/Fonts/Supplemental/Times New Roman.ttf', name: 'Times New Roman' },
+  { file: 'C:\\Windows\\Fonts\\times.ttf', name: 'Times New Roman' }
+]
+
+const MONO_FILES: FontFile[] = [
+  { file: '/usr/share/fonts/noto/NotoSansMono-Medium.ttf', name: 'Noto Sans Mono Medium' },
+  { file: '/usr/share/fonts/noto/NotoSansMono-Regular.ttf', name: 'Noto Sans Mono' },
+  { file: '/usr/share/fonts/liberation/LiberationMono-Regular.ttf', name: 'Liberation Mono' },
+  { file: '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf', name: 'Liberation Mono' },
+  { file: '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', name: 'DejaVu Sans Mono' },
+  { file: '/usr/share/fonts/truetype/freefont/FreeMono.ttf', name: 'FreeMono' },
+  { file: '/System/Library/Fonts/Supplemental/Courier New.ttf', name: 'Courier New' },
+  { file: 'C:\\Windows\\Fonts\\consola.ttf', name: 'Consolas' }
+]
+
+const SYSTEM_FONTS: Record<CaptionFont, FontFile[]> = {
+  sans: SANS_FILES,
+  serif: SERIF_FILES,
+  mono: MONO_FILES
+}
+
+/** CSS weight 500. The Medium file's family name is what libass matches. */
+const BUNDLED_FACES: Record<CaptionFont, FontFile[]> = {
+  sans: [
+    { file: 'NotoSans-Medium.ttf', name: 'Noto Sans Medium' },
+    { file: 'NotoSans-Regular.ttf', name: 'Noto Sans' }
+  ],
+  serif: [
+    { file: 'NotoSerif-Medium.ttf', name: 'Noto Serif Medium' },
+    { file: 'NotoSerif-Regular.ttf', name: 'Noto Serif' }
+  ],
+  mono: [
+    { file: 'NotoSansMono-Medium.ttf', name: 'Noto Sans Mono Medium' },
+    { file: 'NotoSansMono-Regular.ttf', name: 'Noto Sans Mono' }
+  ]
+}
+
+function bundledFont(face: CaptionFont, extraDirs: string[]): FontFile[] {
+  return extraDirs
+    .filter(Boolean)
+    .flatMap((dir) => BUNDLED_FACES[face].map((faceFile) => ({ file: join(dir, faceFile.file), name: faceFile.name })))
+}
+
+export interface CaptionFontMatch {
+  dir: string
+  name: string
+  file: string
+  /** (usWinAscent + usWinDescent) / unitsPerEm. 1 when the face could not be read. */
+  cellRatio: number
+}
+
+export function findCaptionFont(
+  face: CaptionFont = 'sans',
+  extraDirs: string[] = []
+): CaptionFontMatch | null {
+  const order = [
+    ...bundledFont(face, extraDirs),
+    ...SYSTEM_FONTS[face],
+    ...bundledFont('sans', extraDirs),
+    ...SYSTEM_FONTS.sans
+  ]
+  for (const candidate of order) {
+    if (candidate.file && existsSync(candidate.file)) {
+      return {
+        dir: dirname(candidate.file),
+        name: candidate.name,
+        file: candidate.file,
+        cellRatio: fontCellRatio(candidate.file)
+      }
+    }
   }
   return null
+}
+
+/** libass sizes by the Windows cell. CSS sizes by the em. Returns 1 if the face cannot be read. */
+export function fontCellRatio(filePath: string): number {
+  try {
+    return cellRatioFromSfnt(readFileSync(filePath))
+  } catch {
+    return 1
+  }
+}
+
+function cellRatioFromSfnt(data: Buffer): number {
+  if (data.length < 12) return 1
+  const scaler = data.readUInt32BE(0)
+  const truetype = 0x00010000
+  const trueTag = 0x74727565
+  const otto = 0x4f54544f
+  if (scaler !== truetype && scaler !== trueTag && scaler !== otto) return 1
+  const numTables = data.readUInt16BE(4)
+  let head: { offset: number; length: number } | null = null
+  let os2: { offset: number; length: number } | null = null
+  for (let i = 0; i < numTables; i++) {
+    const rec = 12 + i * 16
+    if (rec + 16 > data.length) return 1
+    const tag = data.toString('latin1', rec, rec + 4)
+    const offset = data.readUInt32BE(rec + 8)
+    const length = data.readUInt32BE(rec + 12)
+    if (tag === 'head') head = { offset, length }
+    if (tag === 'OS/2') os2 = { offset, length }
+  }
+  if (!head || !os2 || head.length < 20 || os2.length < 78) return 1
+  if (head.offset + 20 > data.length || os2.offset + 78 > data.length) return 1
+  const unitsPerEm = data.readUInt16BE(head.offset + 18)
+  const winAscent = data.readUInt16BE(os2.offset + 74)
+  const winDescent = data.readUInt16BE(os2.offset + 76)
+  if (unitsPerEm === 0) return 1
+  const ratio = (winAscent + winDescent) / unitsPerEm
+  if (!Number.isFinite(ratio) || ratio < 0.5 || ratio > 2.5) return 1
+  return ratio
 }
 
 export function generateSrt(segments: TranscriptSegment[]): string {
@@ -375,7 +486,7 @@ export async function cutClip(
   crop?: ClipCrop,
   videoSize?: { width: number; height: number },
   subtitlesMode: SubtitleExport = 'srt',
-  burnLook: Exclude<CaptionLook, 'srt'> = 'burn-large',
+  burnStyle: CaptionStyle = DEFAULT_CAPTION_STYLE,
   fontDirs: string[] = []
 ): Promise<string> {
   const startSec = startMs / 1000
@@ -385,33 +496,46 @@ export async function cutClip(
 
   const shifted = shiftSubtitles(subtitles, startMs, endMs)
   let burnFilter: string | null = null
-  if (subtitlesMode !== 'off') {
-    const srtPath = outputPath.replace(/\.[^.]+$/, '.srt')
-    writeFileSync(srtPath, generateSrt(shifted), 'utf-8')
-    if (subtitlesMode === 'burn' && shifted.length > 0) {
-      const font = findCaptionFont(fontDirs)
+  // A sibling .srt is loaded by VLC and mpv on top of a burned caption.
+  let temporarySrt: string | null = null
+  try {
+    if (subtitlesMode === 'srt') {
+      const srtPath = outputPath.replace(/\.[^.]+$/, '.srt')
+      writeFileSync(srtPath, generateSrt(shifted), 'utf-8')
+    } else if (subtitlesMode === 'burn' && shifted.length > 0) {
+      temporarySrt = join(tmpdir(), `a1slice-${randomUUID()}.srt`)
+      writeFileSync(temporarySrt, generateSrt(shifted), 'utf-8')
+      const font = findCaptionFont(burnStyle.font, fontDirs)
       if (!font) throw new Error('No caption font found on this computer')
-      burnFilter = captionBurnFilter(srtPath, font.dir, font.name, burnLook)
+      burnFilter = captionBurnFilter(temporarySrt, font.dir, font.name, burnStyle, font.cellRatio)
+    }
+
+    const videoFilter = videoFilterForExport(cropFilter, subtitlesMode, burnFilter)
+
+    try {
+      await spawnFfmpeg(
+        buildCutClipArgs(videoPath, outputPath, startSec, durationSec, videoFilter),
+        durationSec,
+        onProgress
+      )
+    } catch (err) {
+      if (subtitlesMode === 'burn') throw err
+      // Some ffmpeg-static builds may lack libx264; keep export working.
+      await spawnFfmpeg(
+        buildCopyClipArgs(videoPath, outputPath, startSec, durationSec),
+        durationSec,
+        onProgress
+      )
+    }
+
+    return outputPath
+  } finally {
+    if (temporarySrt) {
+      try {
+        unlinkSync(temporarySrt)
+      } catch {
+        // The temp subtitle is only an ffmpeg input.
+      }
     }
   }
-
-  const videoFilter = videoFilterForExport(cropFilter, subtitlesMode, burnFilter)
-
-  try {
-    await spawnFfmpeg(
-      buildCutClipArgs(videoPath, outputPath, startSec, durationSec, videoFilter),
-      durationSec,
-      onProgress
-    )
-  } catch (err) {
-    if (subtitlesMode === 'burn') throw err
-    // Some ffmpeg-static builds may lack libx264; keep export working.
-    await spawnFfmpeg(
-      buildCopyClipArgs(videoPath, outputPath, startSec, durationSec),
-      durationSec,
-      onProgress
-    )
-  }
-
-  return outputPath
 }

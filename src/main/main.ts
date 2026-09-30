@@ -13,6 +13,9 @@ import { Readable } from 'stream'
 
 import { extractAudio, splitWav, cutClip, copyClip, getVideoDurationMs, getVideoSize, extractPreviewClip, generateSrt } from './ffmpeg'
 import { ffmpegCropFilter } from '../shared/crop'
+import { coerceCaptionStyle, DEFAULT_CAPTION_STYLE } from '../shared/captions'
+import { clampWordsPerLine, coerceSegments, type CaptionEditRequest } from '../shared/captionEdit'
+import { listInstalledAgents, startCaptionFix, type CaptionAgentId, CAPTION_AGENTS } from './captionAgent'
 import { downloadModel, transcribeWithRetry, mergeChunkSegments, type AbortHandle } from './whisper'
 import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
@@ -35,8 +38,10 @@ import {
 } from './projectStore'
 import type {
   AppSettings,
+  CaptionFilePick,
   CaptionLook,
   CaptionProject,
+  CaptionStyle,
   ClipCrop,
   ProgressUpdate,
   TranscriptSegment,
@@ -66,6 +71,7 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow: BrowserWindow | null = null
 let cancelled = false
+let captionFixKill: (() => void) | null = null
 let activeWhisperHandle: AbortHandle | null = null
 const allowedVideoPaths = new Set<string>()
 const previewFiles = new Set<string>()
@@ -182,6 +188,24 @@ secureHandle('select-video', async () => {
   return selected
 })
 
+secureHandle('select-caption-file', async (): Promise<CaptionFilePick | null> => {
+  if (!mainWindow) return null
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a caption file',
+    filters: [{ name: 'Caption files', extensions: ['srt', 'vtt', 'txt'] }],
+    properties: ['openFile']
+  })
+  if (result.canceled) return null
+  const selected = result.filePaths[0]
+  if (!selected) return null
+  try {
+    if (statSync(selected).size > 2_000_000) return { path: selected, error: 'That file is too large.' }
+    return { path: selected, text: readFileSync(selected, 'utf-8') }
+  } catch {
+    return { path: selected, error: 'That file could not be read.' }
+  }
+})
+
 // IPC: Open folder in native file manager
 secureHandle('open-folder', async (_event, folderPath: string) => {
   shell.showItemInFolder(folderPath)
@@ -285,6 +309,64 @@ secureHandle('read-clip-preview', (_event, previewPath: string): Uint8Array | nu
     return null
   }
 })
+
+ipcMain.on('cancel-caption-fix', (event) => {
+  if (event.sender !== mainWindow?.webContents) return
+  captionFixKill?.()
+})
+
+secureHandle('list-caption-agents', () => listInstalledAgents())
+
+secureHandle(
+  'fix-captions',
+  async (event, agentId: unknown, segments: unknown, request: unknown) => {
+    if (!isCaptionAgent(agentId)) return { success: false, error: 'Choose an agent.' }
+    const lines = coerceSegments(segments)
+    const edit = readCaptionEditRequest(request)
+    if (!lines || !edit) return { success: false, error: 'The captions could not be read.' }
+    captionFixKill?.()
+    const run = startCaptionFix(agentId, lines, edit, (line) => {
+      if (!event.sender.isDestroyed()) event.sender.send('caption-fix-log', line)
+    })
+    captionFixKill = run.kill
+    const result = await run.done
+    if (captionFixKill === run.kill) captionFixKill = null
+    if (result.error) return { success: false, error: result.error }
+    return { success: true, segments: result.segments }
+  }
+)
+
+secureHandle('save-transcript', (_event, videoPath: string, segments: unknown) => {
+  if (typeof videoPath !== 'string' || !videoPath) return { success: false, error: 'Choose a video first.' }
+  allowVideoPath(videoPath)
+  const lines = coerceSegments(segments)
+  if (!lines) return { success: false, error: 'Nothing to save.' }
+  try {
+    const path = writeTranscript(videoPath, lines)
+    return { success: true, path }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Could not save the transcript.'
+    return { success: false, error: message }
+  }
+})
+
+function isCaptionAgent(value: unknown): value is CaptionAgentId {
+  return CAPTION_AGENTS.some((agent) => agent.id === value)
+}
+
+function readCaptionEditRequest(value: unknown): CaptionEditRequest | null {
+  if (!value || typeof value !== 'object') return null
+  const row = value as Record<string, unknown>
+  if (typeof row.fixTypos !== 'boolean' || typeof row.breakLines !== 'boolean') return null
+  const words = typeof row.wordsPerLine === 'number' ? row.wordsPerLine : 8
+  const note = typeof row.note === 'string' ? row.note.slice(0, 500) : ''
+  return {
+    fixTypos: row.fixTypos,
+    breakLines: row.breakLines,
+    wordsPerLine: clampWordsPerLine(words),
+    note
+  }
+}
 
 // IPC: Cancel pipeline
 ipcMain.on('cancel-pipeline', (event) => {
@@ -497,7 +579,7 @@ secureHandle(
     clips: ClipSegment[],
     segments: TranscriptSegment[],
     subtitlesMode?: SubtitleExport,
-    burnLook?: CaptionLook
+    burnStyle?: unknown
   ) => {
     cancelled = false
     allowVideoPath(videoPath)
@@ -552,7 +634,6 @@ secureHandle(
           subtitlesMode === 'off' || subtitlesMode === 'burn' || subtitlesMode === 'srt'
             ? subtitlesMode
             : 'srt'
-        const look = burnLook === 'burn-small' ? 'burn-small' : 'burn-large'
         await cutClip(
           videoPath,
           outputPath,
@@ -563,7 +644,7 @@ secureHandle(
           clip.crop,
           videoSize,
           mode,
-          look,
+          captionBurnStyle(burnStyle),
           captionFontDirs()
         )
       }
@@ -578,6 +659,11 @@ secureHandle(
     }
   }
 )
+
+function captionBurnStyle(value: unknown): CaptionStyle {
+  if (typeof value === 'string') return coerceCaptionStyle(value, undefined)
+  return coerceCaptionStyle(undefined, value)
+}
 
 function captionFontDirs(): string[] {
   return [
@@ -693,7 +779,7 @@ secureHandle('export-reframed', async (_event, videoPath: string, crop: ClipCrop
         crop,
         videoSize,
         'off',
-        'burn-large',
+        DEFAULT_CAPTION_STYLE,
         captionFontDirs()
       )
     }
@@ -713,7 +799,8 @@ secureHandle(
     _event,
     videoPath: string,
     cues: TranscriptSegment[],
-    look: CaptionLook
+    look: unknown,
+    style?: unknown
   ) => {
     if (typeof videoPath !== 'string' || !videoPath || !Array.isArray(cues)) {
       return { success: false, error: 'Missing captions' }
@@ -722,7 +809,8 @@ secureHandle(
     cancelled = false
     try {
       const { dir, stem } = videoStem(videoPath)
-      if (look === 'srt') {
+      const delivery: CaptionLook = look === 'srt' ? 'srt' : 'burn'
+      if (delivery === 'srt') {
         const srtPath = join(dir, `${stem}.srt`)
         writeFileSync(srtPath, generateSrt(cues), 'utf-8')
         return { success: true, outputDir: srtPath }
@@ -748,7 +836,7 @@ secureHandle(
         undefined,
         videoSize,
         'burn',
-        look === 'burn-small' ? 'burn-small' : 'burn-large',
+        captionBurnStyle(style ?? look),
         captionFontDirs()
       )
       if (cancelled) throw new Error('Cancelled')

@@ -10,6 +10,7 @@ import ReviewScreen from './screens/ReviewScreen'
 import ExportScreen from './screens/ExportScreen'
 import ReframeScreen from './screens/ReframeScreen'
 import CaptionsScreen from './screens/CaptionsScreen'
+import FixWordsScreen from './screens/FixWordsScreen'
 import { initialWizardState, wizardReducer, type WizardState } from './state'
 import { useProject } from './hooks/useProject'
 import { fileNameOf } from './lib/fileName'
@@ -18,12 +19,15 @@ import type {
   AppSettings,
   CaptionLook,
   CaptionProject,
+  CaptionStyle,
   ClipCrop,
   ClipSegment,
   ProgressUpdate,
   ToolId,
   TranscriptSegment
 } from '../shared/types'
+import { DEFAULT_CAPTION_STYLE } from '../shared/captions'
+import { transcriptTextPath } from '../shared/project'
 import { refineClipBounds } from '../shared/clipBounds'
 import { withClipStatus } from '../shared/project'
 
@@ -222,7 +226,7 @@ export default function App(): React.JSX.Element {
   const handleSlice = useCallback(async () => {
     if (!state.videoPath) return
     const approved = state.clips.filter((clip) => clip.approved)
-    const look: CaptionLook = state.captions?.look === 'burn-small' ? 'burn-small' : 'burn-large'
+    const style = state.captions?.style ?? DEFAULT_CAPTION_STYLE
     dispatch({ type: 'START_EXPORT' })
     const result = await window.api.cutClips(
       state.videoPath,
@@ -236,7 +240,7 @@ export default function App(): React.JSX.Element {
       })),
       state.segments,
       state.exportSubtitles,
-      look
+      style
     )
     if (result.success && result.outputDir) {
       dispatch({ type: 'EXPORT_DONE', outputDir: result.outputDir })
@@ -287,11 +291,33 @@ export default function App(): React.JSX.Element {
     [state.videoPath, saveFraming]
   )
 
+  const saveFixedWords = useCallback(
+    async (lines: TranscriptSegment[]): Promise<string | null> => {
+      if (!state.videoPath) return 'Choose a video first.'
+      const result = await window.api.saveTranscript(state.videoPath, lines)
+      if (!result.success) return result.error || 'Could not save the transcript.'
+      dispatch({ type: 'SET_SEGMENTS', segments: lines })
+      if (state.captions) {
+        const captions = { ...state.captions, source: 'transcript' as const, cues: lines }
+        delete captions.filePath
+        dispatch({ type: 'SET_CAPTIONS', captions })
+        try {
+          await window.api.saveCaptions(state.videoPath, captions)
+        } catch {
+          return 'The transcript was saved. The caption choices on this video could not be saved.'
+        }
+      }
+      dispatch({ type: 'SHOW_SCREEN', screen: 'captions' })
+      return null
+    },
+    [state.videoPath, state.captions]
+  )
+
   const handleExportCaptions = useCallback(
-    async (cues: TranscriptSegment[], look: CaptionLook) => {
+    async (cues: TranscriptSegment[], look: CaptionLook, style: CaptionStyle) => {
       if (!state.videoPath) return
       dispatch({ type: 'START_RENDER' })
-      const result = await window.api.exportCaptions(state.videoPath, cues, look)
+      const result = await window.api.exportCaptions(state.videoPath, cues, look, style)
       if (result.success && result.outputDir) {
         dispatch({ type: 'EXPORT_DONE', outputDir: result.outputDir })
       } else {
@@ -310,7 +336,8 @@ export default function App(): React.JSX.Element {
 
   const awaitingTool = toolAwaitingVideo(state)
   const player = isPlayerScreen(state.screen)
-  const useSheet = state.screen !== 'home' && (!player || awaitingTool !== null)
+  const wideWork = state.screen === 'fix-words'
+  const useSheet = state.screen !== 'home' && !wideWork && (!player || awaitingTool !== null)
 
   return (
     <div
@@ -348,12 +375,13 @@ export default function App(): React.JSX.Element {
           handleCaptions,
           handleExportFrame,
           handleExportCaptions,
+          saveFixedWords,
           markClips,
           continueNote,
           dispatch
         })}
       </div>
-      {(state.screen === 'home' || useSheet) && <div className="sunset" />}
+      {(state.screen === 'home' || useSheet || state.screen === 'fix-words') && <div className="sunset" />}
     </div>
   )
 }
@@ -373,7 +401,8 @@ interface ScreenHandlers {
   handleClipCrop: (id: string, crop: ClipCrop) => void
   handleCaptions: (captions: CaptionProject) => void
   handleExportFrame: (crop: ClipCrop) => Promise<void>
-  handleExportCaptions: (cues: TranscriptSegment[], look: CaptionLook) => Promise<void>
+  handleExportCaptions: (cues: TranscriptSegment[], look: CaptionLook, style: CaptionStyle) => Promise<void>
+  saveFixedWords: (lines: TranscriptSegment[]) => Promise<string | null>
   markClips: () => void
   continueNote: string | null
   dispatch: React.Dispatch<import('./state').WizardAction>
@@ -556,11 +585,31 @@ function renderScreen(state: WizardState, handlers: ScreenHandlers): React.JSX.E
           outputDir={state.outputDir}
           exportError={state.exportError}
           onChange={handlers.handleCaptions}
-          onTranscribe={() => handlers.showTranscribe('captions')}
-          onExport={(cues, look) => void handlers.handleExportCaptions(cues, look)}
-          onOpenFolder={() => state.outputDir && void window.api.openFolder(state.outputDir)}
+          onExport={(cues, look, style) => void handlers.handleExportCaptions(cues, look, style)}
+          onFixWords={() => handlers.dispatch({ type: 'SHOW_SCREEN', screen: 'fix-words' })}
         />
       )
+    case 'fix-words': {
+      if (!state.projectReady || !path) {
+        return <p className="m-auto text-base text-neutral-400">Opening the video…</p>
+      }
+      const lines =
+        state.captions?.source === 'manual' && state.captions.cues.length > 0
+          ? state.captions.cues
+          : state.segments
+      return (
+        <FixWordsScreen
+          fileName={fileNameOf(
+            state.captions?.source === 'manual' && state.captions.filePath
+              ? state.captions.filePath
+              : transcriptTextPath(path)
+          )}
+          lines={lines}
+          onBack={() => handlers.dispatch({ type: 'SHOW_SCREEN', screen: 'captions' })}
+          onSave={handlers.saveFixedWords}
+        />
+      )
+    }
     default:
       return <HomeScreen onOpen={handlers.enterTool} />
   }

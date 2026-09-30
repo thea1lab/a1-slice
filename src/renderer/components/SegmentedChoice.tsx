@@ -1,6 +1,8 @@
 interface Choice<T extends string> {
   id: T
   label: string
+  swatch?: string
+  fontFamily?: string
 }
 
 interface SegmentedChoiceProps<T extends string> {
@@ -34,7 +36,8 @@ export default function SegmentedChoice<T extends string>({
             onClick={() => onChange(option.id)}
             className={`option${size === 'sm' ? ' option-sm' : ''}${selected ? ' is-selected' : ''}`}
           >
-            {option.label}
+            {option.swatch ? <span className="swatch" style={{ background: option.swatch }} /> : null}
+            <span style={option.fontFamily ? { fontFamily: option.fontFamily } : undefined}>{option.label}</span>
           </button>
         )
       })}

@@ -1,7 +1,10 @@
+import type { CaptionEditRequest } from '../shared/captionEdit'
 import type {
   AppSettings,
+  CaptionFilePick,
   CaptionLook,
   CaptionProject,
+  CaptionStyle,
   ClipCrop,
   CropRatio,
   ProgressUpdate,
@@ -22,6 +25,7 @@ declare global {
   interface Window {
     api: {
       selectVideo(): Promise<string | null>
+      selectCaptionFile(): Promise<CaptionFilePick | null>
       allowVideoPath(videoPath: string): Promise<void>
       createClipPreview(videoPath: string, startMs: number, endMs: number, previewId?: string): Promise<ClipPreviewResult>
       releaseClipPreview(previewPath: string): Promise<void>
@@ -40,7 +44,7 @@ declare global {
         clips: ClipSegment[],
         segments: TranscriptSegment[],
         subtitlesMode?: SubtitleExport,
-        burnLook?: CaptionLook
+        burnStyle?: CaptionStyle
       ): Promise<CutResult>
       loadProject(videoPath: string): Promise<ProjectData>
       saveClips(videoPath: string, clips: ClipSegment[], rawResponse?: string): Promise<void>
@@ -50,7 +54,24 @@ declare global {
       listRecent(): Promise<RecentVideo[]>
       openTranscript(videoPath: string, segments: TranscriptSegment[]): Promise<{ success: boolean; error?: string }>
       exportReframed(videoPath: string, crop: ClipCrop): Promise<CutResult>
-      exportCaptions(videoPath: string, cues: TranscriptSegment[], look: CaptionLook): Promise<CutResult>
+      exportCaptions(
+        videoPath: string,
+        cues: TranscriptSegment[],
+        look: CaptionLook,
+        style: CaptionStyle
+      ): Promise<CutResult>
+      listCaptionAgents(): Promise<{ id: string; label: string }[]>
+      fixCaptions(
+        agentId: string,
+        segments: TranscriptSegment[],
+        request: CaptionEditRequest
+      ): Promise<{ success: boolean; segments?: TranscriptSegment[]; error?: string }>
+      cancelCaptionFix(): void
+      saveTranscript(
+        videoPath: string,
+        segments: TranscriptSegment[]
+      ): Promise<{ success: boolean; path?: string; error?: string }>
+      onCaptionFixLog(callback: (line: string) => void): () => void
       cancelPipeline(): void
       onProgress(callback: (update: ProgressUpdate) => void): () => void
       onPreviewProgress(callback: (update: { previewId?: string; percent: number }) => void): () => void
