@@ -1,19 +1,14 @@
 import { useEffect, useState } from 'react'
 import ClipCard from '../components/ClipCard'
-import SubtitleModePicker from '../components/SubtitleModePicker'
-import type { ClipCrop, ClipSegmentWithStatus, CropRatio, SubtitleExport } from '../../shared/types'
+import type { ClipSegmentWithStatus } from '../../shared/types'
 
 interface ReviewScreenProps {
   clips: ClipSegmentWithStatus[]
   videoPath: string
   rawResponse?: string
   videoDurationMs?: number
-  framing?: Partial<Record<CropRatio, ClipCrop>>
-  exportSubtitles: SubtitleExport
   onToggle: (id: string) => void
   onUpdateClipTimes?: (id: string, startMs: number, endMs: number) => void
-  onUpdateClipCrop?: (id: string, crop: ClipCrop) => void
-  onExportSubtitles: (mode: SubtitleExport) => void
   onSlice: () => void
   onFindAgain: () => void
   onAddRange: () => void
@@ -24,12 +19,8 @@ export default function ReviewScreen({
   videoPath,
   rawResponse,
   videoDurationMs,
-  framing,
-  exportSubtitles,
   onToggle,
   onUpdateClipTimes,
-  onUpdateClipCrop,
-  onExportSubtitles,
   onSlice,
   onFindAgain,
   onAddRange
@@ -47,6 +38,7 @@ export default function ReviewScreen({
     const onKey = (e: KeyboardEvent): void => {
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (target?.closest('[data-clip-time]')) return
       if (e.key === 'ArrowLeft') {
         e.preventDefault()
         setIndex((i) => Math.max(0, i - 1))
@@ -84,13 +76,9 @@ export default function ReviewScreen({
         <div className={`h-full min-h-0 flex flex-col ${clip.approved ? '' : 'opacity-50'}`}>
           <ClipCard
             clip={clip}
-            clips={clips}
-            index={safeIndex}
             videoPath={videoPath}
             videoDurationMs={videoDurationMs}
-            framing={framing}
             onUpdateTimes={onUpdateClipTimes}
-            onUpdateCrop={onUpdateClipCrop}
           />
         </div>
 
@@ -119,19 +107,17 @@ export default function ReviewScreen({
       </div>
 
       <div className="dock">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="dock-meta">
-            <span>
-              Clip {safeIndex + 1} of {clips.length}
-            </span>
-            <span>{approvedCount} kept</span>
-          </p>
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-[15px] text-[#a8a8a8]">Subtitles on export</span>
-            <SubtitleModePicker value={exportSubtitles} onChange={onExportSubtitles} />
-          </div>
-        </div>
-        <p className="help">Keep the parts you want. Drop the rest, then export those clips.</p>
+        <p className="dock-meta">
+          <span>
+            Clip {safeIndex + 1} of {clips.length}
+          </span>
+          <span>{approvedCount} kept</span>
+        </p>
+        <p className="help">
+          The bar shows one minute before and after this clip. Drag a handle, or drag the start and
+          end times one second at a time. Hold a handle at the edge of the bar to go further. The
+          export keeps the original picture and includes the words.
+        </p>
         <div className="actions">
           <button type="button" onClick={onFindAgain} className="btn btn-secondary">
             Find again

@@ -1,12 +1,22 @@
 import React, { useEffect, useRef, useState } from 'react'
 import VideoPreview, { type VideoPreviewHandle } from './VideoPreview'
-import type { ClipCrop, ClipSegmentWithStatus, CropRatio } from '../../shared/types'
-import { DEFAULT_CROP } from '../../shared/types'
-import { clamp, CROP_PRESETS, cropFromPrevious } from '../../shared/crop'
-import { nudgeEdge } from '../../shared/clipBounds'
-import { PREVIEW_PAD_MS, pointerToSourceMs } from '../../shared/previewUrl'
+import type { ClipSegmentWithStatus } from '../../shared/types'
+import { clamp } from '../../shared/crop'
+import {
+  trimEdge,
+  nudgeEdge,
+  clipViewWindow,
+  expandViewToFit,
+  secondsFromDrag,
+  type ClipViewWindow
+} from '../../shared/clipBounds'
+import { formatPlaybackClock } from '../lib/playback'
+import { pointerToSourceMs } from '../../shared/previewUrl'
 
 const MIN_CLIP_MS = 500
+const HOLD_ARM_MS = 280
+const HOLD_STEP_MS = 340
+const EDGE_PX = 3
 
 function formatDuration(startMs: number, endMs: number): string {
   const totalSeconds = Math.round((endMs - startMs) / 1000)
@@ -17,106 +27,70 @@ function formatDuration(startMs: number, endMs: number): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
-function msToHMMSSs(ms: number): string {
-  const totalSeconds = ms / 1000
-  const h = Math.floor(totalSeconds / 3600)
-  const m = Math.floor((totalSeconds % 3600) / 60)
-  const s = totalSeconds % 60
-  if (h > 0) {
-    return `${h}:${String(m).padStart(2, '0')}:${s.toFixed(1).padStart(4, '0')}`
-  }
-  return `${String(m).padStart(2, '0')}:${s.toFixed(1).padStart(4, '0')}`
-}
-
-function parseTime(value: string): number | null {
-  const hMatch = value.trim().match(/^(\d+):(\d+):(\d+(?:\.\d+)?)$/)
-  if (hMatch) {
-    const h = parseInt(hMatch[1], 10)
-    const m = parseInt(hMatch[2], 10)
-    const s = parseFloat(hMatch[3])
-    if (isNaN(h) || isNaN(m) || isNaN(s) || m >= 60 || s >= 60) return null
-    const ms = (h * 3600 + m * 60 + s) * 1000
-    return ms >= 0 ? Math.round(ms) : null
-  }
-  const mMatch = value.trim().match(/^(\d+):(\d+(?:\.\d+)?)$/)
-  if (!mMatch) return null
-  const m = parseInt(mMatch[1], 10)
-  const s = parseFloat(mMatch[2])
-  if (isNaN(m) || isNaN(s) || s >= 60) return null
-  const ms = (m * 60 + s) * 1000
-  return ms >= 0 ? Math.round(ms) : null
+function videoLimit(durationMs: number | undefined, startMs: number, endMs: number): number {
+  return durationMs && durationMs > 0 ? durationMs : Math.max(endMs, startMs + MIN_CLIP_MS, 1)
 }
 
 interface ClipCardProps {
   clip: ClipSegmentWithStatus
-  clips: ClipSegmentWithStatus[]
-  index: number
   videoPath: string
   videoDurationMs?: number
-  framing?: Partial<Record<CropRatio, ClipCrop>>
   onUpdateTimes?: (id: string, startMs: number, endMs: number) => void
-  onUpdateCrop?: (id: string, crop: ClipCrop) => void
 }
 
 const ClipCard = React.memo(function ClipCard({
   clip,
-  clips,
-  index,
   videoPath,
   videoDurationMs,
-  framing,
-  onUpdateTimes,
-  onUpdateCrop
+  onUpdateTimes
 }: ClipCardProps): React.JSX.Element {
-  const crop = clip.crop ?? DEFAULT_CROP
   const playerRef = useRef<VideoPreviewHandle>(null)
-  const rootRef = useRef<HTMLDivElement>(null)
-  const [startInput, setStartInput] = useState(msToHMMSSs(clip.startMs))
-  const [endInput, setEndInput] = useState(msToHMMSSs(clip.endMs))
+  const trackRef = useRef<HTMLDivElement>(null)
   const [playMs, setPlayMs] = useState(clip.startMs)
   const [seekToMs, setSeekToMs] = useState(clip.startMs)
   const [seekNonce, setSeekNonce] = useState(0)
-  const [toast, setToast] = useState<string | null>(null)
   const [playing, setPlaying] = useState(false)
-  const [volume, setVolume] = useState(1)
-  const [muted, setMuted] = useState(false)
-  const [mediaSize, setMediaSize] = useState<{ width: number; height: number } | null>(null)
-  const [fullscreen, setFullscreen] = useState(false)
-  const trackRef = useRef<HTMLDivElement>(null)
+  const edgesRef = useRef({ startMs: clip.startMs, endMs: clip.endMs })
+  edgesRef.current = { startMs: clip.startMs, endMs: clip.endMs }
+  const limit = videoLimit(videoDurationMs, clip.startMs, clip.endMs)
+  const limitRef = useRef(limit)
+  limitRef.current = limit
+  const [view, setView] = useState<ClipViewWindow>(() =>
+    clipViewWindow(clip.startMs, clip.endMs, videoLimit(videoDurationMs, clip.startMs, clip.endMs))
+  )
+  const viewRef = useRef(view)
+  viewRef.current = view
+  const gestureCleanup = useRef<(() => void) | null>(null)
+  const hadDuration = useRef(Boolean(videoDurationMs && videoDurationMs > 0))
 
-  const maxMs =
-    videoDurationMs && videoDurationMs > 0
-      ? videoDurationMs
-      : Math.max(clip.endMs + 120000, clip.startMs + 120000)
-
-  const srcStart = Math.max(0, clip.startMs - PREVIEW_PAD_MS)
-  const srcEnd = Math.min(maxMs, clip.endMs + PREVIEW_PAD_MS)
-  const span = Math.max(1, srcEnd - srcStart)
-  const effectiveVolume = muted ? 0 : volume
   const inTail = playMs < clip.startMs - 40 || playMs > clip.endMs + 40
 
-  useEffect(() => {
-    setStartInput(msToHMMSSs(clip.startMs))
-  }, [clip.startMs])
-
-  useEffect(() => {
-    setEndInput(msToHMMSSs(clip.endMs))
-  }, [clip.endMs])
+  const fitView = (startMs: number, endMs: number): void => {
+    setView((current) => {
+      const next = expandViewToFit(current, startMs, endMs, limitRef.current)
+      if (next.viewStart === current.viewStart && next.viewEnd === current.viewEnd) return current
+      return next
+    })
+  }
 
   useEffect(() => {
     setPlayMs(clip.startMs)
     setSeekToMs(clip.startMs)
     setSeekNonce((n) => n + 1)
-    setToast(null)
-  }, [clip.id, clip.startMs])
+    setView(clipViewWindow(clip.startMs, clip.endMs, limitRef.current))
+    return () => {
+      gestureCleanup.current?.()
+    }
+  }, [clip.id])
 
   useEffect(() => {
-    const onFs = (): void => {
-      setFullscreen(document.fullscreenElement === rootRef.current)
+    const has = Boolean(videoDurationMs && videoDurationMs > 0)
+    if (has && !hadDuration.current) {
+      const edges = edgesRef.current
+      setView(clipViewWindow(edges.startMs, edges.endMs, videoDurationMs as number))
     }
-    document.addEventListener('fullscreenchange', onFs)
-    return () => document.removeEventListener('fullscreenchange', onFs)
-  }, [])
+    hadDuration.current = has
+  }, [videoDurationMs])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -125,12 +99,6 @@ const ClipCard = React.memo(function ClipCard({
       if (e.key === ' ' || e.code === 'Space') {
         e.preventDefault()
         playerRef.current?.togglePlay()
-      } else if (e.key === 'f' || e.key === 'F') {
-        e.preventDefault()
-        toggleFullscreen()
-      } else if (e.key === 'm' || e.key === 'M') {
-        e.preventDefault()
-        setMuted((on) => !on)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -138,127 +106,198 @@ const ClipCard = React.memo(function ClipCard({
   }, [])
 
   const seek = (ms: number): void => {
-    const next = clamp(ms, srcStart, srcEnd)
+    const next = clamp(ms, 0, limitRef.current)
     setPlayMs(next)
     setSeekToMs(next)
     setSeekNonce((n) => n + 1)
     playerRef.current?.seek(next)
   }
 
-  const handleStartBlur = (): void => {
-    const ms = parseTime(startInput)
-    if (ms !== null && ms < clip.endMs && ms <= maxMs && onUpdateTimes) {
-      onUpdateTimes(clip.id, ms, clip.endMs)
-    } else {
-      setStartInput(msToHMMSSs(clip.startMs))
-    }
-  }
-
-  const handleEndBlur = (): void => {
-    const ms = parseTime(endInput)
-    if (ms !== null && ms > clip.startMs && ms <= maxMs && onUpdateTimes) {
-      onUpdateTimes(clip.id, clip.startMs, ms)
-    } else {
-      setEndInput(msToHMMSSs(clip.endMs))
-    }
-  }
-
-  const setRatio = (ratio: CropRatio): void => {
-    if (!onUpdateCrop || crop.ratio === ratio) return
-    if (ratio !== 'original') {
-      const saved = framing?.[ratio]
-      if (saved) {
-        onUpdateCrop(clip.id, { ...saved })
-        setToast('Using the saved frame')
-        window.setTimeout(() => setToast(null), 1800)
-        return
-      }
-    }
-    const { crop: next, fromTitle } = cropFromPrevious(clips, index, ratio)
-    onUpdateCrop(clip.id, next)
-    if (fromTitle) {
-      setToast(`Frame copied from “${fromTitle}”`)
-      window.setTimeout(() => setToast(null), 1800)
-    } else {
-      setToast(null)
-    }
-  }
-
-  const nudge = (edge: 'start' | 'end', deltaMs: number): void => {
-    if (!onUpdateTimes) return
-    const next = nudgeEdge(clip.startMs, clip.endMs, edge, deltaMs, maxMs)
-    onUpdateTimes(clip.id, next.startMs, next.endMs)
-    seek(edge === 'start' ? next.startMs : next.endMs)
-  }
-
-  const msToX = (ms: number, width: number): number => ((ms - srcStart) / span) * width
-
-  const pointerMs = (clientX: number): number => {
-    const track = trackRef.current
-    if (!track) return clip.startMs
-    const rect = track.getBoundingClientRect()
-    return pointerToSourceMs(clientX, rect.left, rect.width, srcStart, srcEnd)
+  const percent = (ms: number): number => {
+    const span = view.viewEnd - view.viewStart
+    if (!(span > 0)) return 0
+    return clamp(((ms - view.viewStart) / span) * 100, 0, 100)
   }
 
   const onTimelinePointer = (e: React.PointerEvent, mode: 'in' | 'out' | 'play'): void => {
     if ((mode === 'in' || mode === 'out') && !onUpdateTimes) return
     e.preventDefault()
     e.stopPropagation()
+    const edge = mode === 'in' ? 'start' : 'end'
+    const frozen = { ...edgesRef.current }
+    // The window stays fixed for the whole gesture, so the other handle does not slide.
+    const frozenView = { ...viewRef.current }
+    const scaleEnd = limitRef.current
+    let live = { ...frozen }
+    let holdTimer: ReturnType<typeof setTimeout> | null = null
+    let stepOriginMs: number | null = null
+    let steps = 0
+    let lastX = e.clientX
 
-    const apply = (clientX: number): void => {
-      const ms = pointerMs(clientX)
-      if (mode === 'in' && onUpdateTimes) {
-        const startMs = clamp(ms, srcStart, clip.endMs - MIN_CLIP_MS)
-        onUpdateTimes(clip.id, startMs, clip.endMs)
-        seek(startMs)
-      } else if (mode === 'out' && onUpdateTimes) {
-        const endMs = clamp(ms, clip.startMs + MIN_CLIP_MS, srcEnd)
-        onUpdateTimes(clip.id, clip.startMs, endMs)
-        seek(endMs)
-      } else {
-        seek(ms)
+    const publish = (next: { startMs: number; endMs: number }): void => {
+      live = next
+      onUpdateTimes?.(clip.id, next.startMs, next.endMs)
+      seek(edge === 'start' ? next.startMs : next.endMs)
+    }
+
+    const outward = (clientX: number): boolean => {
+      const track = trackRef.current
+      if (!track || mode === 'play') return false
+      const rect = track.getBoundingClientRect()
+      const slop = steps > 0 ? 16 : EDGE_PX
+      if (mode === 'in') return clientX <= rect.left + slop
+      return clientX >= rect.right - slop
+    }
+
+    const clearHold = (): void => {
+      if (holdTimer != null) {
+        clearTimeout(holdTimer)
+        holdTimer = null
       }
     }
 
-    apply(e.clientX)
-    const move = (ev: PointerEvent): void => apply(ev.clientX)
-    const up = (): void => {
+    const endGesture = (): void => {
+      clearHold()
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      if (gestureCleanup.current === endGesture) gestureCleanup.current = null
     }
+
+    const apply = (clientX: number): void => {
+      lastX = clientX
+      const track = trackRef.current
+      if (!track) return
+      const rect = track.getBoundingClientRect()
+      const ms = pointerToSourceMs(
+        clientX,
+        rect.left,
+        rect.width,
+        frozenView.viewStart,
+        frozenView.viewEnd
+      )
+      if (mode === 'play') {
+        seek(ms)
+        return
+      }
+      if (outward(clientX)) {
+        if (steps === 0) publish(trimEdge(edge, ms, frozen.startMs, frozen.endMs, scaleEnd))
+        if (holdTimer == null) {
+          holdTimer = setTimeout(function tick() {
+            if (!outward(lastX)) {
+              holdTimer = null
+              return
+            }
+            if (stepOriginMs == null) {
+              stepOriginMs = edge === 'start' ? live.startMs : live.endMs
+            }
+            steps += 1
+            const delta = (edge === 'start' ? -1 : 1) * steps * 1000
+            publish(
+              nudgeEdge(
+                edge === 'start' ? stepOriginMs : frozen.startMs,
+                edge === 'end' ? stepOriginMs : frozen.endMs,
+                edge,
+                delta,
+                scaleEnd
+              )
+            )
+            holdTimer = setTimeout(tick, HOLD_STEP_MS)
+          }, HOLD_ARM_MS)
+        }
+        return
+      }
+      clearHold()
+      steps = 0
+      stepOriginMs = null
+      publish(trimEdge(edge, ms, frozen.startMs, frozen.endMs, scaleEnd))
+    }
+
+    const move = (ev: PointerEvent): void => apply(ev.clientX)
+    const up = (): void => {
+      endGesture()
+      if (mode === 'play') return
+      fitView(live.startMs, live.endMs)
+    }
+
+    gestureCleanup.current?.()
+    gestureCleanup.current = endGesture
+    apply(e.clientX)
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
   }
 
-  const toggleFullscreen = (): void => {
-    const root = rootRef.current
-    if (!root) return
-    if (document.fullscreenElement === root) void document.exitFullscreen()
-    else void root.requestFullscreen()
+  const onTimePointer = (e: React.PointerEvent, edge: 'start' | 'end'): void => {
+    if (!onUpdateTimes) return
+    e.preventDefault()
+    e.stopPropagation()
+    const originX = e.clientX
+    const origin = { ...edgesRef.current }
+    let live = origin
+    let applied = 0
+
+    const endGesture = (): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      if (gestureCleanup.current === endGesture) gestureCleanup.current = null
+    }
+    const move = (ev: PointerEvent): void => {
+      const seconds = secondsFromDrag(ev.clientX - originX)
+      if (seconds === applied) return
+      applied = seconds
+      live = nudgeEdge(origin.startMs, origin.endMs, edge, seconds * 1000, limitRef.current)
+      onUpdateTimes(clip.id, live.startMs, live.endMs)
+      seek(edge === 'start' ? live.startMs : live.endMs)
+    }
+    const up = (): void => {
+      endGesture()
+      fitView(live.startMs, live.endMs)
+    }
+
+    gestureCleanup.current?.()
+    gestureCleanup.current = endGesture
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
   }
 
-  const trackWidth = 100
-  const x0 = clamp(msToX(clip.startMs, trackWidth), 0, trackWidth)
-  const x1 = clamp(msToX(clip.endMs, trackWidth), 0, trackWidth)
-  const xp = clamp(msToX(playMs, trackWidth), 0, trackWidth)
+  const onTimeKey = (e: React.KeyboardEvent, edge: 'start' | 'end'): void => {
+    if (e.key === ' ' || e.code === 'Space') {
+      e.preventDefault()
+      return
+    }
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+    e.preventDefault()
+    e.stopPropagation()
+    if (!onUpdateTimes) return
+    const delta = e.key === 'ArrowLeft' ? -1000 : 1000
+    const next = nudgeEdge(
+      edgesRef.current.startMs,
+      edgesRef.current.endMs,
+      edge,
+      delta,
+      limitRef.current
+    )
+    onUpdateTimes(clip.id, next.startMs, next.endMs)
+    seek(edge === 'start' ? next.startMs : next.endMs)
+    fitView(next.startMs, next.endMs)
+  }
+
+  const x0 = percent(clip.startMs)
+  const x1 = percent(clip.endMs)
+  const xp = percent(playMs)
+  const startClock = formatPlaybackClock(clip.startMs)
+  const endClock = formatPlaybackClock(clip.endMs)
 
   return (
-    <div ref={rootRef} data-player-root className="flex flex-col flex-1 min-h-0 bg-black">
+    <div className="flex flex-col flex-1 min-h-0 bg-black">
       <div className="relative flex-1 min-h-0">
         <VideoPreview
           ref={playerRef}
           videoPath={videoPath}
           startMs={clip.startMs}
           endMs={clip.endMs}
-          playStartMs={srcStart}
-          playEndMs={srcEnd}
           videoDurationMs={videoDurationMs}
-          crop={crop}
-          volume={effectiveVolume}
-          onCropChange={onUpdateCrop ? (next) => onUpdateCrop(clip.id, next) : undefined}
           onPlayheadMs={setPlayMs}
           onPlayingChange={setPlaying}
-          onMediaInfo={setMediaSize}
           seekToMs={seekToMs}
           seekNonce={seekNonce}
           editor
@@ -266,63 +305,14 @@ const ClipCard = React.memo(function ClipCard({
         />
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-black/55 to-transparent px-5 pt-4 pb-10">
           <h3 className="text-lg font-medium text-white truncate">{clip.title}</h3>
-          <p className="text-sm text-white/70 truncate">
-            {formatDuration(clip.startMs, clip.endMs)}
-            {clip.topic ? ` · ${clip.topic}` : ''}
-            {mediaSize ? ` · ${mediaSize.width}×${mediaSize.height}` : ''}
-          </p>
+          <p className="text-sm text-white/70 truncate">{formatDuration(clip.startMs, clip.endMs)}</p>
         </div>
-        {toast && (
-          <div className="absolute left-4 top-14 z-20 bg-black/80 text-white text-xs px-2.5 py-1.5 rounded">
-            {toast}
-          </div>
-        )}
         {inTail && (
-          <div className="absolute right-4 top-3 z-20 text-sm text-white/80">
-            Outside the clip
-          </div>
+          <div className="absolute right-4 top-3 z-20 text-sm text-white/80">Outside the clip</div>
         )}
       </div>
 
-      <div className="shrink-0 bg-bg-base border-t border-white/8 px-4 pt-2 pb-3 flex flex-col gap-2">
-        <div
-          className="relative h-7 w-full cursor-pointer select-none touch-none"
-          onPointerDown={(e) => onTimelinePointer(e, 'play')}
-        >
-          <div
-            ref={trackRef}
-            className="absolute left-0 right-0 w-full top-1/2 h-1 -mt-0.5 bg-white/15 rounded-full"
-          >
-              <div
-                className="absolute top-0 h-full bg-accent rounded-full"
-                style={{ left: `${x0}%`, width: `${Math.max(1, x1 - x0)}%` }}
-              />
-              {onUpdateTimes && (
-                <>
-                  <button
-                    type="button"
-                    aria-label="Start"
-                    className="absolute top-1/2 w-2 h-5 -ml-1 -mt-2.5 bg-accent rounded-sm cursor-ew-resize z-[2]"
-                    style={{ left: `${x0}%` }}
-                    onPointerDown={(e) => onTimelinePointer(e, 'in')}
-                  />
-                  <button
-                    type="button"
-                    aria-label="End"
-                    className="absolute top-1/2 w-2 h-5 -ml-1 -mt-2.5 bg-accent rounded-sm cursor-ew-resize z-[2]"
-                    style={{ left: `${x1}%` }}
-                    onPointerDown={(e) => onTimelinePointer(e, 'out')}
-                  />
-                </>
-              )}
-              <div
-                className="absolute top-[-8px] bottom-[-8px] w-px bg-white z-[3] pointer-events-none"
-                style={{ left: `${xp}%` }}
-              />
-            </div>
-          </div>
-
-        <div className="flex items-center gap-3">
+      <div className="shrink-0 bg-bg-base border-t border-white/8 px-4 py-2 flex items-center gap-3">
           <button
             type="button"
             onClick={() => playerRef.current?.togglePlay()}
@@ -340,112 +330,73 @@ const ClipCard = React.memo(function ClipCard({
               </svg>
             )}
           </button>
-
-          <span className="text-sm font-mono tabular-nums text-neutral-200 min-w-[4.6rem]">
-            {msToHMMSSs(playMs)}
+          <span className="text-sm font-mono tabular-nums text-neutral-200 shrink-0 min-w-[3.25rem]" aria-label="Current time">
+            {formatPlaybackClock(playMs)}
           </span>
-          <span className="text-sm text-neutral-600">/</span>
-          <span className="text-sm font-mono tabular-nums text-neutral-400 min-w-[4.6rem]">
-            {msToHMMSSs(clip.endMs)}
-          </span>
-
-          <div className="flex-1" />
-
           {onUpdateTimes && (
-            <div className="flex flex-wrap items-center gap-1">
-              <span className="time-label">Start</span>
-              <button type="button" aria-label="Start one second earlier" onClick={() => nudge('start', -1000)} className="text-sm text-white/70 hover:text-white px-1">−1s</button>
-              <button type="button" aria-label="Start one second later" onClick={() => nudge('start', 1000)} className="text-sm text-white/70 hover:text-white px-1">+1s</button>
-              <input
-                type="text"
-                value={startInput}
-                onChange={(e) => setStartInput(e.target.value)}
-                onBlur={handleStartBlur}
-                aria-label="Start time"
-                className="w-[5rem] h-8 bg-transparent px-1 text-white text-sm text-center font-mono outline-none"
-              />
-              <span className="time-label">End</span>
-              <input
-                type="text"
-                value={endInput}
-                onChange={(e) => setEndInput(e.target.value)}
-                onBlur={handleEndBlur}
-                aria-label="End time"
-                className="w-[5rem] h-8 bg-transparent px-1 text-white text-sm text-center font-mono outline-none"
-              />
-              <button type="button" aria-label="End one second earlier" onClick={() => nudge('end', -1000)} className="text-sm text-white/70 hover:text-white px-1">−1s</button>
-              <button type="button" aria-label="End one second later" onClick={() => nudge('end', 1000)} className="text-sm text-white/70 hover:text-white px-1">+1s</button>
-            </div>
-          )}
-
-          <div className="flex items-center gap-1.5 min-w-[7.5rem]">
             <button
               type="button"
-              onClick={() => setMuted((on) => !on)}
-              className="w-8 h-8 rounded-md text-neutral-300 hover:text-white grid place-items-center"
-              aria-label={muted || volume === 0 ? 'Unmute' : 'Mute'}
+              data-clip-time="start"
+              aria-label={`Start time ${startClock}`}
+              className="cursor-ew-resize select-none touch-none shrink-0 whitespace-nowrap text-sm font-mono tabular-nums text-neutral-300 hover:text-white"
+              onPointerDown={(e) => onTimePointer(e, 'start')}
+              onKeyDown={(e) => onTimeKey(e, 'start')}
             >
-              {muted || volume === 0 ? (
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <path d="M2 6.5h2.2L7 4v8L4.2 9.5H2v-3z" fill="currentColor" />
-                  <path d="M10 6l4 4M14 6l-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
-              ) : (
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M2 6.5h2.2L7 4v8L4.2 9.5H2v-3z" />
-                  <path d="M9.2 6.2a3 3 0 010 3.6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                  <path d="M11 4.8a5 5 0 010 6.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                </svg>
-              )}
+              Start {startClock}
             </button>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={effectiveVolume}
-              onChange={(e) => {
-                const next = Number(e.target.value)
-                setVolume(next)
-                if (next > 0) setMuted(false)
-              }}
-              aria-label="Volume"
-              className="volume-slider"
-            />
-          </div>
-
-          <button
-            type="button"
-            onClick={toggleFullscreen}
-            className="w-8 h-8 rounded-md text-neutral-300 hover:text-white grid place-items-center"
-            aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          )}
+          <div
+            className="relative h-7 min-w-0 flex-1 cursor-pointer select-none touch-none"
+            onPointerDown={(e) => onTimelinePointer(e, 'play')}
           >
-            {fullscreen ? (
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                <path d="M5 3v2H3M11 3v2h2M3 11h2v2M13 11h-2v2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            ) : (
-              <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                <path d="M3 6V3h3M10 3h3v3M13 10v3h-3M6 13H3v-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            )}
-          </button>
-        </div>
-
-        {onUpdateCrop && (
-          <div className="option-row">
-            {CROP_PRESETS.map((preset) => (
-              <button
-                key={preset.ratio}
-                type="button"
-                onClick={() => setRatio(preset.ratio)}
-                className={`option option-sm ${crop.ratio === preset.ratio ? 'is-selected' : ''}`}
-              >
-                {preset.label}
-              </button>
-            ))}
+            <div
+              ref={trackRef}
+              className="absolute left-0 right-0 w-full top-1/2 h-1 -mt-0.5 bg-white/15 rounded-full"
+            >
+              <div
+                className="absolute top-0 h-full bg-accent rounded-full"
+                style={{ left: `${x0}%`, width: `${Math.max(0.4, x1 - x0)}%` }}
+              />
+              {onUpdateTimes && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Start"
+                    className="absolute top-1/2 z-[2] h-6 w-4 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize"
+                    style={{ left: `${x0}%` }}
+                    onPointerDown={(e) => onTimelinePointer(e, 'in')}
+                  >
+                    <span className="mx-auto block h-5 w-1 rounded-sm bg-accent" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="End"
+                    className="absolute top-1/2 z-[2] h-6 w-4 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize"
+                    style={{ left: `${x1}%` }}
+                    onPointerDown={(e) => onTimelinePointer(e, 'out')}
+                  >
+                    <span className="mx-auto block h-5 w-1 rounded-sm bg-accent" />
+                  </button>
+                </>
+              )}
+              <div
+                className="absolute top-[-8px] bottom-[-8px] w-px bg-white z-[3] pointer-events-none"
+                style={{ left: `${xp}%` }}
+              />
+            </div>
           </div>
-        )}
+          {onUpdateTimes && (
+            <button
+              type="button"
+              data-clip-time="end"
+              aria-label={`End time ${endClock}`}
+              className="cursor-ew-resize select-none touch-none shrink-0 whitespace-nowrap text-sm font-mono tabular-nums text-neutral-300 hover:text-white"
+              onPointerDown={(e) => onTimePointer(e, 'end')}
+              onKeyDown={(e) => onTimeKey(e, 'end')}
+            >
+              End {endClock}
+            </button>
+          )}
       </div>
     </div>
   )

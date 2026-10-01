@@ -1,25 +1,25 @@
+import { useEffect, useState } from 'react'
 import CenteredMessage from '../components/CenteredMessage'
 import FindClipsForm from '../components/FindClipsForm'
-import type { ClipSegment, LLMProvider, TranscriptSegment } from '../../shared/types'
+import type { ClipSegment, TranscriptSegment } from '../../shared/types'
+
+interface ClipAgent {
+  id: string
+  label: string
+}
 
 interface FindScreenProps {
   projectReady: boolean
   segments: TranscriptSegment[]
   videoPath: string
-  provider: LLMProvider
-  model: string
-  apiKey: string
   userHint: string
   analyzing: boolean
   analyzePercent: number
   analyzeMessage: string
   error: string | null
   hasClips: boolean
-  onProviderChange: (provider: LLMProvider) => void
-  onModelChange: (model: string) => void
-  onApiKeyChange: (apiKey: string) => void
   onUserHintChange: (userHint: string) => void
-  onAnalyze: (userHint?: string) => void
+  onAnalyze: (agentId: string, userHint?: string) => void
   onLoadCachedAnalysis: (clips: ClipSegment[], rawResponse: string) => void
   onCancel: () => void
   onAddRange: () => void
@@ -35,6 +35,28 @@ export default function FindScreen({
   onBackToClips,
   ...form
 }: FindScreenProps): React.JSX.Element {
+  const [agents, setAgents] = useState<ClipAgent[] | null>(null)
+  const [agentId, setAgentId] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    window.api
+      .listCaptionAgents()
+      .then((found) => {
+        if (!active) return
+        setAgents(found)
+        setAgentId((current) =>
+          current && found.some((agent) => agent.id === current) ? current : (found[0]?.id ?? null)
+        )
+      })
+      .catch(() => {
+        if (active) setAgents([])
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
   if (!projectReady) {
     return <CenteredMessage>Opening the video…</CenteredMessage>
   }
@@ -58,6 +80,9 @@ export default function FindScreen({
     <FindClipsForm
       {...form}
       segments={segments}
+      agents={agents}
+      agentId={agentId}
+      onAgentChange={setAgentId}
       onAddRange={form.onAddRange}
       onBackToClips={hasClips ? onBackToClips : undefined}
     />

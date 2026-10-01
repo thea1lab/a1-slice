@@ -4,7 +4,11 @@ import {
   snapClipToSegments,
   snapToPause,
   nudgeEdge,
-  refineClipBounds
+  refineClipBounds,
+  trimEdge,
+  clipViewWindow,
+  expandViewToFit,
+  secondsFromDrag
 } from '../clipBounds'
 import type { TranscriptSegment, ClipSegment } from '../types'
 
@@ -89,6 +93,71 @@ describe('snapToPause', () => {
     const result = snapToPause(clip, segments)
     expect(result.endMs).toBeGreaterThan(15000)
     expect(result.endMs).toBeLessThan(17000)
+  })
+})
+
+describe('trimEdge', () => {
+  it('moves the end and leaves the start where it is', () => {
+    expect(trimEdge('end', 9000, 1000, 4000, 20000)).toEqual({ startMs: 1000, endMs: 9000 })
+  })
+
+  it('moves the start and leaves the end where it is', () => {
+    expect(trimEdge('start', 500, 1000, 4000, 20000)).toEqual({ startMs: 500, endMs: 4000 })
+  })
+
+  it('keeps at least half a second of clip', () => {
+    expect(trimEdge('end', 1000, 1000, 4000, 20000)).toEqual({ startMs: 1000, endMs: 1500 })
+    expect(trimEdge('start', 9000, 1000, 4000, 20000)).toEqual({ startMs: 3500, endMs: 4000 })
+  })
+})
+
+describe('clipViewWindow', () => {
+  it('frames a short clip with one minute on each side', () => {
+    const hour = 3_600_000
+    const view = clipViewWindow(hour, hour + 21_000, 3 * hour)
+    expect(view).toEqual({
+      viewStart: hour - 60_000,
+      viewEnd: hour + 21_000 + 60_000
+    })
+  })
+
+  it('clamps the window to the start of the video', () => {
+    expect(clipViewWindow(5_000, 26_000, 600_000)).toEqual({
+      viewStart: 0,
+      viewEnd: 86_000
+    })
+  })
+
+  it('frames a clip that begins near the start of a ten minute video', () => {
+    expect(clipViewWindow(10_000, 40_000, 600_000)).toEqual({
+      viewStart: 0,
+      viewEnd: 100_000
+    })
+  })
+})
+
+describe('expandViewToFit', () => {
+  it('grows only the side that moved past the window', () => {
+    const view = { viewStart: 1_000_000, viewEnd: 1_200_000 }
+    expect(expandViewToFit(view, 1_050_000, 1_250_000, 3_600_000)).toEqual({
+      viewStart: 1_000_000,
+      viewEnd: 1_250_000 + 60_000
+    })
+  })
+
+  it('leaves the window alone while the clip stays inside it', () => {
+    const view = { viewStart: 0, viewEnd: 180_000 }
+    expect(expandViewToFit(view, 10_000, 40_000, 600_000)).toEqual(view)
+  })
+})
+
+describe('secondsFromDrag', () => {
+  it('counts one second every 24 pixels', () => {
+    expect(secondsFromDrag(23)).toBe(0)
+    expect(secondsFromDrag(24)).toBe(1)
+    expect(secondsFromDrag(-24)).toBe(-1)
+    expect(secondsFromDrag(-47)).toBe(-1)
+    expect(secondsFromDrag(48)).toBe(2)
   })
 })
 

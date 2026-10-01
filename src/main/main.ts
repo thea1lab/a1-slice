@@ -16,8 +16,9 @@ import { ffmpegCropFilter } from '../shared/crop'
 import { coerceCaptionStyle, DEFAULT_CAPTION_STYLE } from '../shared/captions'
 import { clampWordsPerLine, coerceSegments, type CaptionEditRequest } from '../shared/captionEdit'
 import { listInstalledAgents, startCaptionFix, type CaptionAgentId, CAPTION_AGENTS } from './captionAgent'
+import { startClipFind } from './clipAgent'
 import { downloadModel, transcribeWithRetry, mergeChunkSegments, type AbortHandle } from './whisper'
-import { analyzeTranscript, parseLLMResponse, formatTranscriptForLLM } from './analyzer'
+import { parseLLMResponse, formatTranscriptForLLM } from './analyzer'
 import { loadSettings, saveSettings } from './settings'
 import { pathFromPreviewUrl } from '../shared/previewUrl'
 import { previewCacheKey } from '../shared/project'
@@ -72,6 +73,7 @@ protocol.registerSchemesAsPrivileged([
 let mainWindow: BrowserWindow | null = null
 let cancelled = false
 let captionFixKill: (() => void) | null = null
+let clipFindKill: (() => void) | null = null
 let activeWhisperHandle: AbortHandle | null = null
 const allowedVideoPaths = new Set<string>()
 const previewFiles = new Set<string>()
@@ -374,6 +376,8 @@ ipcMain.on('cancel-pipeline', (event) => {
   cancelled = true
   activeWhisperHandle?.kill()
   activeWhisperHandle = null
+  clipFindKill?.()
+  clipFindKill = null
 })
 
 // IPC: Transcribe video (Step 2)
@@ -524,46 +528,56 @@ secureHandle('check-analysis', (_event, videoPath: string) => {
   return { found: false }
 })
 
-// IPC: Analyze transcript with LLM (Step 3)
+// IPC: Find clips with an installed agent
 secureHandle(
   'analyze-transcript',
   async (
-    _event,
+    event,
     videoPath: string,
     segments: TranscriptSegment[],
-    settings: AppSettings,
+    agentId: unknown,
     userHint?: string
   ) => {
     cancelled = false
     allowVideoPath(videoPath)
+    if (!isCaptionAgent(agentId)) return { success: false, error: 'Choose an agent.' }
+    if (!Array.isArray(segments) || segments.length === 0) {
+      return { success: false, error: 'This video has no transcript yet.' }
+    }
+
+    clipFindKill?.()
+    let ticks = 0
+    const run = startClipFind(
+      agentId,
+      segments,
+      typeof userHint === 'string' ? userHint : undefined,
+      (line) => {
+        if (event.sender.isDestroyed()) return
+        ticks += 1
+        sendProgress({ stage: 'analyzing', message: line, percent: Math.min(90, 8 + ticks * 6) })
+      }
+    )
+    clipFindKill = run.kill
 
     try {
-      sendProgress({
-        stage: 'analyzing',
-        message: 'Reading the transcript and marking clips…',
-        percent: 0
-      })
-
-      const { clips, rawResponse } = await analyzeTranscript(
-        segments,
-        settings.provider,
-        settings.model,
-        settings.apiKey,
-        userHint,
-        (message, percent) => sendProgress({ stage: 'analyzing', message, percent })
-      )
-
-      if (cancelled) throw new Error('Cancelled')
+      const result = await run.done
+      if (clipFindKill === run.kill) clipFindKill = null
+      if (cancelled || result.error === 'Stopped.') return { success: false, error: 'Stopped.' }
+      if (result.error || !result.clips) {
+        const message = result.error || 'The agent did not return any clips.'
+        sendProgress({ stage: 'error', message, percent: 0 })
+        return { success: false, error: message }
+      }
 
       try {
-        writeClips(videoPath, clips, rawResponse)
+        writeClips(videoPath, result.clips, result.raw ?? '')
       } catch {}
 
       sendProgress({ stage: 'done', message: '', percent: 100 })
-      return { success: true, clips, rawResponse }
+      return { success: true, clips: result.clips, rawResponse: result.raw ?? '' }
     } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Unknown error occurred'
+      if (clipFindKill === run.kill) clipFindKill = null
+      const message = err instanceof Error ? err.message : 'Unknown error occurred'
       sendProgress({ stage: 'error', message, percent: 0 })
       return { success: false, error: message }
     }

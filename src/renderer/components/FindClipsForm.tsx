@@ -2,31 +2,26 @@ import { useState, useEffect, useCallback } from 'react'
 import TranscriptViewer from './TranscriptViewer'
 import ProgressBar from './ProgressBar'
 import SegmentedChoice from './SegmentedChoice'
-import type { TranscriptSegment, ClipSegment, LLMProvider } from '../../shared/types'
-import { DEFAULT_MODELS } from '../../shared/types'
+import type { TranscriptSegment, ClipSegment } from '../../shared/types'
 
-const PROVIDERS: { id: LLMProvider; label: string }[] = [
-  { id: 'claude', label: 'Claude' },
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'opencode', label: 'OpenCode' }
-]
+interface ClipAgent {
+  id: string
+  label: string
+}
 
 interface FindClipsFormProps {
   segments: TranscriptSegment[]
   videoPath: string | null
-  provider: LLMProvider
-  model: string
-  apiKey: string
+  agents: ClipAgent[] | null
+  agentId: string | null
   userHint: string
   analyzing: boolean
   analyzePercent: number
   analyzeMessage: string
   error: string | null
-  onProviderChange: (provider: LLMProvider) => void
-  onModelChange: (model: string) => void
-  onApiKeyChange: (apiKey: string) => void
+  onAgentChange: (agentId: string) => void
   onUserHintChange: (userHint: string) => void
-  onAnalyze: (userHint?: string) => void
+  onAnalyze: (agentId: string, userHint?: string) => void
   onLoadCachedAnalysis?: (clips: ClipSegment[], rawResponse: string) => void
   onCancel: () => void
   onAddRange?: () => void
@@ -36,17 +31,14 @@ interface FindClipsFormProps {
 export default function FindClipsForm({
   segments,
   videoPath,
-  provider,
-  model,
-  apiKey,
+  agents,
+  agentId,
   userHint,
   analyzing,
   analyzePercent,
   analyzeMessage,
   error,
-  onProviderChange,
-  onModelChange,
-  onApiKeyChange,
+  onAgentChange,
   onUserHintChange,
   onAnalyze,
   onLoadCachedAnalysis,
@@ -54,11 +46,12 @@ export default function FindClipsForm({
   onAddRange,
   onBackToClips
 }: FindClipsFormProps): React.JSX.Element {
-  const canAnalyze = apiKey.length > 0 && !analyzing
+  const canAnalyze = Boolean(agentId) && !analyzing
 
   const handleAnalyze = useCallback(() => {
-    onAnalyze(userHint.trim() || undefined)
-  }, [onAnalyze, userHint]) as React.MouseEventHandler<HTMLButtonElement>
+    if (!agentId) return
+    onAnalyze(agentId, userHint.trim() || undefined)
+  }, [agentId, onAnalyze, userHint]) as React.MouseEventHandler<HTMLButtonElement>
 
   const [cachedAnalysis, setCachedAnalysis] = useState<{
     clips: ClipSegment[]
@@ -89,7 +82,7 @@ export default function FindClipsForm({
       <div>
         <h1 className="display">Find best parts</h1>
         <p className="lead mt-3">
-          A model reads the transcript and suggests clips, with a start and an end for each one.
+          An agent reads the transcript and suggests clips, with a start and an end for each one.
           You can also mark a part yourself.
         </p>
       </div>
@@ -128,52 +121,24 @@ export default function FindClipsForm({
       )}
 
       <div className="block">
-        <h2 className="section-label">Who reads the transcript</h2>
+        <h2 className="section-label">Which agent</h2>
         <p className="help">
-          The words are sent to this service so it can suggest clips. The video stays on this
+          The words are sent to this agent so it can suggest clips. The video stays on this
           computer.
         </p>
-        <SegmentedChoice
-          label="Who reads the transcript"
-          value={provider}
-          options={PROVIDERS}
-          disabled={analyzing}
-          onChange={(next) => {
-            onProviderChange(next)
-            onModelChange(DEFAULT_MODELS[next])
-          }}
-        />
-        <label className="flex flex-col gap-2 w-full text-base text-[#a8a8a8]">
-          Model
-          <input
-            type="text"
-            value={model}
-            onChange={(e) => onModelChange(e.target.value)}
-            placeholder={provider === 'opencode' ? 'For example, minimax-m2.7' : undefined}
+        {agents === null && <p className="help">Looking for agents on this computer…</p>}
+        {agents !== null && agents.length === 0 && (
+          <p className="help">This computer has no agent to run. You can still mark a part yourself.</p>
+        )}
+        {agents !== null && agents.length > 0 && agentId && (
+          <SegmentedChoice
+            label="Which agent"
+            value={agentId}
+            options={agents}
             disabled={analyzing}
-            className="field disabled:opacity-40"
+            onChange={onAgentChange}
           />
-        </label>
-        <label className="flex flex-col gap-2 w-full text-base text-[#a8a8a8]">
-          API key
-          <input
-            type="password"
-            placeholder={
-              provider === 'opencode'
-                ? 'OpenCode API key'
-                : provider === 'claude'
-                  ? 'sk-ant-...'
-                  : 'sk-...'
-            }
-            value={apiKey}
-            onChange={(e) => onApiKeyChange(e.target.value)}
-            disabled={analyzing}
-            className="field disabled:opacity-40"
-          />
-          {provider === 'opencode' && (
-            <span className="help">Create a key at opencode.ai/auth</span>
-          )}
-        </label>
+        )}
 
         <label className="flex flex-col gap-2 w-full text-base text-[#a8a8a8]">
           What should it look for?

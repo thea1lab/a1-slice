@@ -205,19 +205,20 @@ export default function App(): React.JSX.Element {
   )
 
   const handleAnalyze = useCallback(
-    async (userHint?: string) => {
+    async (agentId: string, userHint?: string) => {
       if (!state.videoPath) return
       dispatch({ type: 'START_ANALYZE' })
       const result = await window.api.analyzeTranscript(
         state.videoPath,
         state.segments,
-        settingsOf(state),
+        agentId,
         userHint
       )
       if (result.success && result.clips) {
         adoptClips(result.clips, result.rawResponse || '')
       } else {
-        dispatch({ type: 'ANALYZE_ERROR', error: result.error || 'Analysis failed' })
+        const stopped = result.error === 'Stopped.' || result.error === 'Cancelled'
+        dispatch({ type: 'ANALYZE_ERROR', error: stopped ? '' : result.error || 'Analysis failed' })
       }
     },
     [state, adoptClips]
@@ -230,16 +231,15 @@ export default function App(): React.JSX.Element {
     dispatch({ type: 'START_EXPORT' })
     const result = await window.api.cutClips(
       state.videoPath,
-      approved.map(({ title, startMs, endMs, crop, category, topic }) => ({
+      approved.map(({ title, startMs, endMs, category, topic }) => ({
         title,
         startMs,
         endMs,
-        crop,
         category,
         topic
       })),
       state.segments,
-      state.exportSubtitles,
+      'srt',
       style
     )
     if (result.success && result.outputDir) {
@@ -247,7 +247,7 @@ export default function App(): React.JSX.Element {
     } else {
       dispatch({ type: 'EXPORT_ERROR', error: result.error || 'Export failed' })
     }
-  }, [state.videoPath, state.clips, state.segments, state.exportSubtitles, state.captions])
+  }, [state.videoPath, state.clips, state.segments, state.captions])
 
   const saveFraming = useCallback(
     (crop: ClipCrop) => {
@@ -257,15 +257,6 @@ export default function App(): React.JSX.Element {
       void window.api.saveFraming(state.videoPath, framing)
     },
     [state.videoPath, state.framing]
-  )
-
-  const handleClipCrop = useCallback(
-    (id: string, crop: ClipCrop) => {
-      markClips()
-      dispatch({ type: 'UPDATE_CLIP_CROP', id, crop })
-      if (crop.ratio !== 'original' && !state.framing[crop.ratio]) saveFraming(crop)
-    },
-    [saveFraming, state.framing]
   )
 
   const handleCaptions = useCallback(
@@ -371,7 +362,6 @@ export default function App(): React.JSX.Element {
           adoptSaved,
           handleSlice,
           saveFraming,
-          handleClipCrop,
           handleCaptions,
           handleExportFrame,
           handleExportCaptions,
@@ -395,10 +385,9 @@ interface ScreenHandlers {
   showTranscribe: (returnTo: 'find' | 'captions') => void
   adoptClips: (clips: ClipSegment[], rawResponse: string) => void
   adoptSaved: (clips: ClipSegment[], rawResponse: string) => void
-  handleAnalyze: (userHint?: string) => Promise<void>
+  handleAnalyze: (agentId: string, userHint?: string) => Promise<void>
   handleSlice: () => Promise<void>
   saveFraming: (crop: ClipCrop) => void
-  handleClipCrop: (id: string, crop: ClipCrop) => void
   handleCaptions: (captions: CaptionProject) => void
   handleExportFrame: (crop: ClipCrop) => Promise<void>
   handleExportCaptions: (cues: TranscriptSegment[], look: CaptionLook, style: CaptionStyle) => Promise<void>
@@ -482,18 +471,12 @@ function renderScreen(state: WizardState, handlers: ScreenHandlers): React.JSX.E
           projectReady={state.projectReady}
           segments={state.segments}
           videoPath={path || ''}
-          provider={state.provider}
-          model={state.model}
-          apiKey={state.apiKey}
           userHint={state.userHint}
           analyzing={state.analyzing}
           analyzePercent={state.analyzePercent}
           analyzeMessage={state.analyzeMessage}
           error={state.analyzeError}
           hasClips={state.clips.length > 0}
-          onProviderChange={(provider) => handlers.dispatch({ type: 'SET_PROVIDER', provider })}
-          onModelChange={(model) => handlers.dispatch({ type: 'SET_MODEL', model })}
-          onApiKeyChange={(apiKey) => handlers.dispatch({ type: 'SET_API_KEY', apiKey })}
           onUserHintChange={(userHint) => handlers.dispatch({ type: 'SET_USER_HINT', userHint })}
           onAnalyze={(hint) => void handlers.handleAnalyze(hint)}
           onLoadCachedAnalysis={handlers.adoptSaved}
@@ -513,8 +496,6 @@ function renderScreen(state: WizardState, handlers: ScreenHandlers): React.JSX.E
           videoPath={path || ''}
           rawResponse={state.rawResponse}
           videoDurationMs={state.videoDurationMs || undefined}
-          framing={state.framing}
-          exportSubtitles={state.exportSubtitles}
           onToggle={(id) => {
             handlers.markClips()
             handlers.dispatch({ type: 'TOGGLE_CLIP', id })
@@ -523,10 +504,6 @@ function renderScreen(state: WizardState, handlers: ScreenHandlers): React.JSX.E
             handlers.markClips()
             handlers.dispatch({ type: 'UPDATE_CLIP_TIMES', id, startMs, endMs })
           }}
-          onUpdateClipCrop={handlers.handleClipCrop}
-          onExportSubtitles={(exportSubtitles) =>
-            handlers.dispatch({ type: 'SET_EXPORT_SUBTITLES', exportSubtitles })
-          }
           onSlice={() => void handlers.handleSlice()}
           onFindAgain={() => handlers.dispatch({ type: 'SHOW_SCREEN', screen: 'find' })}
           onAddRange={() => {

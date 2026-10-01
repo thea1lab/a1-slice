@@ -36,7 +36,7 @@ declare global {
       analyzeTranscript(
         videoPath: string,
         segments: TranscriptSegment[],
-        settings: AppSettings,
+        agentId: string,
         userHint?: string
       ): Promise<AnalyzeResult>
       cutClips(

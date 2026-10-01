@@ -83,6 +83,81 @@ export function snapToPause<T extends { startMs: number; endMs: number }>(
   return { ...clip, startMs, endMs }
 }
 
+/** Move one edge. The other time stays where it was. */
+export function trimEdge(
+  edge: 'start' | 'end',
+  pointerMs: number,
+  startMs: number,
+  endMs: number,
+  maxMs: number,
+  minLen = 500
+): { startMs: number; endMs: number } {
+  const limit = Number.isFinite(maxMs) && maxMs > 0 ? maxMs : Math.max(endMs, startMs)
+  if (edge === 'start') {
+    const start = clamp(pointerMs, 0, Math.max(0, endMs - minLen))
+    return { startMs: Math.round(start), endMs }
+  }
+  const end = clamp(pointerMs, Math.min(limit, startMs + minLen), limit)
+  return { startMs, endMs: Math.round(end) }
+}
+
+/** One minute of video on each side of a clip, shown on the review bar. */
+export const CLIP_VIEW_PAD_MS = 60_000
+
+/** Dragging a start or end time this many pixels moves that edge by one second. */
+export const FINE_DRAG_PX = 24
+
+export interface ClipViewWindow {
+  viewStart: number
+  viewEnd: number
+}
+
+function videoLimit(maxMs: number, startMs: number, endMs: number): number {
+  return Number.isFinite(maxMs) && maxMs > 0 ? maxMs : Math.max(endMs, startMs, 1)
+}
+
+/** The bar shows the clip plus one minute before and after, clamped to the video. */
+export function clipViewWindow(
+  startMs: number,
+  endMs: number,
+  maxMs: number,
+  padMs = CLIP_VIEW_PAD_MS
+): ClipViewWindow {
+  const limit = videoLimit(maxMs, startMs, endMs)
+  const start = clamp(startMs, 0, limit)
+  const end = clamp(Math.max(endMs, start), 0, limit)
+  const viewStart = Math.max(0, start - padMs)
+  let viewEnd = Math.min(limit, end + padMs)
+  if (viewEnd - viewStart < 1) viewEnd = Math.min(limit, viewStart + 1)
+  return { viewStart: Math.round(viewStart), viewEnd: Math.round(viewEnd) }
+}
+
+/**
+ * Grow the window so an edge that moved past it stays visible, with the same pad.
+ * The side that did not move stays put.
+ */
+export function expandViewToFit(
+  view: ClipViewWindow,
+  startMs: number,
+  endMs: number,
+  maxMs: number,
+  padMs = CLIP_VIEW_PAD_MS
+): ClipViewWindow {
+  const limit = videoLimit(maxMs, startMs, Math.max(endMs, view.viewEnd))
+  let viewStart = view.viewStart
+  let viewEnd = view.viewEnd
+  if (startMs < viewStart) viewStart = Math.max(0, startMs - padMs)
+  if (endMs > viewEnd) viewEnd = Math.min(limit, endMs + padMs)
+  if (viewEnd - viewStart < 1) viewEnd = Math.min(limit, viewStart + 1)
+  return { viewStart: Math.round(viewStart), viewEnd: Math.round(viewEnd) }
+}
+
+/** Whole seconds from a horizontal drag. Right is later, left is earlier. */
+export function secondsFromDrag(dxPx: number, pxPerSecond = FINE_DRAG_PX): number {
+  if (!Number.isFinite(dxPx) || !(pxPerSecond > 0)) return 0
+  return Math.trunc(dxPx / pxPerSecond)
+}
+
 export function nudgeEdge(
   startMs: number,
   endMs: number,
