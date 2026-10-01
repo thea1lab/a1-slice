@@ -1,71 +1,75 @@
 # A1 Slice
 
-Cut long videos into short, captioned reels using AI.
+A1 Slice is a desktop app for working on one video at a time. Home asks what you want to do. You pick a tool, then the video.
 
-A1 Slice is a desktop app that takes long-form videos (interviews, podcasts, talks) and automatically finds the best moments, extracts them as clips, and generates subtitles — all with minimal manual effort.
+- **Transcribe** turns speech into a transcript and saves it next to the video. That step stays on this computer.
+- **Find best parts** marks the moments worth keeping, lets you trim the start and end, then exports those clips with a subtitle file.
+- **Reframe** crops the picture for a phone story, YouTube, a square, or classic 4:3, and remembers the frame for that video.
+- **Captions** puts the words on the picture. You choose the color, size, font, and position, then export a new file.
 
-## How It Works
+Accepted video files are MP4, MOV, MKV, AVI, and WebM. Spoken language can be auto-detected, or set to English, Portuguese, or Spanish.
 
-A1 Slice walks you through a 5-step wizard:
+## What you need to run it
 
-1. **Select a video** — Pick any MP4, MOV, MKV, AVI, or WebM file and configure transcription settings.
-2. **Transcribe** — Audio is extracted, denoised, and transcribed locally using Whisper.cpp. No data leaves your machine for this step.
-3. **Review transcript** — Read through the full transcript, then send it to an LLM (Claude or OpenAI) to identify the best clip-worthy moments.
-4. **Review clips** — Browse AI-suggested clips with titles and time ranges. Toggle clips on/off, adjust start/end times, and preview in-app.
-5. **Export** — Approved clips are cut from the original video (no re-encoding) with SRT subtitle files generated for each.
+- Node.js 24.13.1 or newer (`.node-version`)
+- pnpm 12
+- git, CMake, and a C++ compiler, used once by `pnpm build:whisper`
 
-## Features
+On the first transcription the app downloads the Whisper large-v3 model, about 3 GB, into `~/.a1slice/models/`.
 
-- **Local transcription** — Runs Whisper.cpp on your machine with automatic GPU-to-CPU fallback. Model downloads automatically on first run.
-- **AI clip detection** — Claude or OpenAI analyzes the transcript and suggests engaging clip boundaries with titles and topic grouping.
-- **In-app video preview** — Preview clips before exporting.
-- **SRT subtitles** — Every exported clip comes with a subtitle file.
-- **Fast export** — Clips are stream-copied from the source video, so export is nearly instant.
-- **Smart caching** — Transcripts and analyses are cached next to the source file. Re-opening the same video skips already-completed steps.
-- **Multi-language** — Supports English, Portuguese, and Spanish (auto-detect or manual selection).
-- **Cross-platform** — macOS, Windows, and Linux.
+Find best parts, and Fix the words on the Captions screen, use an agent program already installed and signed in on this computer. The app looks for `grok`, `claude`, `codex`, or `agy`. Transcription, reframing, and burning captions do not use one.
 
-## Getting Started
-
-Requires **Node.js >= 24.13.1** and **pnpm**.
+## Run from source
 
 ```bash
+git clone https://github.com/thea1lab/a1-slice.git
+cd a1-slice
 pnpm install
+pnpm build:whisper
 pnpm dev
 ```
 
-To build a distributable installer:
+`pnpm build:whisper` builds whisper.cpp v1.8.3 into `resources/bin/`. Those binaries are gitignored, so a fresh clone needs this step before transcription will run.
+
+## Where the work is saved
+
+Beside the video:
+
+| File | Contents |
+| --- | --- |
+| `Name-transcript.txt` | Readable transcript |
+| `Name.a1slice.json` | Working transcript |
+| `Name.a1slice-clips.json` | Clips you kept |
+| `Name.a1slice-framing.json` | Saved frame |
+| `Name.a1slice-captions.json` | Caption source and style |
+
+Exports are new folders beside the video:
+
+- Clips land in `a1slice-Name-<time>/` as `01_Title.mp4`, a matching `.srt`, and `transcript.txt`. The picture stays the original frame. Subtitles are a sidecar file.
+- A reframe lands in `a1slice-Name-reframe-<time>/Name.mp4`.
+- Captions land in `a1slice-Name-captions-<time>/Name.mp4`, with the words burned into the picture.
+
+Language and the “If the words come out wrong” transcription controls are stored in `~/.a1slice/settings.json`.
+
+## Build an installer
+
+Build the whisper binary for the target platform first. The model is not inside the installer.
 
 ```bash
-pnpm dist             # Current platform
-pnpm dist:mac         # macOS DMG
-pnpm dist:win         # Windows NSIS
-pnpm dist:linux       # Linux AppImage
+pnpm dist          # this computer
+pnpm dist:mac      # macOS DMG
+pnpm dist:win      # Windows NSIS installer
+pnpm dist:linux    # Linux AppImage
 ```
 
-## Settings
+Output goes to `release/`. The macOS package is ad-hoc signed, so Gatekeeper will ask before it opens.
 
-On first launch, go to Settings to configure:
+The installers attached to GitHub Release v1.0.21 (25 February 2026) are behind the source on `main`. They are a macOS DMG, a Windows setup, and a Linux AppImage of the older guided flow. Build from this tree to get the four tools above. Pushing a new `version` in `package.json` to `main` starts a release workflow that builds the macOS DMG. Windows and Linux installers are added with `scripts/upload-release.sh`.
 
-- **LLM provider** — Choose Claude or OpenAI and enter your API key.
-- **Whisper model** — Downloads automatically (~3 GB for large-v3). Stored in `~/.a1slice/models/`.
-- **Transcription tuning** — Entropy threshold, beam size, max context, and temperature controls for advanced users.
+## For contributors
 
-Settings are saved to `~/.a1slice/settings.json`.
+Build steps, the whisper binary names, and the source layout are in [SPECS.md](SPECS.md). Notes for working in this repo are in [CLAUDE.md](CLAUDE.md). The visual system is [DESIGN.md](DESIGN.md).
 
-## Output
+## License
 
-Exported clips are saved to a timestamped folder alongside the source video:
-
-```
-a1slice-{videoname}-{timestamp}/
-├── Clip Title 1.mp4
-├── Clip Title 1.srt
-├── Clip Title 2.mp4
-├── Clip Title 2.srt
-└── transcript.txt
-```
-
-## Built With
-
-Electron, React 19, Tailwind CSS v4, Whisper.cpp, FFmpeg, and the Claude/OpenAI APIs.
+[MIT](LICENSE)
