@@ -66,8 +66,9 @@ export default function ReframeScreen({
         <div className="block">
           <h2 className="section-label">Shape of the picture</h2>
           <p className="help">
-            Drag the frame until the subject sits inside it. Scroll to zoom in. This frame is
-            saved on the video, and export writes one new file.
+            Drag the frame until the subject sits inside it. Press space to play and pause, or
+            use the play button under the picture. Scroll to zoom in. This frame is saved on the
+            video, and export writes one new file.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">

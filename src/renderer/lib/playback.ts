@@ -20,3 +20,23 @@ export function playbackMsAt(
   const ratio = Math.min(1, Math.max(0, (clientX - left) / width))
   return startMs + ratio * span
 }
+
+const SCRUB_EPSILON_SEC = 0.04
+
+/**
+ * One seek has to finish and paint before the next currentTime assignment.
+ * While it is in flight, keep only the latest requested time.
+ */
+export function planScrub(
+  currentTime: number,
+  requested: number,
+  busy: boolean,
+  epsilon = SCRUB_EPSILON_SEC
+): { seekTo: number | null; queued: number | null } {
+  if (!Number.isFinite(requested)) return { seekTo: null, queued: null }
+  if (busy) return { seekTo: null, queued: requested }
+  if (!Number.isFinite(currentTime) || Math.abs(currentTime - requested) > epsilon) {
+    return { seekTo: requested, queued: null }
+  }
+  return { seekTo: null, queued: null }
+}

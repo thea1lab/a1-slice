@@ -8,6 +8,7 @@ import {
   shouldPublishPlayhead,
   toPreviewSrc
 } from '../../shared/previewUrl'
+import { planScrub } from '../lib/playback'
 import { containRect, cropRect, snapCropCenter, clamp } from '../../shared/crop'
 import type { ClipCrop } from '../../shared/types'
 import { DEFAULT_CROP } from '../../shared/types'
@@ -48,6 +49,32 @@ interface Cover {
   fileEndMs: number
   src: string
   previewPath: string
+}
+
+const SEEK_UNSTICK_MS = 1200
+const CLICK_SLOP_PX = 4
+
+function afterPresentedFrame(video: HTMLVideoElement, run: () => void): () => void {
+  let done = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const finish = (): void => {
+    if (done) return
+    done = true
+    if (timer != null) clearTimeout(timer)
+    run()
+  }
+  if (typeof video.requestVideoFrameCallback === 'function') {
+    video.requestVideoFrameCallback(() => finish())
+  } else {
+    requestAnimationFrame(() => requestAnimationFrame(finish))
+  }
+  // A paused video does not always deliver a frame callback. The seek has
+  // already landed by the time this runs, so move on if that callback never comes.
+  timer = setTimeout(finish, 100)
+  return () => {
+    done = true
+    if (timer != null) clearTimeout(timer)
+  }
 }
 
 const VideoPreview = React.memo(function VideoPreview({
@@ -100,10 +127,19 @@ const VideoPreview = React.memo(function VideoPreview({
   const loopAtOutRef = useRef(true)
   const snapInOnStartRef = useRef(false)
   const holdPlayheadRef = useRef(true)
+  const pendingSeekRef = useRef<number | null>(null)
+  const seekBusyRef = useRef(false)
+  const seekSerialRef = useRef(0)
+  const settledSeekRef = useRef(0)
+  const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const paintCancelRef = useRef<(() => void) | null>(null)
+  const kickSeekRef = useRef<() => void>(() => {})
+  const scrubbingRef = useRef(false)
+  const resumeAfterScrubRef = useRef(false)
   const seekToMsRef = useRef(seekToMs)
   seekToMsRef.current = seekToMs
   const dragRef = useRef<
-    | { mode: 'pan'; x: number; y: number; cx: number; cy: number }
+    | { mode: 'pan'; x: number; y: number; cx: number; cy: number; moved: boolean }
     | { mode: 'zoom' }
     | null
   >(null)
@@ -118,6 +154,7 @@ const VideoPreview = React.memo(function VideoPreview({
   const [previewPercent, setPreviewPercent] = useState(0)
   const [frameReady, setFrameReady] = useState(false)
   const [playheadMs, setPlayheadMs] = useState(startMs)
+  const [playing, setPlaying] = useState(false)
   const contentRef = useRef(content)
   contentRef.current = content
 
@@ -181,13 +218,9 @@ const VideoPreview = React.memo(function VideoPreview({
     if (Number.isFinite(video.duration) && video.duration > 0) {
       next = Math.min(next, Math.max(0, video.duration - 0.05))
     }
-    if (Math.abs(video.currentTime - next) > 0.04) {
-      holdPlayheadRef.current = true
-      video.currentTime = next
-    } else {
-      holdPlayheadRef.current = false
-    }
     loopAtOutRef.current = ms < boundsRef.current.endMs
+    pendingSeekRef.current = next
+    kickSeekRef.current()
   }
 
   const startPlayback = (): void => {
@@ -200,7 +233,12 @@ const VideoPreview = React.memo(function VideoPreview({
     if (Math.abs(video.currentTime - t) > 0.05) {
       video.currentTime = t
     }
-    void video.play()
+    void video.play().catch(() => {
+      if (videoRef.current?.paused) {
+        setPlaying(false)
+        onPlayingChangeRef.current?.(false)
+      }
+    })
   }
 
   const togglePlay = useCallback((): void => {
@@ -364,8 +402,17 @@ const VideoPreview = React.memo(function VideoPreview({
     const video = videoRef.current
     if (!video || !src) return
     holdPlayheadRef.current = true
+    setPlaying(!video.paused)
+
+    const clearSeekTimer = (): void => {
+      if (seekTimerRef.current != null) {
+        clearTimeout(seekTimerRef.current)
+        seekTimerRef.current = null
+      }
+    }
 
     const emitPlayhead = (): void => {
+      if (scrubbingRef.current) return
       if (!shouldPublishPlayhead(video.seeking, holdPlayheadRef.current)) return
       const cover = coverRef.current
       if (!cover) return
@@ -373,6 +420,47 @@ const VideoPreview = React.memo(function VideoPreview({
       setPlayheadMs(ms)
       playheadRef.current?.(ms)
     }
+
+    const advanceSeek = (serial: number): void => {
+      if (serial !== seekSerialRef.current || settledSeekRef.current === serial) return
+      settledSeekRef.current = serial
+      clearSeekTimer()
+      seekBusyRef.current = false
+      if (pendingSeekRef.current != null) {
+        kickSeekRef.current()
+        return
+      }
+      holdPlayheadRef.current = false
+      emitPlayhead()
+    }
+
+    // A second currentTime cancels the seek before its frame is shown.
+    const kick = (): void => {
+      if (seekBusyRef.current) return
+      const requested = pendingSeekRef.current
+      if (requested == null) return
+      const plan = planScrub(video.currentTime, requested, false)
+      if (plan.seekTo == null) {
+        pendingSeekRef.current = null
+        holdPlayheadRef.current = false
+        emitPlayhead()
+        return
+      }
+      pendingSeekRef.current = null
+      const serial = ++seekSerialRef.current
+      seekBusyRef.current = true
+      holdPlayheadRef.current = true
+      clearSeekTimer()
+      try {
+        video.currentTime = plan.seekTo
+      } catch {
+        seekBusyRef.current = false
+        pendingSeekRef.current = plan.seekTo
+        return
+      }
+      seekTimerRef.current = setTimeout(() => advanceSeek(serial), SEEK_UNSTICK_MS)
+    }
+    kickSeekRef.current = kick
 
     const applyInPoint = (): void => {
       const cover = coverRef.current
@@ -415,8 +503,14 @@ const VideoPreview = React.memo(function VideoPreview({
     }
 
     const onSeeked = (): void => {
-      holdPlayheadRef.current = false
-      emitPlayhead()
+      if (!seekBusyRef.current) {
+        holdPlayheadRef.current = false
+        emitPlayhead()
+        return
+      }
+      const serial = seekSerialRef.current
+      paintCancelRef.current?.()
+      paintCancelRef.current = afterPresentedFrame(video, () => advanceSeek(serial))
     }
 
     const onEnded = (): void => {
@@ -425,6 +519,7 @@ const VideoPreview = React.memo(function VideoPreview({
     }
 
     const onPlay = (): void => {
+      setPlaying(true)
       if (video.seeking) {
         onPlayingChangeRef.current?.(true)
         return
@@ -440,6 +535,8 @@ const VideoPreview = React.memo(function VideoPreview({
       onPlayingChangeRef.current?.(true)
     }
     const onPause = (): void => {
+      if (scrubbingRef.current && resumeAfterScrubRef.current) return
+      setPlaying(false)
       onPlayingChangeRef.current?.(false)
     }
 
@@ -457,6 +554,12 @@ const VideoPreview = React.memo(function VideoPreview({
     if (video.readyState >= 1) onLoadedMetadata()
 
     return () => {
+      clearSeekTimer()
+      paintCancelRef.current?.()
+      paintCancelRef.current = null
+      seekBusyRef.current = false
+      pendingSeekRef.current = null
+      kickSeekRef.current = () => {}
       video.removeEventListener('loadedmetadata', onLoadedMetadata)
       video.removeEventListener('loadeddata', onLoadedData)
       video.removeEventListener('timeupdate', onTimeUpdate)
@@ -466,6 +569,24 @@ const VideoPreview = React.memo(function VideoPreview({
       video.removeEventListener('pause', onPause)
     }
   }, [src, editor, measure])
+
+  useEffect(() => {
+    if (!editor || !transport) return
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.repeat) return
+      if (event.key !== ' ' && event.code !== 'Space') return
+      const target = event.target
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      togglePlay()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [editor, transport, togglePlay])
 
   useEffect(() => {
     const video = videoRef.current
@@ -505,7 +626,8 @@ const VideoPreview = React.memo(function VideoPreview({
         x: e.clientX,
         y: e.clientY,
         cx: crop.cx,
-        cy: crop.cy
+        cy: crop.cy,
+        moved: false
       }
     }
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -515,6 +637,8 @@ const VideoPreview = React.memo(function VideoPreview({
     const drag = dragRef.current
     if (!drag || !onCropChange) return
     if (drag.mode === 'pan') {
+      if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < CLICK_SLOP_PX) return
+      drag.moved = true
       if (content.w <= 0 || content.h <= 0) return
       const dx = (e.clientX - drag.x) / content.w
       const dy = (e.clientY - drag.y) / content.h
@@ -536,7 +660,9 @@ const VideoPreview = React.memo(function VideoPreview({
   }
 
   const onPointerUp = (): void => {
+    const drag = dragRef.current
     dragRef.current = null
+    if (drag?.mode === 'pan' && !drag.moved) togglePlay()
   }
 
   useEffect(() => {
@@ -562,6 +688,20 @@ const VideoPreview = React.memo(function VideoPreview({
     playheadRef.current?.(ms)
   }
 
+  const onScrubbingChange = (active: boolean): void => {
+    scrubbingRef.current = active
+    const video = videoRef.current
+    if (!video) return
+    if (active) {
+      resumeAfterScrubRef.current = !video.paused
+      if (!video.paused) video.pause()
+      return
+    }
+    if (!resumeAfterScrubRef.current) return
+    resumeAfterScrubRef.current = false
+    startPlayback()
+  }
+
   return (
     <div className={`${editor ? 'flex h-full min-h-0 w-full flex-col' : ''} ${className ?? ''}`}>
     <div
@@ -574,7 +714,9 @@ const VideoPreview = React.memo(function VideoPreview({
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
+      onPointerCancel={() => {
+        dragRef.current = null
+      }}
       onDoubleClick={(e) => {
         e.preventDefault()
         const root = containerRef.current?.closest('[data-player-root]')
@@ -629,7 +771,10 @@ const VideoPreview = React.memo(function VideoPreview({
         </div>
       )}
       {editor && cropped && (
-        <div className="absolute right-3 bottom-3 z-10 flex items-center gap-1.5">
+        <div
+          className="absolute right-3 bottom-3 z-10 flex items-center gap-1.5"
+          onPointerDown={(e) => e.stopPropagation()}
+        >
           <button
             type="button"
             disabled={crop.zoom <= 0}
@@ -691,7 +836,15 @@ const VideoPreview = React.memo(function VideoPreview({
       )}
     </div>
     {showTransport && (
-      <PlaybackBar startMs={startMs} endMs={endMs} playheadMs={playheadMs} onSeek={seekFromBar} />
+      <PlaybackBar
+        startMs={startMs}
+        endMs={endMs}
+        playheadMs={playheadMs}
+        playing={playing}
+        onTogglePlay={togglePlay}
+        onSeek={seekFromBar}
+        onScrubbingChange={onScrubbingChange}
+      />
     )}
     </div>
   )
