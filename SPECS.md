@@ -11,16 +11,16 @@ The product description and how to run the app are in [README.md](README.md). Th
 | Disk | 4 GB free for the Whisper model, plus room for the video and exports | |
 | OS | Windows 10, macOS 12, Ubuntu 22.04 | Current release |
 
-Transcription uses whisper.cpp **large-v3**. A GPU build is optional. `pnpm build:whisper` makes a CPU binary on Linux and Windows, and CPU plus Metal binaries on macOS. The Docker image in `Dockerfile` can also build a Linux CUDA binary.
+Rust 1.85 or newer. `ffmpeg` and `ffprobe` must be on `PATH`.
 
-Node.js is pinned to 24.13.1 in `.node-version`. The package manager is pnpm 12 (`packageManager` in `package.json`).
+Transcription uses whisper.cpp **large-v3**. `scripts/build-whisper.sh` makes a CPU binary on Linux and Windows, and CPU plus Metal binaries on macOS.
 
-## Whisper binaries
+## Whisper
 
-`resources/bin/` is gitignored except for `.gitkeep`. Build them with:
+`resources/bin/` is gitignored except for `.gitkeep`. Build the program with:
 
 ```bash
-pnpm build:whisper
+bash scripts/build-whisper.sh
 ```
 
 That clones whisper.cpp v1.8.3, builds `whisper-cli`, and copies it into place. You need git, CMake, and a C++ compiler.
@@ -33,27 +33,32 @@ That clones whisper.cpp v1.8.3, builds `whisper-cli`, and copies it into place. 
 | Linux x64 | `whisper-cli-linux-x64` |
 | Linux arm64 | `whisper-cli-linux-arm64` |
 
-The release workflow builds the two macOS binaries when the `package.json` version changes on `main`. It publishes a DMG. It does not build Windows or Linux. Those installers are produced locally (`pnpm dist:win`, `pnpm dist:linux`, or the Docker build) and uploaded with `scripts/upload-release.sh`.
+The app looks in `resources/bin/` from the working directory, then next to the crate at `crates/a1slice/../../resources/bin`. It prefers the GPU binary on macOS and falls back to the CPU binary.
+
+The model is a separate download, about 3 GB. Save it as `~/.a1slice/models/ggml-large-v3.bin`:
+
+```bash
+mkdir -p ~/.a1slice/models
+curl -L -o ~/.a1slice/models/ggml-large-v3.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin
+```
+
+The file is `ggml-large-v3.bin` from [ggerganov/whisper.cpp on Hugging Face](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin). Its size is 3,094,623,232 bytes.
 
 ## Layout
 
 ```
-src/
-  main/           Electron main process
-    main.ts       Window and IPC
-    preload.ts    Bridge exposed as window.api
-    whisper.ts    Model download and transcription
-    ffmpeg.ts     Audio extract, clip cut, reframe, caption burn
-    clipAgent.ts  Find best parts, via an installed agent
-    captionAgent.ts  Fix the words, via the same agents
-    analyzer.ts   Parses the agent's clip JSON
-    projectStore.ts  Reads and writes the files beside the video
-  renderer/       React UI
-    screens/      One screen per tool
-    App.tsx       Settings, open video, current screen
-    state.ts      Reducer
-  shared/         Types and pure helpers used by both processes
-resources/bin/    whisper.cpp binaries (built, not committed)
+crates/
+  a1slice/            eframe window
+    src/main.rs       Window entry
+    src/app.rs        Screens
+    src/backend.rs    ffmpeg, whisper-cli, and installed agents
+  a1slice-core/       Sidecar files, crop, clips, settings, wizard state
+resources/
+  bin/                whisper.cpp binaries (built, not committed)
+  icon.*              App icons
+scripts/
+  build-whisper.sh    Builds whisper-cli for this machine
 ```
 
 Screens are `home`, `transcribe`, `transcribe-done`, `find`, `review`, `export`, `reframe`, `captions`, and `fix-words`.
@@ -61,9 +66,11 @@ Screens are `home`, `transcribe`, `transcribe-done`, `find`, `review`, `export`,
 ## Checks
 
 ```bash
-pnpm test
-pnpm build
+cargo test --offline
+cargo build -p a1slice --offline
 ```
+
+Run the window with `cargo run -p a1slice`.
 
 ## License
 

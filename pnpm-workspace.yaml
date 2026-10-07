@@ -1,7 +1,0 @@
-nodeLinker: hoisted
-ignoreScripts: false
-
-allowBuilds:
-  electron: true
-  esbuild: true
-  ffmpeg-static: true
