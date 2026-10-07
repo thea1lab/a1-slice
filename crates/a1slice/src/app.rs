@@ -388,7 +388,7 @@ impl A1App {
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.state.screen == Screen::Home {
                 ui.horizontal(|ui| {
-                    ui.add_space(4.0);
+                    ui.add_space(12.0);
                     ui.label(RichText::new("A1 Slice").size(14.0).color(CREAM_HEAD));
                 });
                 ui.add_space(4.0);
@@ -420,8 +420,12 @@ impl A1App {
     }
 
     fn home(&mut self, ui: &mut egui::Ui) {
-        let width = ui.available_width();
-        let narrow = width < 760.0;
+        // Stay inside the visible panel. A centered line wider than the window
+        // otherwise pulls the cards past the left clip edge.
+        let bounds = ui.max_rect();
+        let inset = 20.0;
+        let width = (bounds.width() - inset * 2.0).max(160.0);
+        let narrow = width < 720.0;
         let grid_w = width.min(920.0);
         let gap = 16.0;
         let cols: usize = if narrow { 1 } else { 2 };
@@ -445,7 +449,7 @@ impl A1App {
 
         ui.add_space(if narrow { 4.0 } else { 36.0 });
         ui.vertical_centered(|ui| {
-            ui.set_max_width(720.0);
+            ui.set_max_width(width);
             ui.label(
                 RichText::new("A1 SLICE")
                     .size(11.0)
@@ -472,15 +476,15 @@ impl A1App {
         ];
         let rows = tools.len().div_ceil(cols);
         let grid_h = rows as f32 * tile_h + (rows.saturating_sub(1) as f32) * gap;
-        let origin = ui.cursor().min;
-        let left = origin.x + ((width - grid_w) * 0.5).max(0.0);
-        let _ = ui.allocate_exact_size(egui::vec2(width, grid_h), egui::Sense::hover());
+        let origin_y = ui.cursor().min.y;
+        let left = bounds.left() + inset + ((width - grid_w) * 0.5).max(0.0);
+        let _ = ui.allocate_exact_size(egui::vec2(bounds.width(), grid_h), egui::Sense::hover());
         let mut open = None;
         for (index, (id, title, detail)) in tools.into_iter().enumerate() {
             let col = index % cols;
             let row = index / cols;
             let rect = egui::Rect::from_min_size(
-                egui::pos2(left + col as f32 * (tile_w + gap), origin.y + row as f32 * (tile_h + gap)),
+                egui::pos2(left + col as f32 * (tile_w + gap), origin_y + row as f32 * (tile_h + gap)),
                 egui::vec2(tile_w, tile_h),
             );
             if home_tile(ui, rect, title, detail, id, narrow).clicked() {
