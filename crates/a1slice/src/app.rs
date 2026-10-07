@@ -40,6 +40,7 @@ pub struct A1App {
     audio: Option<std::process::Child>,
     analyze_since: Option<Instant>,
     volume: f32,
+    muted: bool,
     ratio: CropRatio,
     caption_style: CaptionStyle,
     caption_look: CaptionLook,
@@ -92,6 +93,7 @@ impl A1App {
             audio: None,
             analyze_since: None,
             volume: 1.0,
+            muted: false,
             ratio: CropRatio::R9x16,
             caption_style: default_style(),
             caption_look: CaptionLook::Burn,
@@ -389,7 +391,9 @@ impl A1App {
         } else {
             format!("Still working. {} seconds so far.", elapsed.round() as i64)
         };
-        if (self.state.analyze_percent - percent).abs() > 0.3 || self.state.analyze_message != message {
+        if (self.state.analyze_percent - percent).abs() > 0.3
+            || self.state.analyze_message != message
+        {
             self.dispatch(WizardAction::AnalyzeProgress(ProgressUpdate {
                 stage: PipelineStage::Analyzing,
                 message,
@@ -405,7 +409,8 @@ impl A1App {
             self.frame_rx = None;
             self.shown_ms = ready.at_ms;
             if let Ok((w, h, rgba)) = ready.image {
-                let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+                let image =
+                    egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
                 self.frame = Some(ctx.load_texture("frame", image, egui::TextureOptions::LINEAR));
                 if let Some(path) = self.state.video_path.clone() {
                     self.frame_for = Some((path, ready.at_ms));
@@ -442,8 +447,55 @@ impl A1App {
         self.stop_audio();
         if self.playing {
             if let Some(path) = self.state.video_path.clone() {
-                self.audio = start_audio(&path, self.playhead_ms, self.volume);
+                self.audio = start_audio(&path, self.playhead_ms, self.audible_volume());
             }
+        }
+    }
+
+    fn audible_volume(&self) -> f32 {
+        if self.muted {
+            0.0
+        } else {
+            self.volume.clamp(0.0, 1.0)
+        }
+    }
+
+    fn seek_playhead(&mut self, ms: i64) {
+        let end = self.state.video_duration_ms.max(0);
+        let cap = if self.playing && end > 0 {
+            end - 1
+        } else {
+            end
+        };
+        self.playhead_ms = ms.clamp(0, cap);
+        if self.playing {
+            self.restart_audio();
+        }
+    }
+
+    fn player_keys(&mut self, ctx: &egui::Context) {
+        let (play, back, forward, to_start, to_end) = ctx.input_mut(|input| {
+            (
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+                    || input.consume_key(egui::Modifiers::NONE, egui::Key::K),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::Home),
+                input.consume_key(egui::Modifiers::NONE, egui::Key::End),
+            )
+        });
+        if play {
+            self.toggle_play();
+        }
+        if to_start {
+            self.seek_playhead(0);
+        } else if back {
+            self.seek_playhead(self.playhead_ms - 5_000);
+        }
+        if to_end {
+            self.seek_playhead(self.state.video_duration_ms);
+        } else if forward {
+            self.seek_playhead(self.playhead_ms + 5_000);
         }
     }
 
@@ -479,6 +531,9 @@ impl eframe::App for A1App {
         ) && self.state.video_path.is_some();
         if show_picture {
             self.poll_frame(ctx);
+            if !ctx.wants_keyboard_input() {
+                self.player_keys(ctx);
+            }
         }
 
         egui::TopBottomPanel::bottom("stripe")
@@ -858,7 +913,11 @@ impl A1App {
                 ui.label(RichText::new("Opening the video…").size(16.0).color(MUTED));
                 return;
             }
-            ui.label(RichText::new("Find best parts").font(serif.clone()).color(CREAM_HEAD));
+            ui.label(
+                RichText::new("Find best parts")
+                    .font(serif.clone())
+                    .color(CREAM_HEAD),
+            );
             ui.add_space(12.0);
             if self.state.segments.is_empty() {
                 ui.label(RichText::new("This video has no transcript yet. The words have to be written down before the best parts can be found.").size(18.0).color(MUTED));
@@ -891,9 +950,12 @@ impl A1App {
             }
             let lines = self.state.segments.len();
             egui::CollapsingHeader::new(
-                RichText::new(format!("Transcript · {lines} {}", if lines == 1 { "line" } else { "lines" }))
-                    .size(18.0)
-                    .color(CREAM_HEAD),
+                RichText::new(format!(
+                    "Transcript · {lines} {}",
+                    if lines == 1 { "line" } else { "lines" }
+                ))
+                .size(18.0)
+                .color(CREAM_HEAD),
             )
             .show(ui, |ui| {
                 for segment in &self.state.segments {
@@ -910,7 +972,13 @@ impl A1App {
             ui.label(RichText::new("The words are sent to this agent so it can suggest clips. The video stays on this computer.").size(16.0).color(MUTED));
             ui.add_space(12.0);
             if self.agents.is_empty() {
-                ui.label(RichText::new("This computer has no agent to run. You can still mark a part yourself.").size(16.0).color(MUTED));
+                ui.label(
+                    RichText::new(
+                        "This computer has no agent to run. You can still mark a part yourself.",
+                    )
+                    .size(16.0)
+                    .color(MUTED),
+                );
             } else {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
@@ -923,7 +991,11 @@ impl A1App {
                 });
             }
             ui.add_space(16.0);
-            ui.label(RichText::new("What should it look for?").size(16.0).color(MUTED));
+            ui.label(
+                RichText::new("What should it look for?")
+                    .size(16.0)
+                    .color(MUTED),
+            );
             ui.add_space(8.0);
             let mut hint = self.state.user_hint.clone();
             let hint_edit = ui.add(
@@ -936,11 +1008,19 @@ impl A1App {
                 self.dispatch(WizardAction::SetUserHint(hint));
             }
             ui.add_space(6.0);
-            ui.label(RichText::new("Optional. Name a theme, a number of clips, or a moment to keep.").size(16.0).color(MUTED));
+            ui.label(
+                RichText::new("Optional. Name a theme, a number of clips, or a moment to keep.")
+                    .size(16.0)
+                    .color(MUTED),
+            );
             if self.state.analyzing {
                 ui.add_space(16.0);
                 progress(ui, self.state.analyze_percent);
-                ui.label(RichText::new(&self.state.analyze_message).size(15.0).color(MUTED));
+                ui.label(
+                    RichText::new(&self.state.analyze_message)
+                        .size(15.0)
+                        .color(MUTED),
+                );
             }
             if let Some(error) = &self.state.analyze_error {
                 if !error.is_empty() {
@@ -951,14 +1031,25 @@ impl A1App {
                         .corner_radius(egui::CornerRadius::same(12))
                         .inner_margin(16.0)
                         .show(ui, |ui| {
-                            ui.label(RichText::new("Could not find clips").size(16.0).color(Color32::from_rgb(0xfc, 0xa5, 0xa5)));
+                            ui.label(
+                                RichText::new("Could not find clips")
+                                    .size(16.0)
+                                    .color(Color32::from_rgb(0xfc, 0xa5, 0xa5)),
+                            );
                             ui.add_space(6.0);
-                            ui.label(RichText::new(error).size(14.0).color(Color32::from_rgb(0xfc, 0xa5, 0xa5)));
+                            ui.label(
+                                RichText::new(error)
+                                    .size(14.0)
+                                    .color(Color32::from_rgb(0xfc, 0xa5, 0xa5)),
+                            );
                         });
                 }
             }
             ui.add_space(16.0);
-            if !self.state.analyzing && !self.state.clips.is_empty() && secondary(ui, "Back to the clips").clicked() {
+            if !self.state.analyzing
+                && !self.state.clips.is_empty()
+                && secondary(ui, "Back to the clips").clicked()
+            {
                 self.dispatch(WizardAction::ShowScreen(Screen::Review));
             }
             ui.add_space(12.0);
@@ -967,7 +1058,11 @@ impl A1App {
                     self.cancel();
                 }
             } else {
-                let label = if self.state.clips.is_empty() { "Find clips" } else { "Search again" };
+                let label = if self.state.clips.is_empty() {
+                    "Find clips"
+                } else {
+                    "Search again"
+                };
                 let enabled = self.agent_id.is_some();
                 if primary_lg(ui, label).clicked() && enabled {
                     self.start_find();
@@ -993,37 +1088,89 @@ impl A1App {
     fn review_column(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.picture(ui, ctx);
         ui.add_space(16.0);
-        let (hair, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
-        ui.painter().hline(hair.x_range(), hair.center().y, Stroke::new(1.0_f32, HAIRLINE));
+        let (hair, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+        ui.painter().hline(
+            hair.x_range(),
+            hair.center().y,
+            Stroke::new(1.0_f32, HAIRLINE),
+        );
         ui.add_space(16.0);
         let kept = self.state.clips.iter().filter(|clip| clip.approved).count();
         let total = self.state.clips.len();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 16.0;
-            ui.label(RichText::new(format!("{total} {}", if total == 1 { "clip" } else { "clips" })).size(15.0).color(MUTED));
-            ui.label(RichText::new(format!("{kept} kept")).size(15.0).color(MUTED));
+            ui.label(
+                RichText::new(format!(
+                    "{total} {}",
+                    if total == 1 { "clip" } else { "clips" }
+                ))
+                .size(15.0)
+                .color(MUTED),
+            );
+            ui.label(
+                RichText::new(format!("{kept} kept"))
+                    .size(15.0)
+                    .color(MUTED),
+            );
         });
         ui.add_space(6.0);
-        ui.label(RichText::new("Turn a clip off to leave it out. Nudge the start and end, then export.").size(16.0).color(MUTED));
+        ui.label(
+            RichText::new("Turn a clip off to leave it out. Nudge the start and end, then export.")
+                .size(16.0)
+                .color(MUTED),
+        );
         ui.add_space(16.0);
-        let ids: Vec<String> = self.state.clips.iter().map(|clip| clip.id.clone()).collect();
+        let ids: Vec<String> = self
+            .state
+            .clips
+            .iter()
+            .map(|clip| clip.id.clone())
+            .collect();
         for id in ids {
             let Some(clip) = self.state.clips.iter().find(|clip| clip.id == id).cloned() else {
                 continue;
             };
-            ui.label(RichText::new(&clip.title).size(18.0).color(if clip.approved { CREAM_HEAD } else { MUTED }));
-            ui.label(RichText::new(format!("{} – {}", clock(clip.start_ms), clock(clip.end_ms))).size(15.0).color(MUTED));
+            ui.label(
+                RichText::new(&clip.title)
+                    .size(18.0)
+                    .color(if clip.approved { CREAM_HEAD } else { MUTED }),
+            );
+            ui.label(
+                RichText::new(format!("{} – {}", clock(clip.start_ms), clock(clip.end_ms)))
+                    .size(15.0)
+                    .color(MUTED),
+            );
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                let keep = if clip.approved { "Drop this one" } else { "Keep this one" };
+                let keep = if clip.approved {
+                    "Drop this one"
+                } else {
+                    "Keep this one"
+                };
                 if secondary(ui, keep).clicked() {
                     self.dispatch(WizardAction::ToggleClip(id.clone()));
                 }
-                for (label, edge, delta) in [("Start −1s", "start", -1000.0), ("Start +1s", "start", 1000.0), ("End −1s", "end", -1000.0), ("End +1s", "end", 1000.0)] {
+                for (label, edge, delta) in [
+                    ("Start −1s", "start", -1000.0),
+                    ("Start +1s", "start", 1000.0),
+                    ("End −1s", "end", -1000.0),
+                    ("End +1s", "end", 1000.0),
+                ] {
                     if secondary(ui, label).clicked() {
-                        let (start, end) = a1slice_core::clips::nudge_edge(clip.start_ms, clip.end_ms, edge, delta, self.state.video_duration_ms as f64);
-                        self.dispatch(WizardAction::UpdateClipTimes { id: id.clone(), start_ms: start, end_ms: end });
+                        let (start, end) = a1slice_core::clips::nudge_edge(
+                            clip.start_ms,
+                            clip.end_ms,
+                            edge,
+                            delta,
+                            self.state.video_duration_ms as f64,
+                        );
+                        self.dispatch(WizardAction::UpdateClipTimes {
+                            id: id.clone(),
+                            start_ms: start,
+                            end_ms: end,
+                        });
                     }
                 }
             });
@@ -1041,7 +1188,8 @@ impl A1App {
             if secondary(ui, "Add a part").clicked() {
                 self.dispatch(WizardAction::AddClip);
             }
-            let export_label = format!("Export {kept} {}", if kept == 1 { "clip" } else { "clips" });
+            let export_label =
+                format!("Export {kept} {}", if kept == 1 { "clip" } else { "clips" });
             if primary_lg(ui, &export_label).clicked() {
                 self.start_export_clips();
             }
@@ -1388,36 +1536,112 @@ impl A1App {
     }
 
     fn picture(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
+        let Some(texture) = self.frame.clone() else {
+            ui.label(RichText::new("Reading a frame…").color(MUTED));
+            return;
+        };
+        let size = texture.size_vec2();
+        let max_w = ui.available_width();
+        let mut width = max_w;
+        let mut height = width * size.y / size.x.max(1.0);
+        if height > 460.0 {
+            height = 460.0;
+            width = height * size.x / size.y.max(1.0);
+        }
+        let (row, _) = ui.allocate_exact_size(egui::vec2(max_w, height), egui::Sense::hover());
+        let image = egui::Rect::from_center_size(row.center(), egui::vec2(width, height));
+        ui.painter().image(
+            texture.id(),
+            image,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+
+        let bar_h = 56.0_f32.min(image.height());
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(image.left(), image.bottom() - bar_h),
+            image.right_bottom(),
+        );
+        let scrim_top = (image.bottom() - 108.0).max(image.top());
+        paint_player_scrim(
+            ui.painter(),
+            egui::Rect::from_min_max(egui::pos2(image.left(), scrim_top), image.right_bottom()),
+        );
+
+        let framing = self.state.screen == Screen::Reframe && self.ratio != CropRatio::Original;
+        let stage =
+            egui::Rect::from_min_max(image.left_top(), egui::pos2(image.right(), bar.top()));
         let mut dragged = None;
         let mut scrolled = 0.0_f32;
-        if let Some(texture) = &self.frame {
-            let size = texture.size_vec2();
-            let max_w = ui.available_width();
-            let mut width = max_w;
-            let mut height = width * size.y / size.x.max(1.0);
-            if height > 460.0 {
-                height = 460.0;
-                width = height * size.x / size.y.max(1.0);
-            }
-            let pad = ((max_w - width) * 0.5).max(0.0);
-            let response = ui.horizontal(|ui| {
-                ui.add_space(pad);
-                ui.image((texture.id(), egui::vec2(width, height)))
-            }).inner;
-            if response.clicked() {
+        if stage.height() > 4.0 {
+            let sense = if framing {
+                egui::Sense::CLICK | egui::Sense::DRAG
+            } else {
+                egui::Sense::CLICK
+            };
+            let stage_response = ui.interact(stage, ui.id().with("picture"), sense);
+            if stage_response.clicked() {
                 self.toggle_play();
             }
-            if response.dragged() {
-                dragged = Some((response.drag_delta(), width, height));
+            if stage_response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            if response.hovered() {
-                scrolled = ui.input(|i| i.smooth_scroll_delta.y);
-                ui.ctx().set_cursor_icon(if self.playing { egui::CursorIcon::Default } else { egui::CursorIcon::PointingHand });
+            if framing {
+                if stage_response.dragged() {
+                    dragged = Some((stage_response.drag_delta(), width, height));
+                }
+                if stage_response.hovered() {
+                    scrolled = ui.input(|i| i.smooth_scroll_delta.y);
+                }
             }
-        } else {
-            ui.label(RichText::new("Reading a frame…").color(MUTED));
         }
-        if self.state.screen == Screen::Reframe && self.ratio != CropRatio::Original {
+
+        let time_w = player_time_width(ui, self.state.video_duration_ms);
+        let slots = transport_slots(bar, time_w);
+        let play_tip = if self.playing { "Pause" } else { "Play" };
+        let play = ui.interact(slots.play, ui.id().with("play"), egui::Sense::CLICK);
+        paint_icon_hover(ui.painter(), &play);
+        if self.playing {
+            paint_pause_icon(ui.painter(), play.rect);
+        } else {
+            paint_play_icon(ui.painter(), play.rect);
+        }
+        if play.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if play.clicked() {
+            self.toggle_play();
+        }
+        play.on_hover_text(play_tip);
+
+        if let Some(hit) = player_seek(
+            ui,
+            slots.seek,
+            image,
+            self.playhead_ms,
+            self.state.video_duration_ms,
+        ) {
+            self.playhead_ms = hit.ms;
+            if hit.dragging {
+                self.scrubbing = true;
+            } else {
+                self.scrubbing = false;
+                self.restart_audio();
+            }
+        } else if self.scrubbing && ui.input(|i| i.pointer.any_released()) {
+            self.scrubbing = false;
+            self.restart_audio();
+        }
+
+        paint_player_time(
+            ui,
+            slots.time,
+            self.playhead_ms,
+            self.state.video_duration_ms,
+        );
+        self.player_volume(ui, slots.speaker, slots.slider);
+
+        if framing {
             if let Some((delta, width, height)) = dragged {
                 let mut crop = current_crop(&self.state, self.ratio);
                 crop.cx = (crop.cx - delta.x as f64 / width as f64).clamp(0.0, 1.0);
@@ -1430,43 +1654,77 @@ impl A1App {
                 self.store_crop(crop::snap_crop_center(crop, 1.0, 1.0));
             }
         }
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 12.0;
-            let label = if self.playing { "Pause" } else { "Play" };
-            if secondary(ui, label).clicked() {
-                self.toggle_play();
-            }
-            ui.label(
-                RichText::new(format!(
-                    "{} / {}",
-                    clock(self.playhead_ms),
-                    clock(self.state.video_duration_ms)
-                ))
-                .size(15.0)
-                .color(MUTED),
+    }
+
+    fn player_volume(&mut self, ui: &mut egui::Ui, speaker: egui::Rect, slider: egui::Rect) {
+        let show_slider = slider.width() >= 8.0;
+        let mut volume = self.volume;
+        let mut muted = self.muted;
+        let mut restart = false;
+        if show_slider {
+            let response = ui.interact(
+                slider,
+                ui.id().with("volume"),
+                egui::Sense::CLICK | egui::Sense::DRAG,
             );
-            let mut volume = self.volume;
-            if ui
-                .add_sized(
-                    [140.0, 18.0],
-                    egui::Slider::new(&mut volume, 0.0..=1.0).text("Volume").show_value(false),
-                )
-                .changed()
+            if let Some(pos) = response
+                .interact_pointer_pos()
+                .filter(|_| response.dragged() || response.clicked() || response.drag_stopped())
             {
-                self.volume = volume;
-                if self.playing {
-                    self.stop_audio();
-                    if let Some(path) = self.state.video_path.clone() {
-                        self.audio = start_audio(&path, self.playhead_ms, self.volume);
-                    }
-                }
+                let (left, right) = level_span(slider);
+                volume = ((pos.x - left) / (right - left).max(1.0)).clamp(0.0, 1.0);
+                muted = volume <= 0.001;
             }
-        });
-        if let Some(ms) = seek_bar(ui, self.playhead_ms, self.state.video_duration_ms) {
-            self.playhead_ms = ms;
-            self.scrubbing = true;
-        } else if self.scrubbing && ui.input(|i| i.pointer.any_released()) {
-            self.scrubbing = false;
+            if response.dragged() {
+                self.volume = volume;
+                self.muted = muted;
+            }
+            if response.drag_stopped() {
+                self.volume = volume;
+                self.muted = muted;
+                restart = true;
+            } else if response.clicked() {
+                let changed = (volume - self.volume).abs() > 0.001 || muted != self.muted;
+                self.volume = volume;
+                self.muted = muted;
+                restart = changed;
+            }
+            let shown = if self.muted { 0.0 } else { self.volume };
+            paint_level(
+                ui.painter(),
+                slider,
+                shown,
+                response.hovered() || response.dragged(),
+                CREAM_HEAD,
+            );
+            if response.hovered() || response.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            volume = self.volume;
+            muted = self.muted;
+        }
+        let icon = ui.interact(speaker, ui.id().with("mute"), egui::Sense::CLICK);
+        if icon.clicked() {
+            muted = !muted;
+            if !muted && volume <= 0.001 {
+                volume = 1.0;
+            }
+            self.volume = volume;
+            self.muted = muted;
+            restart = true;
+        }
+        paint_icon_hover(ui.painter(), &icon);
+        paint_speaker(ui.painter(), icon.rect, self.muted, self.volume);
+        if icon.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        let tip = if self.muted || self.volume <= 0.001 {
+            "Unmute"
+        } else {
+            "Mute"
+        };
+        icon.on_hover_text(tip);
+        if restart && self.playing {
             self.restart_audio();
         }
     }
@@ -1477,28 +1735,329 @@ struct FrameResult {
     image: Result<(u32, u32, Vec<u8>), String>,
 }
 
-fn seek_bar(ui: &mut egui::Ui, playhead_ms: i64, duration_ms: i64) -> Option<i64> {
-    let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click_and_drag());
-    let duration = duration_ms.max(1) as f32;
-    let mut ratio = (playhead_ms.max(0) as f32 / duration).clamp(0.0, 1.0);
-    let interacting = response.dragged() || response.clicked();
-    if interacting {
-        if let Some(pointer) = response.interact_pointer_pos() {
-            ratio = ((pointer.x - rect.left()) / rect.width().max(1.0)).clamp(0.0, 1.0);
-        }
+struct TransportSlots {
+    play: egui::Rect,
+    seek: egui::Rect,
+    time: egui::Rect,
+    speaker: egui::Rect,
+    slider: egui::Rect,
+}
+
+struct SeekHit {
+    ms: i64,
+    dragging: bool,
+}
+
+fn transport_slots(bar: egui::Rect, time_width: f32) -> TransportSlots {
+    let pad = 10.0;
+    let gap = 8.0;
+    let play_s = 40.0_f32.min((bar.height() - 8.0).max(24.0));
+    let speaker_s = 36.0_f32.min(play_s);
+    let full_slider = 68.0;
+    let min_seek = 48.0;
+    let with_slider = pad * 2.0
+        + play_s
+        + gap
+        + min_seek
+        + gap
+        + time_width
+        + gap
+        + speaker_s
+        + gap
+        + full_slider;
+    let slider_w = if bar.width() >= with_slider {
+        full_slider
+    } else {
+        0.0
+    };
+    let mid = bar.center().y;
+    let mut right = bar.right() - pad;
+    let slider = if slider_w > 0.0 {
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(right - slider_w, mid - 14.0),
+            egui::pos2(right, mid + 14.0),
+        );
+        right = rect.left() - 4.0;
+        rect
+    } else {
+        egui::Rect::from_min_max(egui::pos2(right, mid), egui::pos2(right, mid))
+    };
+    let speaker = egui::Rect::from_center_size(
+        egui::pos2(right - speaker_s * 0.5, mid),
+        egui::vec2(speaker_s, speaker_s),
+    );
+    right = speaker.left() - gap;
+    let time = egui::Rect::from_min_max(
+        egui::pos2(right - time_width, mid - 12.0),
+        egui::pos2(right, mid + 12.0),
+    );
+    let play = egui::Rect::from_center_size(
+        egui::pos2(bar.left() + pad + play_s * 0.5, mid),
+        egui::vec2(play_s, play_s),
+    );
+    let seek_left = play.right() + gap;
+    let seek = egui::Rect::from_min_max(
+        egui::pos2(seek_left, bar.top()),
+        egui::pos2((time.left() - gap).max(seek_left), bar.bottom()),
+    );
+    TransportSlots {
+        play,
+        seek,
+        time,
+        speaker,
+        slider,
     }
-    let track = egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), 4.0));
-    ui.painter().rect_filled(track, 2.0, Color32::from_rgb(0x2a, 0x2a, 0x2a));
-    let mut filled = track;
-    filled.set_right(track.left() + track.width() * ratio);
-    ui.painter().rect_filled(filled, 2.0, ORANGE);
-    let handle = egui::pos2(filled.right(), track.center().y);
-    ui.painter().circle_filled(handle, if response.hovered() || interacting { 7.0 } else { 5.5 }, CREAM_HEAD);
-    if response.hovered() {
+}
+
+fn player_time_width(ui: &egui::Ui, duration_ms: i64) -> f32 {
+    let font = egui::FontId::proportional(13.0);
+    let digit = (0..10)
+        .map(|n| {
+            ui.painter()
+                .layout_no_wrap(n.to_string(), font.clone(), CREAM_HEAD)
+                .size()
+                .x
+        })
+        .fold(0.0_f32, f32::max);
+    let colon = ui
+        .painter()
+        .layout_no_wrap(":".to_string(), font.clone(), CREAM_HEAD)
+        .size()
+        .x;
+    let slash = ui
+        .painter()
+        .layout_no_wrap(" / ".to_string(), font, CREAM_HEAD)
+        .size()
+        .x;
+    let clock_w = clock(duration_ms).chars().fold(0.0, |width, ch| {
+        width + if ch.is_ascii_digit() { digit } else { colon }
+    });
+    (clock_w * 2.0 + slash).ceil()
+}
+
+fn player_seek(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    image: egui::Rect,
+    playhead_ms: i64,
+    duration_ms: i64,
+) -> Option<SeekHit> {
+    let response = ui.interact(
+        rect,
+        ui.id().with("seek"),
+        egui::Sense::CLICK | egui::Sense::DRAG,
+    );
+    let duration = duration_ms.max(1);
+    let mut ms = playhead_ms.clamp(0, duration);
+    let (span_left, span_right) = level_span(rect);
+    if let Some(pos) = response
+        .interact_pointer_pos()
+        .filter(|_| response.dragged() || response.clicked() || response.drag_stopped())
+    {
+        ms = a1slice_core::preview::playback_ms_at(
+            pos.x as f64,
+            span_left as f64,
+            (span_right - span_left) as f64,
+            0.0,
+            duration as f64,
+        ) as i64;
+    }
+    let ratio = (ms as f32 / duration as f32).clamp(0.0, 1.0);
+    let hot = response.hovered() || response.dragged();
+    paint_level(ui.painter(), rect, ratio, hot, ORANGE);
+    if hot {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    interacting.then_some((ratio * duration) as i64)
+    if let Some(pos) = response
+        .hover_pos()
+        .filter(|_| response.hovered() || response.dragged())
+    {
+        let tip_ms = if response.dragged() {
+            ms
+        } else {
+            a1slice_core::preview::playback_ms_at(
+                pos.x as f64,
+                span_left as f64,
+                (span_right - span_left) as f64,
+                0.0,
+                duration as f64,
+            ) as i64
+        };
+        paint_seek_tip(ui.painter(), pos.x, rect.top(), &clock(tip_ms), image);
+    }
+    if response.dragged() {
+        Some(SeekHit { ms, dragging: true })
+    } else if response.clicked() || response.drag_stopped() {
+        Some(SeekHit {
+            ms,
+            dragging: false,
+        })
+    } else {
+        None
+    }
+}
+
+fn level_span(rect: egui::Rect) -> (f32, f32) {
+    let left = rect.left() + 7.0;
+    let right = (rect.right() - 7.0).max(left + 4.0);
+    (left, right)
+}
+
+fn paint_level(painter: &egui::Painter, rect: egui::Rect, ratio: f32, hot: bool, fill: Color32) {
+    let ratio = ratio.clamp(0.0, 1.0);
+    let track_h = if hot { 6.0 } else { 4.0 };
+    let (left, right) = level_span(rect);
+    let track = egui::Rect::from_min_max(
+        egui::pos2(left, rect.center().y - track_h * 0.5),
+        egui::pos2(right, rect.center().y + track_h * 0.5),
+    );
+    painter.rect_filled(track, track_h * 0.5, Color32::from_white_alpha(80));
+    if ratio > 0.0 {
+        let mut played = track;
+        played.set_right(track.left() + track.width() * ratio);
+        painter.rect_filled(played, track_h * 0.5, fill);
+    }
+    let knob = egui::pos2(track.left() + track.width() * ratio, track.center().y);
+    painter.circle_filled(knob, if hot { 7.0 } else { 5.5 }, CREAM_HEAD);
+}
+
+fn paint_player_time(ui: &egui::Ui, rect: egui::Rect, playhead_ms: i64, duration_ms: i64) {
+    let font = egui::FontId::proportional(13.0);
+    let current = ui
+        .painter()
+        .layout_no_wrap(clock(playhead_ms), font.clone(), CREAM_HEAD);
+    let rest = ui.painter().layout_no_wrap(
+        format!(" / {}", clock(duration_ms)),
+        font,
+        Color32::from_rgba_unmultiplied(255, 248, 224, 200),
+    );
+    let width = current.size().x + rest.size().x;
+    let x = rect.right() - width;
+    let y = rect.center().y - current.size().y * 0.5;
+    ui.painter().galley(egui::pos2(x, y), current, CREAM_HEAD);
+    ui.painter()
+        .galley(egui::pos2(x + width - rest.size().x, y), rest, CREAM_HEAD);
+}
+
+fn paint_seek_tip(
+    painter: &egui::Painter,
+    anchor_x: f32,
+    above: f32,
+    label: &str,
+    bounds: egui::Rect,
+) {
+    let galley = painter.layout_no_wrap(
+        label.to_string(),
+        egui::FontId::proportional(12.0),
+        CREAM_HEAD,
+    );
+    let pad = egui::vec2(6.0, 3.0);
+    let size = galley.size() + pad * 2.0;
+    let x = (anchor_x - size.x * 0.5).clamp(
+        bounds.left() + 4.0,
+        (bounds.right() - size.x - 4.0).max(bounds.left() + 4.0),
+    );
+    let y = (above - size.y - 8.0).max(bounds.top() + 4.0);
+    let tip = egui::Rect::from_min_size(egui::pos2(x, y), size);
+    painter.rect_filled(tip, 4.0, Color32::from_black_alpha(220));
+    painter.galley(tip.min + pad, galley, CREAM_HEAD);
+}
+
+fn paint_player_scrim(painter: &egui::Painter, rect: egui::Rect) {
+    if rect.height() < 1.0 || rect.width() < 1.0 {
+        return;
+    }
+    let slices = rect.height().round().clamp(8.0, 96.0) as i32;
+    for i in 0..slices {
+        let t0 = i as f32 / slices as f32;
+        let t1 = (i + 1) as f32 / slices as f32;
+        let t = (t0 + t1) * 0.5;
+        let alpha = (t * t * 210.0) as u8;
+        let y0 = egui::lerp(rect.top()..=rect.bottom(), t0);
+        let y1 = egui::lerp(rect.top()..=rect.bottom(), t1);
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(rect.left(), y0), egui::pos2(rect.right(), y1)),
+            0.0,
+            Color32::from_black_alpha(alpha),
+        );
+    }
+}
+
+fn paint_icon_hover(painter: &egui::Painter, response: &egui::Response) {
+    if response.hovered() || response.is_pointer_button_down_on() {
+        let alpha = if response.is_pointer_button_down_on() {
+            42
+        } else {
+            24
+        };
+        painter.circle_filled(
+            response.rect.center(),
+            16.0,
+            Color32::from_white_alpha(alpha),
+        );
+    }
+}
+
+fn paint_play_icon(painter: &egui::Painter, rect: egui::Rect) {
+    let c = rect.center() + egui::vec2(1.0, 0.0);
+    let points = vec![
+        egui::pos2(c.x - 5.0, c.y - 7.0),
+        egui::pos2(c.x - 5.0, c.y + 7.0),
+        egui::pos2(c.x + 7.0, c.y),
+    ];
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        CREAM_HEAD,
+        Stroke::NONE,
+    ));
+}
+
+fn paint_pause_icon(painter: &egui::Painter, rect: egui::Rect) {
+    let c = rect.center();
+    for dx in [-3.6_f32, 3.6] {
+        let bar = egui::Rect::from_center_size(c + egui::vec2(dx, 0.0), egui::vec2(3.2, 14.0));
+        painter.rect_filled(bar, 1.0, CREAM_HEAD);
+    }
+}
+
+fn paint_speaker(painter: &egui::Painter, rect: egui::Rect, muted: bool, volume: f32) {
+    let c = rect.center();
+    let body = egui::Rect::from_center_size(c + egui::vec2(-5.0, 0.0), egui::vec2(3.4, 6.4));
+    painter.rect_filled(body, 0.6, CREAM_HEAD);
+    let cone = vec![
+        egui::pos2(body.right() - 0.4, body.top() + 0.6),
+        egui::pos2(c.x + 1.2, c.y - 6.4),
+        egui::pos2(c.x + 1.2, c.y + 6.4),
+        egui::pos2(body.right() - 0.4, body.bottom() - 0.6),
+    ];
+    painter.add(egui::Shape::convex_polygon(cone, CREAM_HEAD, Stroke::NONE));
+    let stroke = Stroke::new(1.6_f32, CREAM_HEAD);
+    if muted || volume <= 0.001 {
+        let x = c + egui::vec2(6.2, 0.0);
+        painter.line_segment(
+            [x + egui::vec2(-3.1, -3.1), x + egui::vec2(3.1, 3.1)],
+            stroke,
+        );
+        painter.line_segment(
+            [x + egui::vec2(-3.1, 3.1), x + egui::vec2(3.1, -3.1)],
+            stroke,
+        );
+    } else {
+        paint_wave(painter, c + egui::vec2(3.4, 0.0), 4.0, stroke);
+        if volume >= 0.45 {
+            paint_wave(painter, c + egui::vec2(3.4, 0.0), 7.0, stroke);
+        }
+    }
+}
+
+fn paint_wave(painter: &egui::Painter, center: egui::Pos2, radius: f32, stroke: Stroke) {
+    let pts: Vec<_> = (0..=10)
+        .map(|i| {
+            let t = -0.9 + 1.8 * (i as f32 / 10.0);
+            center + egui::vec2(radius * t.cos(), radius * t.sin())
+        })
+        .collect();
+    painter.line(pts, stroke);
 }
 
 fn apply_theme(ctx: &egui::Context) {
@@ -1759,7 +2318,9 @@ fn danger(ui: &mut egui::Ui, label: &str) -> egui::Response {
 
 fn choice(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     let color = if selected { CREAM_HEAD } else { CREAM };
-    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(16.0), color);
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.to_string(), egui::FontId::proportional(16.0), color);
     let size = egui::vec2((galley.size().x + 32.0).max(72.0), 44.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let border = if selected {
@@ -1769,9 +2330,22 @@ fn choice(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     } else {
         Color32::from_rgb(0x3a, 0x3a, 0x3a)
     };
-    let fill = if selected { Color32::from_rgb(0x24, 0x1c, 0x18) } else { SURFACE };
-    ui.painter().rect(rect, egui::CornerRadius::same(8), fill, Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
-    let pos = egui::pos2(rect.center().x - galley.size().x * 0.5, rect.center().y - galley.size().y * 0.5);
+    let fill = if selected {
+        Color32::from_rgb(0x24, 0x1c, 0x18)
+    } else {
+        SURFACE
+    };
+    ui.painter().rect(
+        rect,
+        egui::CornerRadius::same(8),
+        fill,
+        Stroke::new(1.0_f32, border),
+        egui::StrokeKind::Inside,
+    );
+    let pos = egui::pos2(
+        rect.center().x - galley.size().x * 0.5,
+        rect.center().y - galley.size().y * 0.5,
+    );
     ui.painter().galley(pos, galley, color);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1804,7 +2378,11 @@ fn painted_button(
     height: f32,
     pad_x: f32,
 ) -> egui::Response {
-    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(text_size), text_color);
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        egui::FontId::proportional(text_size),
+        text_color,
+    );
     let width = galley.size().x + pad_x * 2.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
     let fill = if response.hovered() { hover_fill } else { fill };
@@ -1820,7 +2398,10 @@ fn painted_button(
         stroke,
         egui::StrokeKind::Inside,
     );
-    let pos = egui::pos2(rect.center().x - galley.size().x * 0.5, rect.center().y - galley.size().y * 0.5);
+    let pos = egui::pos2(
+        rect.center().x - galley.size().x * 0.5,
+        rect.center().y - galley.size().y * 0.5,
+    );
     ui.painter().galley(pos, galley, text_color);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -2274,4 +2855,45 @@ fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::process::Chil
             .ok();
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::transport_slots;
+
+    #[test]
+    fn transport_row_is_play_seek_time_then_volume() {
+        let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 56.0));
+        let slots = transport_slots(bar, 72.0);
+        assert!(slots.play.right() < slots.seek.left());
+        assert!(slots.seek.right() <= slots.time.left());
+        assert!(slots.time.right() < slots.speaker.left());
+        assert!(slots.speaker.right() < slots.slider.left());
+        assert!(slots.slider.width() > 0.0);
+        assert!(slots.seek.width() > 200.0);
+        assert!(slots.play.left() >= bar.left());
+        assert!(slots.slider.right() <= bar.right());
+        let mid = bar.center().y;
+        for center in [
+            slots.play.center().y,
+            slots.seek.center().y,
+            slots.time.center().y,
+            slots.speaker.center().y,
+            slots.slider.center().y,
+        ] {
+            assert!((center - mid).abs() < 0.5);
+        }
+    }
+
+    #[test]
+    fn narrow_transport_keeps_mute_and_drops_the_slider() {
+        let bar = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(280.0, 56.0));
+        let slots = transport_slots(bar, 90.0);
+        assert_eq!(slots.slider.width(), 0.0);
+        assert!(slots.play.right() < slots.seek.left());
+        assert!(slots.seek.right() <= slots.time.left());
+        assert!(slots.time.right() < slots.speaker.left());
+        assert!(slots.speaker.right() <= bar.right());
+        assert!(slots.seek.width() > 8.0);
+    }
 }

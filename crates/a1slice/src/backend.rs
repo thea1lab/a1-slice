@@ -910,7 +910,10 @@ fn clips_from_text(text: &str, segments: &[TranscriptSegment]) -> Result<Vec<Cli
     Ok(found)
 }
 
-fn clips_from_array(array: &[serde_json::Value], segments: &[TranscriptSegment]) -> Vec<ClipSegment> {
+fn clips_from_array(
+    array: &[serde_json::Value],
+    segments: &[TranscriptSegment],
+) -> Vec<ClipSegment> {
     let mut clips = Vec::new();
     for item in array {
         let Some(obj) = item.as_object() else {
@@ -937,15 +940,27 @@ fn clips_from_array(array: &[serde_json::Value], segments: &[TranscriptSegment])
                 _ => continue,
             }
         } else {
-            let Some(start_ms) = obj.get("start_ms").or_else(|| obj.get("startMs")).and_then(json_ms) else {
+            let Some(start_ms) = obj
+                .get("start_ms")
+                .or_else(|| obj.get("startMs"))
+                .and_then(json_ms)
+            else {
                 continue;
             };
-            let Some(end_ms) = obj.get("end_ms").or_else(|| obj.get("endMs")).and_then(json_ms) else {
+            let Some(end_ms) = obj
+                .get("end_ms")
+                .or_else(|| obj.get("endMs"))
+                .and_then(json_ms)
+            else {
                 continue;
             };
             (start_ms, end_ms)
         };
-        let (start_ms, end_ms) = if end_ms < start_ms { (end_ms, start_ms) } else { (start_ms, end_ms) };
+        let (start_ms, end_ms) = if end_ms < start_ms {
+            (end_ms, start_ms)
+        } else {
+            (start_ms, end_ms)
+        };
         let category = match obj.get("category").and_then(|v| v.as_str()) {
             Some("related") => Some(a1slice_core::types::ClipCategory::Related),
             Some("standalone") => Some(a1slice_core::types::ClipCategory::Standalone),
@@ -991,11 +1006,19 @@ fn json_ms(value: &serde_json::Value) -> Option<i64> {
     if let Ok(n) = text.parse::<i64>() {
         return Some(n);
     }
-    text.parse::<f64>().ok().filter(|n| n.is_finite()).map(|n| n.round() as i64)
+    text.parse::<f64>()
+        .ok()
+        .filter(|n| n.is_finite())
+        .map(|n| n.round() as i64)
 }
 
 fn extract_arrays(text: &str) -> Vec<Vec<serde_json::Value>> {
-    let fenced = text.split("```").nth(1).map(|block| block.trim_start_matches("json").trim_start_matches("JSON").trim());
+    let fenced = text.split("```").nth(1).map(|block| {
+        block
+            .trim_start_matches("json")
+            .trim_start_matches("JSON")
+            .trim()
+    });
     let owned;
     let sources: Vec<&str> = if let Some(block) = fenced {
         owned = block.to_string();
@@ -1077,7 +1100,14 @@ fn unwrap_array(value: &serde_json::Value) -> Option<Vec<serde_json::Value>> {
         return Some(array.clone());
     }
     let obj = value.as_object()?;
-    for key in ["clips", "items", "hooks", "candidates", "segments", "topics"] {
+    for key in [
+        "clips",
+        "items",
+        "hooks",
+        "candidates",
+        "segments",
+        "topics",
+    ] {
         if let Some(array) = obj.get(key).and_then(|v| v.as_array()) {
             return Some(array.clone());
         }
@@ -1157,8 +1187,16 @@ mod tests {
     #[test]
     fn later_clip_list_wins_over_the_example_in_the_prompt() {
         let segments = vec![
-            TranscriptSegment { start_ms: 0, end_ms: 4000, text: "Hello".into() },
-            TranscriptSegment { start_ms: 4500, end_ms: 9000, text: "World".into() },
+            TranscriptSegment {
+                start_ms: 0,
+                end_ms: 4000,
+                text: "Hello".into(),
+            },
+            TranscriptSegment {
+                start_ms: 4500,
+                end_ms: 9000,
+                text: "World".into(),
+            },
         ];
         let text = r#"Example: [{"title":"short title","start_id":10,"end_id":18}]
 [{"title":"Hook","start_id":"0","end_id":"1","category":"standalone"}]"#;
@@ -1169,7 +1207,11 @@ mod tests {
 
     #[test]
     fn wrapped_clips_object_is_read() {
-        let segments = vec![TranscriptSegment { start_ms: 1000, end_ms: 5000, text: "Line".into() }];
+        let segments = vec![TranscriptSegment {
+            start_ms: 1000,
+            end_ms: 5000,
+            text: "Line".into(),
+        }];
         let text = r#"{"clips":[{"title":"Bit","start_ms":1000,"end_ms":5000}]}"#;
         let clips = clips_from_text(text, &segments).unwrap();
         assert_eq!(clips.len(), 1);
