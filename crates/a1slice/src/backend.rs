@@ -11,14 +11,14 @@ use std::thread::JoinHandle;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use a1slice_core::clip_find::clip_find_prompt;
+use a1slice_core::clip_find::format_clip_transcript;
 use a1slice_core::clips::refine_clip_bounds;
 use a1slice_core::crop::ffmpeg_crop_filter;
 use a1slice_core::sidecars::{self, generate_srt, shift_subtitles};
 use a1slice_core::types::{
-    CaptionFont, CaptionLook, CaptionStyle, ClipCrop, ClipSegment, CropRatio, Ms, ProgressUpdate, PipelineStage,
-    TranscriptSegment, VideoLanguage,
+    CaptionFont, CaptionLook, CaptionStyle, ClipCrop, ClipSegment, CropRatio, Ms, PipelineStage,
+    ProgressUpdate, TranscriptSegment, VideoLanguage,
 };
-use a1slice_core::clip_find::format_clip_transcript;
 
 pub struct Running {
     pub cancel: Arc<AtomicBool>,
@@ -29,16 +29,24 @@ pub struct Running {
 #[derive(Debug, Clone)]
 pub enum JobDone {
     Transcript(Vec<TranscriptSegment>),
-    Clips { clips: Vec<ClipSegment>, raw: String },
+    Clips {
+        clips: Vec<ClipSegment>,
+        raw: String,
+    },
     CaptionLines(Vec<TranscriptSegment>),
     Folder(PathBuf),
 }
 
 pub fn list_agents() -> Vec<(&'static str, &'static str, &'static str)> {
-    [("grok", "Grok 4.7", "grok"), ("claude", "Sonnet 5.5", "claude"), ("sol", "Sol 5.6", "codex"), ("agy", "Gemini 3.8 Flash", "agy")]
-        .into_iter()
-        .filter(|(_, _, cmd)| which(cmd).is_some())
-        .collect()
+    [
+        ("grok", "Grok 4.7", "grok"),
+        ("claude", "Sonnet 5.5", "claude"),
+        ("sol", "Sol 5.6", "codex"),
+        ("agy", "Gemini 3.8 Flash", "agy"),
+    ]
+    .into_iter()
+    .filter(|(_, _, cmd)| which(cmd).is_some())
+    .collect()
 }
 
 pub fn which(cmd: &str) -> Option<PathBuf> {
@@ -48,7 +56,10 @@ pub fn which(cmd: &str) -> Option<PathBuf> {
         return None;
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    text.lines().map(str::trim).find(|l| !l.is_empty()).map(PathBuf::from)
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(PathBuf::from)
 }
 
 fn whisper_names() -> (&'static str, &'static str) {
@@ -86,14 +97,33 @@ pub fn whisper_binary() -> Option<PathBuf> {
 
 pub fn probe(video: &Path) -> Result<(Ms, u32, u32), String> {
     let duration = Command::new("ffprobe")
-        .args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+        ])
         .arg(video)
         .output()
         .map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&duration.stdout);
-    let seconds: f64 = text.trim().parse().map_err(|_| format!("Could not read the length of {}", video.display()))?;
+    let seconds: f64 = text
+        .trim()
+        .parse()
+        .map_err(|_| format!("Could not read the length of {}", video.display()))?;
     let size = Command::new("ffprobe")
-        .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x"])
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0:s=x",
+        ])
         .arg(video)
         .output()
         .map_err(|e| e.to_string())?;
@@ -110,15 +140,27 @@ pub fn grab_frame(video: &Path, at_ms: Ms, max_w: u32) -> Result<(u32, u32, Vec<
         return Err("This file has no picture.".into());
     }
     let scale_w = max_w.min(width).max(2) / 2 * 2;
-    let scale_h = ((height as f64) * (scale_w as f64) / (width as f64)).round().max(2.0) as u32 / 2 * 2;
+    let scale_h = ((height as f64) * (scale_w as f64) / (width as f64))
+        .round()
+        .max(2.0) as u32
+        / 2
+        * 2;
     let sec = format!("{:.3}", (at_ms.max(0) as f64) / 1000.0);
     let output = Command::new("ffmpeg")
         .args(["-ss", &sec, "-i"])
         .arg(video)
         .args([
-            "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgba", "-vf",
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgba",
+            "-vf",
             &format!("scale={scale_w}:{scale_h}"),
-            "-v", "error", "pipe:1",
+            "-v",
+            "error",
+            "pipe:1",
         ])
         .output()
         .map_err(|e| e.to_string())?;
@@ -129,7 +171,11 @@ pub fn grab_frame(video: &Path, at_ms: Ms, max_w: u32) -> Result<(u32, u32, Vec<
     Ok((scale_w, scale_h, output.stdout[..expected].to_vec()))
 }
 
-fn run_ffmpeg(args: &[String], cancel: &AtomicBool, child_slot: &Mutex<Option<std::process::Child>>) -> Result<(), String> {
+fn run_ffmpeg(
+    args: &[String],
+    cancel: &AtomicBool,
+    child_slot: &Mutex<Option<std::process::Child>>,
+) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped.".into());
     }
@@ -152,7 +198,10 @@ fn run_ffmpeg(args: &[String], cancel: &AtomicBool, child_slot: &Mutex<Option<st
     let status = {
         let mut slot = child_slot.lock().unwrap();
         let child = slot.take();
-        child.map(|mut c| c.wait()).transpose().map_err(|e| e.to_string())?
+        child
+            .map(|mut c| c.wait())
+            .transpose()
+            .map_err(|e| e.to_string())?
     };
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped.".into());
@@ -172,7 +221,13 @@ fn tail(text: &str) -> String {
     trimmed[start..].to_string()
 }
 
-fn cut_args(input: &Path, output: &Path, start_sec: f64, duration_sec: f64, filter: Option<&str>) -> Vec<String> {
+fn cut_args(
+    input: &Path,
+    output: &Path,
+    start_sec: f64,
+    duration_sec: f64,
+    filter: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "-ss".into(),
         format!("{start_sec}"),
@@ -186,18 +241,38 @@ fn cut_args(input: &Path, output: &Path, start_sec: f64, duration_sec: f64, filt
         args.push(filter.into());
     }
     args.extend([
-        "-c:v".into(), "libx264".into(), "-preset".into(), "veryfast".into(), "-crf".into(), "18".into(),
-        "-c:a".into(), "aac".into(), "-movflags".into(), "+faststart".into(), "-avoid_negative_ts".into(),
-        "make_zero".into(), "-y".into(), output.display().to_string(),
+        "-c:v".into(),
+        "libx264".into(),
+        "-preset".into(),
+        "veryfast".into(),
+        "-crf".into(),
+        "18".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-movflags".into(),
+        "+faststart".into(),
+        "-avoid_negative_ts".into(),
+        "make_zero".into(),
+        "-y".into(),
+        output.display().to_string(),
     ]);
     args
 }
 
 fn copy_args(input: &Path, output: &Path, start_sec: f64, duration_sec: f64) -> Vec<String> {
     vec![
-        "-ss".into(), format!("{start_sec}"), "-i".into(), input.display().to_string(), "-t".into(),
-        format!("{duration_sec}"), "-c".into(), "copy".into(), "-avoid_negative_ts".into(), "make_zero".into(),
-        "-y".into(), output.display().to_string(),
+        "-ss".into(),
+        format!("{start_sec}"),
+        "-i".into(),
+        input.display().to_string(),
+        "-t".into(),
+        format!("{duration_sec}"),
+        "-c".into(),
+        "copy".into(),
+        "-avoid_negative_ts".into(),
+        "make_zero".into(),
+        "-y".into(),
+        output.display().to_string(),
     ]
 }
 
@@ -210,10 +285,17 @@ pub fn export_kept_clips(
     on_progress: impl Fn(ProgressUpdate),
 ) -> Result<PathBuf, String> {
     let (dir, stem) = sidecars::video_stem(video);
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     let out_dir = dir.join(format!("a1slice-{stem}-{stamp}"));
     std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-    std::fs::write(out_dir.join("transcript.txt"), format_clip_transcript(segments)).ok();
+    std::fs::write(
+        out_dir.join("transcript.txt"),
+        format_clip_transcript(segments),
+    )
+    .ok();
     let duration = probe(video).ok().map(|(ms, _, _)| ms);
     let size = probe(video).ok().map(|(_, w, h)| (w, h));
     if clips.is_empty() {
@@ -223,12 +305,19 @@ pub fn export_kept_clips(
         if cancel.load(Ordering::Relaxed) {
             return Err("Stopped.".into());
         }
-        let start = duration.map(|d| clip.start_ms.min(d)).unwrap_or(clip.start_ms);
+        let start = duration
+            .map(|d| clip.start_ms.min(d))
+            .unwrap_or(clip.start_ms);
         let end = duration.map(|d| clip.end_ms.min(d)).unwrap_or(clip.end_ms);
         if end <= start {
             continue;
         }
-        let safe: String = clip.title.chars().filter(|c| c.is_ascii_alphanumeric() || *c == ' ' || *c == '_' || *c == '-').take(50).collect();
+        let safe: String = clip
+            .title
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == ' ' || *c == '_' || *c == '-')
+            .take(50)
+            .collect();
         let file = out_dir.join(format!("{:02}_{safe}.mp4", i + 1));
         on_progress(ProgressUpdate {
             stage: PipelineStage::Cutting,
@@ -238,13 +327,23 @@ pub fn export_kept_clips(
         let shifted = shift_subtitles(segments, start, end);
         let srt_path = file.with_extension("srt");
         std::fs::write(&srt_path, generate_srt(&shifted)).map_err(|e| e.to_string())?;
-        let filter = clip.crop.and_then(|crop| {
-            size.and_then(|(w, h)| ffmpeg_crop_filter(crop, w as f64, h as f64))
-        });
+        let filter = clip
+            .crop
+            .and_then(|crop| size.and_then(|(w, h)| ffmpeg_crop_filter(crop, w as f64, h as f64)));
         let start_sec = start as f64 / 1000.0;
         let duration_sec = ((end - start) as f64 / 1000.0).max(0.2);
-        if run_ffmpeg(&cut_args(video, &file, start_sec, duration_sec, filter.as_deref()), cancel, child_slot).is_err() {
-            run_ffmpeg(&copy_args(video, &file, start_sec, duration_sec), cancel, child_slot)?;
+        if run_ffmpeg(
+            &cut_args(video, &file, start_sec, duration_sec, filter.as_deref()),
+            cancel,
+            child_slot,
+        )
+        .is_err()
+        {
+            run_ffmpeg(
+                &copy_args(video, &file, start_sec, duration_sec),
+                cancel,
+                child_slot,
+            )?;
         }
     }
     Ok(out_dir)
@@ -258,7 +357,10 @@ pub fn export_reframe(
 ) -> Result<PathBuf, String> {
     let (duration, w, h) = probe(video)?;
     let (dir, stem) = sidecars::video_stem(video);
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     let out_dir = dir.join(format!("a1slice-{stem}-reframe-{stamp}"));
     std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
     let file = out_dir.join(format!("{stem}.mp4"));
@@ -268,7 +370,11 @@ pub fn export_reframe(
         ffmpeg_crop_filter(crop, w as f64, h as f64)
     };
     let duration_sec = (duration as f64 / 1000.0).max(0.2);
-    run_ffmpeg(&cut_args(video, &file, 0.0, duration_sec, filter.as_deref()), cancel, child_slot)?;
+    run_ffmpeg(
+        &cut_args(video, &file, 0.0, duration_sec, filter.as_deref()),
+        cancel,
+        child_slot,
+    )?;
     Ok(out_dir)
 }
 
@@ -287,16 +393,24 @@ pub fn export_captions(
         return Ok(path);
     }
     let (duration, _, _) = probe(video)?;
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     let out_dir = dir.join(format!("a1slice-{stem}-captions-{stamp}"));
     std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
     let file = out_dir.join(format!("{stem}.mp4"));
     let srt = std::env::temp_dir().join(format!("a1slice-{stamp}.srt"));
     std::fs::write(&srt, generate_srt(cues)).map_err(|e| e.to_string())?;
-    let font = find_font(style.font).ok_or_else(|| "No caption font found on this computer".to_string())?;
+    let font = find_font(style.font)
+        .ok_or_else(|| "No caption font found on this computer".to_string())?;
     let filter = caption_burn_filter(&srt, &font.0, &font.1, style);
     let duration_sec = (duration as f64 / 1000.0).max(0.2);
-    let result = run_ffmpeg(&cut_args(video, &file, 0.0, duration_sec, Some(&filter)), cancel, child_slot);
+    let result = run_ffmpeg(
+        &cut_args(video, &file, 0.0, duration_sec, Some(&filter)),
+        cancel,
+        child_slot,
+    );
     let _ = std::fs::remove_file(&srt);
     result?;
     Ok(out_dir)
@@ -305,27 +419,62 @@ pub fn export_captions(
 fn find_font(font: CaptionFont) -> Option<(PathBuf, String)> {
     let candidates: &[(&str, &str)] = match font {
         CaptionFont::Serif => &[
-            ("/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf", "Noto Serif"),
+            (
+                "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf",
+                "Noto Serif",
+            ),
             ("/usr/share/fonts/noto/NotoSerif-Regular.ttf", "Noto Serif"),
-            ("/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf", "Liberation Serif"),
-            ("/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", "DejaVu Serif"),
+            (
+                "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+                "Liberation Serif",
+            ),
+            (
+                "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+                "DejaVu Serif",
+            ),
         ],
         CaptionFont::Mono => &[
-            ("/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf", "Noto Sans Mono"),
-            ("/usr/share/fonts/noto/NotoSansMono-Regular.ttf", "Noto Sans Mono"),
-            ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", "DejaVu Sans Mono"),
+            (
+                "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+                "Noto Sans Mono",
+            ),
+            (
+                "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+                "Noto Sans Mono",
+            ),
+            (
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                "DejaVu Sans Mono",
+            ),
         ],
         CaptionFont::Sans => &[
-            ("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "Noto Sans"),
+            (
+                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+                "Noto Sans",
+            ),
             ("/usr/share/fonts/noto/NotoSans-Regular.ttf", "Noto Sans"),
-            ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "Liberation Sans"),
-            ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "DejaVu Sans"),
+            (
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+                "Liberation Sans",
+            ),
+            (
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "DejaVu Sans",
+            ),
         ],
     };
-    candidates.iter().find(|(path, _)| Path::new(path).is_file()).map(|(p, n)| (PathBuf::from(p), (*n).to_string()))
+    candidates
+        .iter()
+        .find(|(path, _)| Path::new(path).is_file())
+        .map(|(p, n)| (PathBuf::from(p), (*n).to_string()))
 }
 
-fn caption_burn_filter(srt: &Path, fonts_dir: &Path, font_name: &str, style: &CaptionStyle) -> String {
+fn caption_burn_filter(
+    srt: &Path,
+    fonts_dir: &Path,
+    font_name: &str,
+    style: &CaptionStyle,
+) -> String {
     let (ass, outline, size, margin, align) = style_force(style);
     let force = format!(
         "FontName={font_name}\\,FontSize={size}\\,PrimaryColour={ass}\\,OutlineColour={outline}\\,BorderStyle=1\\,Outline=0.55\\,Shadow=0\\,Bold=0\\,Alignment={align}\\,MarginV={margin}"
@@ -357,7 +506,11 @@ fn style_force(style: &CaptionStyle) -> (String, String, i64, i64, i32) {
         a1slice_core::types::CaptionPosition::Middle => 5,
         a1slice_core::types::CaptionPosition::Bottom => 2,
     };
-    let margin = if matches!(style.position, a1slice_core::types::CaptionPosition::Middle) { 0 } else { margin };
+    let margin = if matches!(style.position, a1slice_core::types::CaptionPosition::Middle) {
+        0
+    } else {
+        margin
+    };
     (ass, outline, size, margin, align)
 }
 
@@ -373,7 +526,11 @@ fn hex_to_ass(hex: &str) -> Option<String> {
 }
 
 fn escape_filter(path: &Path) -> String {
-    path.display().to_string().replace('\\', "/").replace(':', "\\:").replace('\'', "\\'")
+    path.display()
+        .to_string()
+        .replace('\\', "/")
+        .replace(':', "\\:")
+        .replace('\'', "\\'")
 }
 
 pub fn transcribe_video(
@@ -388,32 +545,67 @@ pub fn transcribe_video(
     on_progress: impl Fn(ProgressUpdate),
 ) -> Result<Vec<TranscriptSegment>, String> {
     let binary = whisper_binary().ok_or_else(|| {
-        "The whisper program is not built yet. Run scripts/build-whisper.sh, then try again.".to_string()
+        "The whisper program is not built yet. Run scripts/build-whisper.sh, then try again."
+            .to_string()
     })?;
     let model = sidecars::model_path();
     if !model.is_file() {
         return Err("The Whisper model is not in ~/.a1slice/models yet.".into());
     }
-    on_progress(ProgressUpdate { stage: PipelineStage::Extracting, message: "Reading the audio…".into(), percent: 5.0 });
+    on_progress(ProgressUpdate {
+        stage: PipelineStage::Extracting,
+        message: "Reading the audio…".into(),
+        percent: 5.0,
+    });
     let wav = std::env::temp_dir().join(format!("a1slice-{}.wav", std::process::id()));
     let extract = vec![
-        "-i".into(), video.display().to_string(), "-vn".into(), "-ac".into(), "1".into(), "-ar".into(), "16000".into(),
-        "-af".into(), "afftdn".into(), "-y".into(), wav.display().to_string(),
+        "-i".into(),
+        video.display().to_string(),
+        "-vn".into(),
+        "-ac".into(),
+        "1".into(),
+        "-ar".into(),
+        "16000".into(),
+        "-af".into(),
+        "afftdn".into(),
+        "-y".into(),
+        wav.display().to_string(),
     ];
     run_ffmpeg(&extract, cancel, child_slot)?;
-    on_progress(ProgressUpdate { stage: PipelineStage::Transcribing, message: "Writing the words…".into(), percent: 20.0 });
+    on_progress(ProgressUpdate {
+        stage: PipelineStage::Transcribing,
+        message: "Writing the words…".into(),
+        percent: 20.0,
+    });
     let output_base = wav.with_extension("");
     let mut args = vec![
-        "-m".into(), model.display().to_string(), "-f".into(), wav.display().to_string(), "-oj".into(), "-of".into(),
-        output_base.display().to_string(), "-pp".into(), "--entropy-thold".into(), format!("{entropy}"),
-        "--max-context".into(), format!("{max_context}"), "-bs".into(), format!("{beam}"), "-tpi".into(),
+        "-m".into(),
+        model.display().to_string(),
+        "-f".into(),
+        wav.display().to_string(),
+        "-oj".into(),
+        "-of".into(),
+        output_base.display().to_string(),
+        "-pp".into(),
+        "--entropy-thold".into(),
+        format!("{entropy}"),
+        "--max-context".into(),
+        format!("{max_context}"),
+        "-bs".into(),
+        format!("{beam}"),
+        "-tpi".into(),
         format!("{temperature}"),
     ];
     if language != VideoLanguage::Auto {
         args.push("-l".into());
         args.push(language.as_str().into());
     }
-    let child = Command::new(&binary).args(&args).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+    let child = Command::new(&binary)
+        .args(&args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
     {
         let mut slot = child_slot.lock().unwrap();
         *slot = Some(child);
@@ -421,7 +613,9 @@ pub fn transcribe_video(
     // Re-take the child to wait. The slot holds it.
     let status = {
         let mut slot = child_slot.lock().unwrap();
-        let mut child = slot.take().ok_or_else(|| "Whisper did not start.".to_string())?;
+        let mut child = slot
+            .take()
+            .ok_or_else(|| "Whisper did not start.".to_string())?;
         let mut err = String::new();
         if let Some(mut pipe) = child.stderr.take() {
             let _ = pipe.read_to_string(&mut err);
@@ -434,7 +628,8 @@ pub fn transcribe_video(
     };
     let _ = status;
     let json_path = PathBuf::from(format!("{}.json", output_base.display()));
-    let json = std::fs::read_to_string(&json_path).map_err(|_| "Whisper did not write a transcript.".to_string())?;
+    let json = std::fs::read_to_string(&json_path)
+        .map_err(|_| "Whisper did not write a transcript.".to_string())?;
     let _ = std::fs::remove_file(&wav);
     let _ = std::fs::remove_file(&json_path);
     parse_whisper_json(&json)
@@ -442,18 +637,36 @@ pub fn transcribe_video(
 
 fn parse_whisper_json(json: &str) -> Result<Vec<TranscriptSegment>, String> {
     let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    let items = value.get("transcription").and_then(|v| v.as_array()).ok_or("Whisper returned no transcript.")?;
+    let items = value
+        .get("transcription")
+        .and_then(|v| v.as_array())
+        .ok_or("Whisper returned no transcript.")?;
     let mut segments = Vec::new();
     for item in items {
-        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let text = item
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if text.is_empty() {
             continue;
         }
-        let from = item.pointer("/timestamps/from").and_then(|v| v.as_str()).unwrap_or("0");
-        let to = item.pointer("/timestamps/to").and_then(|v| v.as_str()).unwrap_or("0");
+        let from = item
+            .pointer("/timestamps/from")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0");
+        let to = item
+            .pointer("/timestamps/to")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0");
         let start_ms = parse_timestamp(from);
         let end_ms = parse_timestamp(to).max(start_ms + 1);
-        segments.push(TranscriptSegment { start_ms, end_ms, text });
+        segments.push(TranscriptSegment {
+            start_ms,
+            end_ms,
+            text,
+        });
     }
     Ok(segments)
 }
@@ -469,7 +682,12 @@ fn parse_timestamp(ts: &str) -> Ms {
     let sec_parts: Vec<&str> = parts[2].split('.').collect();
     let seconds: i64 = sec_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
     let frac = sec_parts.get(1).copied().unwrap_or("0");
-    let millis: i64 = format!("{frac:0<3}").chars().take(3).collect::<String>().parse().unwrap_or(0);
+    let millis: i64 = format!("{frac:0<3}")
+        .chars()
+        .take(3)
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
     hours * 3_600_000 + minutes * 60_000 + seconds * 1000 + millis
 }
 
@@ -496,7 +714,11 @@ pub fn fix_words(
     cancel: &AtomicBool,
     child_slot: &Mutex<Option<std::process::Child>>,
 ) -> Result<Vec<TranscriptSegment>, String> {
-    let body = segments.iter().map(|s| s.text.trim()).collect::<Vec<_>>().join("\n");
+    let body = segments
+        .iter()
+        .map(|s| s.text.trim())
+        .collect::<Vec<_>>()
+        .join("\n");
     let prompt = format!(
         "Rewrite this transcript. {instruction}\n\nKeep the same number of lines and the same order. Print only the new transcript, one line per cue.\n\n{body}"
     );
@@ -504,18 +726,30 @@ pub fn fix_words(
     if raw.trim().eq_ignore_ascii_case("none") {
         return Ok(segments.to_vec());
     }
-    let lines: Vec<&str> = raw.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = raw
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     if lines.len() != segments.len() {
         return Err("The edit changed how many lines there are, so it was not applied.".into());
     }
     Ok(segments
         .iter()
         .zip(lines)
-        .map(|(seg, text)| TranscriptSegment { text: text.to_string(), ..seg.clone() })
+        .map(|(seg, text)| TranscriptSegment {
+            text: text.to_string(),
+            ..seg.clone()
+        })
         .collect())
 }
 
-fn run_agent(agent_id: &str, prompt: &str, cancel: &AtomicBool, child_slot: &Mutex<Option<std::process::Child>>) -> Result<String, String> {
+fn run_agent(
+    agent_id: &str,
+    prompt: &str,
+    cancel: &AtomicBool,
+    child_slot: &Mutex<Option<std::process::Child>>,
+) -> Result<String, String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("Stopped.".into());
     }
@@ -530,7 +764,11 @@ fn run_agent(agent_id: &str, prompt: &str, cancel: &AtomicBool, child_slot: &Mut
         args = agent_command(agent_id, prompt, &dir).1;
     }
     let mut command = Command::new(cmd);
-    command.args(&args).current_dir(&dir).stdout(Stdio::piped()).stderr(Stdio::piped());
+    command
+        .args(&args)
+        .current_dir(&dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if stdin_prompt {
         command.stdin(Stdio::piped());
     } else {
@@ -547,7 +785,9 @@ fn run_agent(agent_id: &str, prompt: &str, cancel: &AtomicBool, child_slot: &Mut
         *slot = Some(child);
     }
     let mut slot = child_slot.lock().unwrap();
-    let mut child = slot.take().ok_or_else(|| "The agent did not start.".to_string())?;
+    let mut child = slot
+        .take()
+        .ok_or_else(|| "The agent did not start.".to_string())?;
     let mut out = String::new();
     let mut err = String::new();
     if let Some(mut pipe) = child.stdout.take() {
@@ -561,9 +801,17 @@ fn run_agent(agent_id: &str, prompt: &str, cancel: &AtomicBool, child_slot: &Mut
         return Err("Stopped.".into());
     }
     if !status.success() && out.trim().is_empty() {
-        return Err(if err.trim().is_empty() { "The agent stopped.".into() } else { tail(&err) });
+        return Err(if err.trim().is_empty() {
+            "The agent stopped.".into()
+        } else {
+            tail(&err)
+        });
     }
-    if out.trim().is_empty() { Ok(err) } else { Ok(out) }
+    if out.trim().is_empty() {
+        Ok(err)
+    } else {
+        Ok(out)
+    }
 }
 
 fn agent_command(id: &str, prompt: &str, work_dir: &Path) -> (&'static str, Vec<String>, bool) {
@@ -571,34 +819,69 @@ fn agent_command(id: &str, prompt: &str, work_dir: &Path) -> (&'static str, Vec<
         "claude" => (
             "claude",
             vec![
-                "-p".into(), "--bare".into(), "--tools".into(), "".into(), "--no-session-persistence".into(),
-                "--model".into(), "claude-sonnet-5-5".into(), "--effort".into(), "low".into(), "--output-format".into(),
-                "text".into(), prompt.into(),
+                "-p".into(),
+                "--bare".into(),
+                "--tools".into(),
+                "".into(),
+                "--no-session-persistence".into(),
+                "--model".into(),
+                "claude-sonnet-5-5".into(),
+                "--effort".into(),
+                "low".into(),
+                "--output-format".into(),
+                "text".into(),
+                prompt.into(),
             ],
             false,
         ),
         "sol" => (
             "codex",
             vec![
-                "exec".into(), "--skip-git-repo-check".into(), "--ephemeral".into(), "--color".into(), "never".into(),
-                "-m".into(), "gpt-5.6-sol".into(), "-c".into(), "model_reasoning_effort=\"low\"".into(), "-s".into(),
-                "read-only".into(), "-C".into(), work_dir.display().to_string(), "-".into(),
+                "exec".into(),
+                "--skip-git-repo-check".into(),
+                "--ephemeral".into(),
+                "--color".into(),
+                "never".into(),
+                "-m".into(),
+                "gpt-5.6-sol".into(),
+                "-c".into(),
+                "model_reasoning_effort=\"low\"".into(),
+                "-s".into(),
+                "read-only".into(),
+                "-C".into(),
+                work_dir.display().to_string(),
+                "-".into(),
             ],
             true,
         ),
         "agy" => (
             "agy",
             vec![
-                "--model".into(), "gemini-3.8-flash-low".into(), "--effort".into(), "low".into(), "--output-format".into(),
-                "text".into(), "--disable-slash-commands".into(), "--print".into(), prompt.into(),
+                "--model".into(),
+                "gemini-3.8-flash-low".into(),
+                "--effort".into(),
+                "low".into(),
+                "--output-format".into(),
+                "text".into(),
+                "--disable-slash-commands".into(),
+                "--print".into(),
+                prompt.into(),
             ],
             false,
         ),
         _ => {
             let mut args = vec![
-                "--no-plan".into(), "--model".into(), "grok-4.7".into(), "--reasoning-effort".into(), "low".into(),
-                "--output-format".into(), "plain".into(), "--no-subagents".into(), "--disable-web-search".into(),
-                "--cwd".into(), work_dir.display().to_string(),
+                "--no-plan".into(),
+                "--model".into(),
+                "grok-4.7".into(),
+                "--reasoning-effort".into(),
+                "low".into(),
+                "--output-format".into(),
+                "plain".into(),
+                "--no-subagents".into(),
+                "--disable-web-search".into(),
+                "--cwd".into(),
+                work_dir.display().to_string(),
             ];
             if prompt.len() < 100_000 {
                 args.insert(0, prompt.into());
@@ -613,18 +896,42 @@ fn agent_command(id: &str, prompt: &str, work_dir: &Path) -> (&'static str, Vec<
 }
 
 fn clips_from_text(text: &str, segments: &[TranscriptSegment]) -> Result<Vec<ClipSegment>, String> {
-    let array = extract_array(text).ok_or_else(|| "The agent did not return a clip list.".to_string())?;
+    let array =
+        extract_array(text).ok_or_else(|| "The agent did not return a clip list.".to_string())?;
     let mut clips = Vec::new();
     for item in array {
-        let Some(obj) = item.as_object() else { continue };
-        let title = obj.get("title").and_then(|v| v.as_str()).unwrap_or("Clip").to_string();
-        let (start_ms, end_ms) = if let (Some(start_id), Some(end_id)) = (obj.get("start_id").and_then(json_index), obj.get("end_id").and_then(json_index)) {
-            let Some(start) = segments.get(start_id) else { continue };
-            let Some(end) = segments.get(end_id) else { continue };
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let title = obj
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Clip")
+            .to_string();
+        let (start_ms, end_ms) = if let (Some(start_id), Some(end_id)) = (
+            obj.get("start_id").and_then(json_index),
+            obj.get("end_id").and_then(json_index),
+        ) {
+            let Some(start) = segments.get(start_id) else {
+                continue;
+            };
+            let Some(end) = segments.get(end_id) else {
+                continue;
+            };
             (start.start_ms, end.end_ms)
         } else {
-            let Some(start_ms) = obj.get("start_ms").and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|n| n as i64))) else { continue };
-            let Some(end_ms) = obj.get("end_ms").and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|n| n as i64))) else { continue };
+            let Some(start_ms) = obj
+                .get("start_ms")
+                .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|n| n as i64)))
+            else {
+                continue;
+            };
+            let Some(end_ms) = obj
+                .get("end_ms")
+                .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|n| n as i64)))
+            else {
+                continue;
+            };
             (start_ms, end_ms)
         };
         let category = match obj.get("category").and_then(|v| v.as_str()) {
@@ -632,7 +939,15 @@ fn clips_from_text(text: &str, segments: &[TranscriptSegment]) -> Result<Vec<Cli
             Some("standalone") => Some(a1slice_core::types::ClipCategory::Standalone),
             _ => None,
         };
-        let clip = ClipSegment { title, start_ms: start_ms + 1, end_ms, category, topic: None, crop: None, approved: Some(true) };
+        let clip = ClipSegment {
+            title,
+            start_ms: start_ms + 1,
+            end_ms,
+            category,
+            topic: None,
+            crop: None,
+            approved: Some(true),
+        };
         let refined = refine_clip_bounds(clip, segments);
         if refined.end_ms > refined.start_ms {
             clips.push(refined);
@@ -642,16 +957,23 @@ fn clips_from_text(text: &str, segments: &[TranscriptSegment]) -> Result<Vec<Cli
 }
 
 fn json_index(value: &serde_json::Value) -> Option<usize> {
-    value.as_u64().map(|n| n as usize).or_else(|| value.as_i64().filter(|n| *n >= 0).map(|n| n as usize))
+    value
+        .as_u64()
+        .map(|n| n as usize)
+        .or_else(|| value.as_i64().filter(|n| *n >= 0).map(|n| n as usize))
 }
 
 fn extract_array(text: &str) -> Option<Vec<serde_json::Value>> {
-    let fenced = text.split("```").nth(1).map(|block| block.trim_start_matches("json").trim());
+    let fenced = text
+        .split("```")
+        .nth(1)
+        .map(|block| block.trim_start_matches("json").trim());
     let sources = [fenced.unwrap_or(""), text];
     for src in sources {
         if let Some(start) = src.find('[') {
             if let Some(end) = src.rfind(']') {
-                if let Ok(serde_json::Value::Array(items)) = serde_json::from_str(&src[start..=end]) {
+                if let Ok(serde_json::Value::Array(items)) = serde_json::from_str(&src[start..=end])
+                {
                     return Some(items);
                 }
             }
@@ -661,21 +983,36 @@ fn extract_array(text: &str) -> Option<Vec<serde_json::Value>> {
 }
 
 pub fn open_path(path: &Path) -> Result<(), String> {
-    let opener = if cfg!(target_os = "macos") { "open" } else if cfg!(windows) { "explorer" } else { "xdg-open" };
-    Command::new(opener).arg(path).spawn().map_err(|e| e.to_string())?;
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    Command::new(opener)
+        .arg(path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 pub fn spawn_job<F>(work: F) -> Running
 where
-    F: FnOnce(Arc<AtomicBool>, Arc<Mutex<Option<std::process::Child>>>) -> Result<JobDone, String> + Send + 'static,
+    F: FnOnce(Arc<AtomicBool>, Arc<Mutex<Option<std::process::Child>>>) -> Result<JobDone, String>
+        + Send
+        + 'static,
 {
     let cancel = Arc::new(AtomicBool::new(false));
     let child = Arc::new(Mutex::new(None));
     let cancel_thread = Arc::clone(&cancel);
     let child_thread = Arc::clone(&child);
     let handle = std::thread::spawn(move || work(cancel_thread, child_thread));
-    Running { cancel, child, handle }
+    Running {
+        cancel,
+        child,
+        handle,
+    }
 }
 
 pub fn cancel_job(running: &Running) {
@@ -692,8 +1029,16 @@ mod tests {
     #[test]
     fn agent_text_becomes_a_clip_snapped_to_the_transcript() {
         let segments = vec![
-            TranscriptSegment { start_ms: 0, end_ms: 4000, text: "Hello".into() },
-            TranscriptSegment { start_ms: 4500, end_ms: 9000, text: "World".into() },
+            TranscriptSegment {
+                start_ms: 0,
+                end_ms: 4000,
+                text: "Hello".into(),
+            },
+            TranscriptSegment {
+                start_ms: 4500,
+                end_ms: 9000,
+                text: "World".into(),
+            },
         ];
         let text = "Here you go:\n```json\n[{\"title\":\"Hook\",\"start_id\":0,\"end_id\":1,\"category\":\"standalone\"}]\n```";
         let clips = clips_from_text(text, &segments).unwrap();
@@ -717,11 +1062,28 @@ mod tests {
         let src = dir.join("clip.mp4");
         let status = std::process::Command::new("ffmpeg")
             .args([
-                "-f", "lavfi", "-i", "color=c=red:s=320x240:d=1",
-                "-f", "lavfi", "-i", "color=c=blue:s=320x240:d=1",
-                "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0",
-                "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
-                "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=320x240:d=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=320x240:d=1",
+                "-filter_complex",
+                "[0:v][1:v]concat=n=2:v=1:a=0",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=2",
+                "-shortest",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-y",
             ])
             .arg(&src)
             .status()
@@ -732,19 +1094,43 @@ mod tests {
         assert_eq!((w, h), (320, 240));
 
         let (_fw, _fh, red) = grab_frame(&src, 200, 320).unwrap();
-        assert!(red[0] > 180 && red[1] < 40, "expected a red frame, got {:?}", &red[..4]);
+        assert!(
+            red[0] > 180 && red[1] < 40,
+            "expected a red frame, got {:?}",
+            &red[..4]
+        );
         let (_fw, _fh, blue) = grab_frame(&src, 1500, 320).unwrap();
-        assert!(blue[2] > 180 && blue[0] < 40, "expected a blue frame, got {:?}", &blue[..4]);
+        assert!(
+            blue[2] > 180 && blue[0] < 40,
+            "expected a blue frame, got {:?}",
+            &blue[..4]
+        );
 
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let slot = std::sync::Mutex::new(None);
-        let crop = a1slice_core::types::ClipCrop { ratio: CropRatio::Square, cx: 0.5, cy: 0.5, zoom: 0.0 };
+        let crop = a1slice_core::types::ClipCrop {
+            ratio: CropRatio::Square,
+            cx: 0.5,
+            cy: 0.5,
+            zoom: 0.0,
+        };
         let out = export_reframe(&src, crop, &cancel, &slot).unwrap();
-        let mp4 = std::fs::read_dir(&out).unwrap().find_map(|e| e.ok()).unwrap().path();
+        let mp4 = std::fs::read_dir(&out)
+            .unwrap()
+            .find_map(|e| e.ok())
+            .unwrap()
+            .path();
         let (_ms, ow, oh) = probe(&mp4).unwrap();
-        assert_eq!(ow, oh, "square export should have equal sides, got {ow}x{oh}");
+        assert_eq!(
+            ow, oh,
+            "square export should have equal sides, got {ow}x{oh}"
+        );
 
-        let cues = vec![TranscriptSegment { start_ms: 0, end_ms: 1000, text: "Hello".into() }];
+        let cues = vec![TranscriptSegment {
+            start_ms: 0,
+            end_ms: 1000,
+            text: "Hello".into(),
+        }];
         let style = a1slice_core::types::CaptionStyle {
             color: a1slice_core::types::CaptionColor::White,
             custom_color: None,
@@ -753,7 +1139,8 @@ mod tests {
             font_size: None,
             font: CaptionFont::Sans,
         };
-        let burned = export_captions(&src, &cues, CaptionLook::Burn, &style, &cancel, &slot).unwrap();
+        let burned =
+            export_captions(&src, &cues, CaptionLook::Burn, &style, &cancel, &slot).unwrap();
         assert!(burned.is_dir());
         let srt = export_captions(&src, &cues, CaptionLook::Srt, &style, &cancel, &slot).unwrap();
         let text = std::fs::read_to_string(&srt).unwrap();

@@ -65,7 +65,10 @@ impl A1App {
                 temperature_inc: saved.temperature_inc,
             },
         );
-        let agents = backend::list_agents().into_iter().map(|(id, label, _)| (id, label)).collect::<Vec<_>>();
+        let agents = backend::list_agents()
+            .into_iter()
+            .map(|(id, label, _)| (id, label))
+            .collect::<Vec<_>>();
         let agent_id = agents.first().map(|(id, _)| (*id).to_string());
         Self {
             state,
@@ -110,7 +113,10 @@ impl A1App {
     fn open_video(&mut self, tool: ToolId, path: PathBuf) {
         let path_str = path.display().to_string();
         let _ = sidecars::write_remembered(&path_str);
-        self.dispatch(WizardAction::OpenTool { tool, video_path: path_str.clone() });
+        self.dispatch(WizardAction::OpenTool {
+            tool,
+            video_path: path_str.clone(),
+        });
         let segments = sidecars::read_transcript(&path);
         let (clips, raw) = sidecars::read_clips(&path);
         let framing = sidecars::read_framing(&path);
@@ -164,11 +170,16 @@ impl A1App {
             match screen {
                 Screen::Transcribe => self.dispatch(WizardAction::TranscribeProgress(update)),
                 Screen::Find => self.dispatch(WizardAction::AnalyzeProgress(update)),
-                Screen::Export | Screen::Reframe | Screen::Captions => self.dispatch(WizardAction::ExportProgress(update)),
+                Screen::Export | Screen::Reframe | Screen::Captions => {
+                    self.dispatch(WizardAction::ExportProgress(update))
+                }
                 _ => {}
             }
         }
-        let finished = self.job.as_ref().is_some_and(|job| job.handle.is_finished());
+        let finished = self
+            .job
+            .as_ref()
+            .is_some_and(|job| job.handle.is_finished());
         if !finished {
             return;
         }
@@ -186,11 +197,15 @@ impl A1App {
                 if let Some(path) = self.state.video_path.clone() {
                     let _ = sidecars::write_clips(std::path::Path::new(&path), &clips, Some(&raw));
                 }
-                self.dispatch(WizardAction::AnalyzeDone { clips: with, raw_response: raw });
+                self.dispatch(WizardAction::AnalyzeDone {
+                    clips: with,
+                    raw_response: raw,
+                });
             }
             Ok(Ok(JobDone::CaptionLines(lines))) => {
                 self.pending_lines = Some(lines);
-                self.fix_log.push_str("\nThe edit is ready. Accept it to keep the new words.");
+                self.fix_log
+                    .push_str("\nThe edit is ready. Accept it to keep the new words.");
             }
             Ok(Ok(JobDone::Folder(path))) => {
                 self.dispatch(WizardAction::ExportDone(path.display().to_string()));
@@ -209,12 +224,16 @@ impl A1App {
                     self.dispatch(WizardAction::ExportError(error));
                 }
             }
-            Err(_) => self.dispatch(WizardAction::ExportError("The job stopped unexpectedly.".into())),
+            Err(_) => self.dispatch(WizardAction::ExportError(
+                "The job stopped unexpectedly.".into(),
+            )),
         }
     }
 
     fn start_transcribe(&mut self) {
-        let Some(path) = self.state.video_path.clone() else { return };
+        let Some(path) = self.state.video_path.clone() else {
+            return;
+        };
         let language = self.state.language;
         let entropy = self.state.entropy_thold;
         let max_context = self.state.max_context;
@@ -256,7 +275,9 @@ impl A1App {
     }
 
     fn start_export_clips(&mut self) {
-        let Some(path) = self.state.video_path.clone() else { return };
+        let Some(path) = self.state.video_path.clone() else {
+            return;
+        };
         let clips: Vec<ClipSegment> = self
             .state
             .clips
@@ -273,15 +294,24 @@ impl A1App {
         let (tx, rx) = mpsc::channel();
         self.progress_rx = Some(rx);
         self.job = Some(backend::spawn_job(move |cancel, child| {
-            let dir = backend::export_kept_clips(std::path::Path::new(&path), &clips, &segments, &cancel, &child, |u| {
-                let _ = tx.send(u);
-            })?;
+            let dir = backend::export_kept_clips(
+                std::path::Path::new(&path),
+                &clips,
+                &segments,
+                &cancel,
+                &child,
+                |u| {
+                    let _ = tx.send(u);
+                },
+            )?;
             Ok(JobDone::Folder(dir))
         }));
     }
 
     fn start_reframe(&mut self) {
-        let Some(path) = self.state.video_path.clone() else { return };
+        let Some(path) = self.state.video_path.clone() else {
+            return;
+        };
         let crop = current_crop(&self.state, self.ratio);
         self.dispatch(WizardAction::StartRender);
         self.job = Some(backend::spawn_job(move |cancel, child| {
@@ -291,13 +321,22 @@ impl A1App {
     }
 
     fn start_captions(&mut self) {
-        let Some(path) = self.state.video_path.clone() else { return };
+        let Some(path) = self.state.video_path.clone() else {
+            return;
+        };
         let cues = active_cues(&self.state, self.caption_source);
         let look = self.caption_look;
         let style = self.caption_style.clone();
         self.dispatch(WizardAction::StartRender);
         self.job = Some(backend::spawn_job(move |cancel, child| {
-            let out = backend::export_captions(std::path::Path::new(&path), &cues, look, &style, &cancel, &child)?;
+            let out = backend::export_captions(
+                std::path::Path::new(&path),
+                &cues,
+                look,
+                &style,
+                &cancel,
+                &child,
+            )?;
             Ok(JobDone::Folder(out))
         }));
     }
@@ -323,12 +362,16 @@ impl A1App {
     }
 
     fn ensure_frame(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.state.video_path.clone() else { return };
+        let Some(path) = self.state.video_path.clone() else {
+            return;
+        };
         let key = (path.clone(), self.playhead_ms / 200 * 200);
         if self.frame_for.as_ref() == Some(&key) {
             return;
         }
-        if let Ok((w, h, rgba)) = backend::grab_frame(std::path::Path::new(&path), self.playhead_ms, 960) {
+        if let Ok((w, h, rgba)) =
+            backend::grab_frame(std::path::Path::new(&path), self.playhead_ms, 960)
+        {
             let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
             self.frame = Some(ctx.load_texture("frame", image, egui::TextureOptions::LINEAR));
             self.frame_for = Some(key);
@@ -370,15 +413,20 @@ impl eframe::App for A1App {
             }
             ctx.request_repaint();
         }
-        let show_picture = matches!(self.state.screen, Screen::Review | Screen::Reframe | Screen::Captions | Screen::FixWords)
-            && self.state.video_path.is_some();
+        let show_picture = matches!(
+            self.state.screen,
+            Screen::Review | Screen::Reframe | Screen::Captions | Screen::FixWords
+        ) && self.state.video_path.is_some();
         if show_picture {
             self.ensure_frame(ctx);
         }
 
-        egui::TopBottomPanel::bottom("stripe").exact_height(4.0).frame(egui::Frame::NONE).show(ctx, |ui| {
-            paint_sunset(ui.painter(), ui.max_rect());
-        });
+        egui::TopBottomPanel::bottom("stripe")
+            .exact_height(4.0)
+            .frame(egui::Frame::NONE)
+            .show(ctx, |ui| {
+                paint_sunset(ui.painter(), ui.max_rect());
+            });
         self.draw(ctx);
     }
 }
@@ -394,28 +442,31 @@ impl A1App {
                 ui.add_space(4.0);
             } else {
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new("A1 Slice").color(CREAM)).clicked() {
+                    ui.add_space(8.0);
+                    if text_hit(ui, "A1 Slice", 15.0, false).clicked() {
                         self.go_home();
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Home").clicked() {
+                        ui.add_space(8.0);
+                        if text_hit(ui, "Home", 16.0, true).clicked() {
                             self.go_home();
                         }
                     });
                 });
-                ui.separator();
             }
-            egui::ScrollArea::vertical().show(ui, |ui| match self.state.screen {
-                Screen::Home => self.home(ui),
-                Screen::Transcribe => self.transcribe(ui),
-                Screen::TranscribeDone => self.transcribe_done(ui),
-                Screen::Find => self.find(ui),
-                Screen::Review => self.review(ui, ctx),
-                Screen::Export => self.export_screen(ui),
-                Screen::Reframe => self.reframe(ui, ctx),
-                Screen::Captions => self.captions(ui, ctx),
-                Screen::FixWords => self.fix_words(ui),
-            });
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| match self.state.screen {
+                    Screen::Home => self.home(ui),
+                    Screen::Transcribe => self.transcribe(ui),
+                    Screen::TranscribeDone => self.transcribe_done(ui),
+                    Screen::Find => self.find(ui),
+                    Screen::Review => self.review(ui, ctx),
+                    Screen::Export => self.export_screen(ui),
+                    Screen::Reframe => self.reframe(ui, ctx),
+                    Screen::Captions => self.captions(ui, ctx),
+                    Screen::FixWords => self.fix_words(ui),
+                });
         });
     }
 
@@ -458,7 +509,11 @@ impl A1App {
                     .extra_letter_spacing(1.0),
             );
             ui.add_space(10.0);
-            ui.label(RichText::new("What do you want to do?").font(serif).color(CREAM_HEAD));
+            ui.label(
+                RichText::new("What do you want to do?")
+                    .font(serif)
+                    .color(CREAM_HEAD),
+            );
             ui.add_space(12.0);
             ui.label(
                 RichText::new("Pick a tool. You’ll choose the video on the next screen.")
@@ -469,9 +524,21 @@ impl A1App {
         ui.add_space(if narrow { 16.0 } else { 40.0 });
 
         let tools = [
-            (ToolId::Transcribe, "Transcribe", "Turn speech into a saved transcript."),
-            (ToolId::Find, "Find best parts", "Keep the moments you want, then export them."),
-            (ToolId::Reframe, "Reframe", "Fit the picture to Story, YouTube, or square."),
+            (
+                ToolId::Transcribe,
+                "Transcribe",
+                "Turn speech into a saved transcript.",
+            ),
+            (
+                ToolId::Find,
+                "Find best parts",
+                "Keep the moments you want, then export them.",
+            ),
+            (
+                ToolId::Reframe,
+                "Reframe",
+                "Fit the picture to Story, YouTube, or square.",
+            ),
             (ToolId::Captions, "Captions", "Put the words on the video."),
         ];
         let rows = tools.len().div_ceil(cols);
@@ -484,7 +551,10 @@ impl A1App {
             let col = index % cols;
             let row = index / cols;
             let rect = egui::Rect::from_min_size(
-                egui::pos2(left + col as f32 * (tile_w + gap), origin_y + row as f32 * (tile_h + gap)),
+                egui::pos2(
+                    left + col as f32 * (tile_w + gap),
+                    origin_y + row as f32 * (tile_h + gap),
+                ),
                 egui::vec2(tile_w, tile_h),
             );
             if home_tile(ui, rect, title, detail, id, narrow).clicked() {
@@ -494,34 +564,75 @@ impl A1App {
         if let Some(id) = open {
             self.enter(id);
         }
+        ui.add_space(80.0);
     }
 
-    fn tool_intro(&mut self, ui: &mut egui::Ui, tool: ToolId, title: &str, lead: &str, steps: &[&str]) {
-        ui.label(RichText::new(title).heading().size(36.0).color(CREAM));
-        ui.label(RichText::new(lead).color(CREAM));
-        ui.add_space(8.0);
-        ui.label(RichText::new("WHAT YOU DO").small().color(MUTED));
-        for (i, step) in steps.iter().enumerate() {
-            ui.label(format!("{:02}  {step}", i + 1));
-        }
-        ui.add_space(8.0);
-        if primary(ui, "Choose a video").clicked() {
-            self.choose_video(tool);
-        }
-        ui.label(RichText::new("MP4, MOV, MKV, AVI, or WebM").color(MUTED).small());
-        if !self.recent.is_empty() {
-            ui.add_space(12.0);
-            ui.label(RichText::new("RECENT VIDEOS").small().color(MUTED));
-            ui.label(RichText::new("Open a file you used before. To work on a different video, choose one above.").color(MUTED).small());
-            let picks: Vec<(String, String)> = self.recent.clone();
-            for (path, note) in picks {
-                let name = file_name(&path);
-                let label = if note.is_empty() { name } else { format!("{name}\n{note}") };
-                if ui.button(label).clicked() {
-                    self.open_video(tool, PathBuf::from(path));
+    fn tool_intro(
+        &mut self,
+        ui: &mut egui::Ui,
+        tool: ToolId,
+        title: &str,
+        lead: &str,
+        steps: &[&str],
+    ) {
+        let avail = ui.available_width();
+        let sheet_w = avail.min(720.0).max(240.0);
+        let side = ((avail - sheet_w) * 0.5).max(0.0);
+        let title_size = if sheet_w < 520.0 { 40.0 } else { 52.0 };
+        let serif = egui::FontId::new(title_size, egui::FontFamily::Name("Noto Serif".into()));
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.add_space(side);
+            ui.vertical(|ui| {
+                ui.set_width(sheet_w);
+                let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 64.0), egui::Sense::hover());
+                ui.painter().rect(
+                    icon_rect,
+                    egui::CornerRadius::same(12),
+                    CREAM_HEAD,
+                    Stroke::new(1.0_f32, BEIGE),
+                    egui::StrokeKind::Inside,
+                );
+                paint_tool_icon(ui.painter(), icon_rect, tool);
+                ui.add_space(28.0);
+                ui.label(RichText::new(title).font(serif).color(CREAM_HEAD));
+                ui.add_space(12.0);
+                ui.label(RichText::new(lead).size(18.0).color(MUTED));
+                ui.add_space(28.0);
+                ui.label(RichText::new("What you do").size(18.0).color(CREAM_HEAD));
+                ui.add_space(12.0);
+                for (index, step) in steps.iter().enumerate() {
+                    ui.horizontal_top(|ui| {
+                        ui.label(RichText::new(format!("{:02}", index + 1)).size(15.0).color(ORANGE).strong());
+                        ui.add_space(8.0);
+                        ui.label(RichText::new(*step).size(18.0).color(CREAM));
+                    });
+                    ui.add_space(10.0);
                 }
-            }
-        }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    if primary_lg(ui, "Choose a video").clicked() {
+                        self.choose_video(tool);
+                    }
+                    ui.label(RichText::new("MP4, MOV, MKV, AVI, or WebM").size(15.0).color(Color32::from_rgb(0x8a, 0x8a, 0x8a)));
+                });
+                if !self.recent.is_empty() {
+                    ui.add_space(28.0);
+                    ui.label(RichText::new("Recent videos").size(18.0).color(CREAM_HEAD));
+                    ui.add_space(8.0);
+                    ui.label(RichText::new("Open a file you used before. To work on a different video, choose one above.").size(16.0).color(MUTED));
+                    ui.add_space(10.0);
+                    let picks = self.recent.clone();
+                    let last = picks.len().saturating_sub(1);
+                    for (index, (path, note)) in picks.into_iter().enumerate() {
+                        if recent_row(ui, &file_name(&path), &note, index == 0, index == last).clicked() {
+                            self.open_video(tool, PathBuf::from(path));
+                        }
+                    }
+                }
+            });
+        });
     }
 
     fn transcribe(&mut self, ui: &mut egui::Ui) {
@@ -537,19 +648,27 @@ impl A1App {
                     "Start. The transcript is saved next to the video, and you can leave after that.",
                 ],
             );
-            return;
-        }
-        if self.state.transcribe_stage == PipelineStage::Extracting || self.state.transcribe_stage == PipelineStage::Transcribing || self.state.transcribe_stage == PipelineStage::Downloading {
-            ui.label(RichText::new("Transcribing").heading().size(36.0).color(CREAM));
+        } else if self.state.transcribe_stage == PipelineStage::Extracting
+            || self.state.transcribe_stage == PipelineStage::Transcribing
+            || self.state.transcribe_stage == PipelineStage::Downloading
+        {
+            ui.label(
+                RichText::new("Transcribing")
+                    .heading()
+                    .size(36.0)
+                    .color(CREAM),
+            );
             ui.label(&self.state.transcribe_message);
             progress(ui, self.state.transcribe_percent);
             if ui.button("Cancel").clicked() {
                 self.cancel();
             }
-            return;
-        }
-        if self.state.transcribe_stage == PipelineStage::Error {
-            ui.label(RichText::new("Transcription failed").heading().color(ORANGE));
+        } else if self.state.transcribe_stage == PipelineStage::Error {
+            ui.label(
+                RichText::new("Transcription failed")
+                    .heading()
+                    .color(ORANGE),
+            );
             if let Some(error) = &self.state.transcribe_error {
                 if !error.is_empty() {
                     ui.label(RichText::new(error).color(ORANGE));
@@ -558,34 +677,49 @@ impl A1App {
             if primary(ui, "Try again").clicked() {
                 self.start_transcribe();
             }
-            return;
-        }
-        ui.label(RichText::new("Transcribe").heading().size(36.0).color(CREAM));
-        if let Some(path) = &self.state.video_path {
-            ui.label(file_name(path));
-        }
-        ui.label("The speech stays on this computer.");
-        ui.label(RichText::new("SPOKEN LANGUAGE").small().color(MUTED));
-        ui.horizontal(|ui| {
-            for (lang, label) in [(VideoLanguage::Auto, "Auto-detect"), (VideoLanguage::En, "English"), (VideoLanguage::Pt, "Portuguese"), (VideoLanguage::Es, "Spanish")] {
-                if ui.selectable_label(self.state.language == lang, label).clicked() {
-                    self.dispatch(WizardAction::SetLanguage(lang));
+        } else {
+            ui.label(
+                RichText::new("Transcribe")
+                    .heading()
+                    .size(36.0)
+                    .color(CREAM),
+            );
+            if let Some(path) = &self.state.video_path {
+                ui.label(file_name(path));
+            }
+            ui.label("The speech stays on this computer.");
+            ui.label(RichText::new("SPOKEN LANGUAGE").small().color(MUTED));
+            ui.horizontal(|ui| {
+                for (lang, label) in [
+                    (VideoLanguage::Auto, "Auto-detect"),
+                    (VideoLanguage::En, "English"),
+                    (VideoLanguage::Pt, "Portuguese"),
+                    (VideoLanguage::Es, "Spanish"),
+                ] {
+                    if ui
+                        .selectable_label(self.state.language == lang, label)
+                        .clicked()
+                    {
+                        self.dispatch(WizardAction::SetLanguage(lang));
+                    }
                 }
-            }
-        });
-        let saved = self.state.segments.len();
-        if saved > 0 {
-            ui.label(format!("This video already has a transcript ({saved} {}).", if saved == 1 { "line" } else { "lines" }));
-            if primary(ui, "Use the saved transcript").clicked() {
-                self.dispatch(WizardAction::UseSavedTranscript);
-            }
-            if ui.button("Transcribe again").clicked() {
+            });
+            let saved = self.state.segments.len();
+            if saved > 0 {
+                ui.label(format!(
+                    "This video already has a transcript ({saved} {}).",
+                    if saved == 1 { "line" } else { "lines" }
+                ));
+                if primary(ui, "Use the saved transcript").clicked() {
+                    self.dispatch(WizardAction::UseSavedTranscript);
+                }
+                if ui.button("Transcribe again").clicked() {
+                    self.start_transcribe();
+                }
+            } else if primary(ui, "Start transcribing").clicked() {
                 self.start_transcribe();
             }
-        } else if primary(ui, "Start transcribing").clicked() {
-            self.start_transcribe();
-        }
-        ui.collapsing("If the words come out wrong", |ui| {
+            ui.collapsing("If the words come out wrong", |ui| {
             ui.label("Leave these as they are unless a transcript is missing words, full of junk, or stuck repeating itself.");
             ui.label("Drop uncertain words");
             let mut entropy = self.state.entropy_thold as f32;
@@ -605,12 +739,22 @@ impl A1App {
                 self.dispatch(WizardAction::SetTemperatureInc(temp as f64));
             }
         });
+        }
+        ui.add_space(80.0);
     }
 
     fn transcribe_done(&mut self, ui: &mut egui::Ui) {
         let lines = self.state.segments.len();
-        ui.label(RichText::new("Transcript saved").heading().size(36.0).color(CREAM));
-        ui.label(format!("{lines} {} saved in a text file in the same folder as the video.", if lines == 1 { "line is" } else { "lines are" }));
+        ui.label(
+            RichText::new("Transcript saved")
+                .heading()
+                .size(36.0)
+                .color(CREAM),
+        );
+        ui.label(format!(
+            "{lines} {} saved in a text file in the same folder as the video.",
+            if lines == 1 { "line is" } else { "lines are" }
+        ));
         if let Some(path) = &self.state.video_path {
             let text = sidecars::transcript_text_path(std::path::Path::new(path));
             ui.label(RichText::new("THE FILE").small().color(MUTED));
@@ -652,14 +796,24 @@ impl A1App {
             return;
         }
         if self.state.segments.is_empty() {
-            ui.label(RichText::new("Find best parts").heading().size(36.0).color(CREAM));
+            ui.label(
+                RichText::new("Find best parts")
+                    .heading()
+                    .size(36.0)
+                    .color(CREAM),
+            );
             ui.label("This video has no transcript yet. The words have to be written down before the best parts can be found.");
             if primary(ui, "Transcribe this video").clicked() {
                 self.dispatch(WizardAction::PrepareTranscribe(ReturnTo::Find));
             }
             return;
         }
-        ui.label(RichText::new("Find best parts").heading().size(36.0).color(CREAM));
+        ui.label(
+            RichText::new("Find best parts")
+                .heading()
+                .size(36.0)
+                .color(CREAM),
+        );
         if self.state.analyzing {
             ui.label(&self.state.analyze_message);
             progress(ui, self.state.analyze_percent);
@@ -707,7 +861,9 @@ impl A1App {
         ui.label("Turn a clip off to leave it out. Nudge the start and end, then export.");
         let ids: Vec<String> = self.state.clips.iter().map(|c| c.id.clone()).collect();
         for id in ids {
-            let Some(clip) = self.state.clips.iter().find(|c| c.id == id).cloned() else { continue };
+            let Some(clip) = self.state.clips.iter().find(|c| c.id == id).cloned() else {
+                continue;
+            };
             ui.group(|ui| {
                 ui.label(RichText::new(&clip.title).strong().color(CREAM));
                 ui.label(format!("{} – {}", clock(clip.start_ms), clock(clip.end_ms)));
@@ -717,20 +873,60 @@ impl A1App {
                 }
                 ui.horizontal(|ui| {
                     if ui.button("Start −1s").clicked() {
-                        let (start, end) = a1slice_core::clips::nudge_edge(clip.start_ms, clip.end_ms, "start", -1000.0, self.state.video_duration_ms as f64);
-                        self.dispatch(WizardAction::UpdateClipTimes { id: id.clone(), start_ms: start, end_ms: end });
+                        let (start, end) = a1slice_core::clips::nudge_edge(
+                            clip.start_ms,
+                            clip.end_ms,
+                            "start",
+                            -1000.0,
+                            self.state.video_duration_ms as f64,
+                        );
+                        self.dispatch(WizardAction::UpdateClipTimes {
+                            id: id.clone(),
+                            start_ms: start,
+                            end_ms: end,
+                        });
                     }
                     if ui.button("Start +1s").clicked() {
-                        let (start, end) = a1slice_core::clips::nudge_edge(clip.start_ms, clip.end_ms, "start", 1000.0, self.state.video_duration_ms as f64);
-                        self.dispatch(WizardAction::UpdateClipTimes { id: id.clone(), start_ms: start, end_ms: end });
+                        let (start, end) = a1slice_core::clips::nudge_edge(
+                            clip.start_ms,
+                            clip.end_ms,
+                            "start",
+                            1000.0,
+                            self.state.video_duration_ms as f64,
+                        );
+                        self.dispatch(WizardAction::UpdateClipTimes {
+                            id: id.clone(),
+                            start_ms: start,
+                            end_ms: end,
+                        });
                     }
                     if ui.button("End −1s").clicked() {
-                        let (start, end) = a1slice_core::clips::nudge_edge(clip.start_ms, clip.end_ms, "end", -1000.0, self.state.video_duration_ms as f64);
-                        self.dispatch(WizardAction::UpdateClipTimes { id: id.clone(), start_ms: start, end_ms: end });
+                        let (start, end) = a1slice_core::clips::nudge_edge(
+                            clip.start_ms,
+                            clip.end_ms,
+                            "end",
+                            -1000.0,
+                            self.state.video_duration_ms as f64,
+                        );
+                        self.dispatch(WizardAction::UpdateClipTimes {
+                            id: id.clone(),
+                            start_ms: start,
+                            end_ms: end,
+                        });
                     }
                     if ui.button("End +1s").clicked() {
-                        let (start, end) = a1slice_core::clips::nudge_edge(clip.start_ms, clip.end_ms, "end", 1000.0, self.state.video_duration_ms as f64);
-                        self.dispatch(WizardAction::UpdateClipTimes { id, start_ms: start, end_ms: end });
+                        let (start, end) = a1slice_core::clips::nudge_edge(
+                            clip.start_ms,
+                            clip.end_ms,
+                            "end",
+                            1000.0,
+                            self.state.video_duration_ms as f64,
+                        );
+                        self.dispatch(WizardAction::UpdateClipTimes {
+                            id,
+                            start_ms: start,
+                            end_ms: end,
+                        });
                     }
                 });
             });
@@ -744,8 +940,15 @@ impl A1App {
     }
 
     fn export_screen(&mut self, ui: &mut egui::Ui) {
-        let done = self.state.export_stage == PipelineStage::Done && self.state.output_dir.is_some();
-        let title = if done { "Export complete" } else if self.state.export_error.is_some() { "Export failed" } else { "Exporting" };
+        let done =
+            self.state.export_stage == PipelineStage::Done && self.state.output_dir.is_some();
+        let title = if done {
+            "Export complete"
+        } else if self.state.export_error.is_some() {
+            "Export failed"
+        } else {
+            "Exporting"
+        };
         ui.label(RichText::new(title).heading().size(36.0).color(CREAM));
         if done {
             if let Some(dir) = &self.state.output_dir {
@@ -797,10 +1000,26 @@ impl A1App {
         ui.label("Drag the frame until the subject sits inside it. Scroll to zoom in. This frame is saved on the video.");
         ui.horizontal(|ui| {
             for preset in CROP_PRESETS {
-                if ui.selectable_label(self.ratio == preset.ratio, format!("{}\n{}", preset.label, preset.detail)).clicked() {
+                if ui
+                    .selectable_label(
+                        self.ratio == preset.ratio,
+                        format!("{}\n{}", preset.label, preset.detail),
+                    )
+                    .clicked()
+                {
                     self.ratio = preset.ratio;
                     if preset.ratio != CropRatio::Original {
-                        let crop = self.state.framing.get(&preset.ratio).copied().unwrap_or(ClipCrop { ratio: preset.ratio, cx: 0.5, cy: 0.5, zoom: 0.0 });
+                        let crop =
+                            self.state
+                                .framing
+                                .get(&preset.ratio)
+                                .copied()
+                                .unwrap_or(ClipCrop {
+                                    ratio: preset.ratio,
+                                    cx: 0.5,
+                                    cy: 0.5,
+                                    zoom: 0.0,
+                                });
                         let mut framing = self.state.framing.clone();
                         framing.insert(preset.ratio, crop);
                         self.dispatch(WizardAction::SetFraming(framing.clone()));
@@ -817,9 +1036,15 @@ impl A1App {
             let mut cy = crop.cy as f32;
             let mut zoom = crop.zoom as f32;
             let mut changed = false;
-            changed |= ui.add(egui::Slider::new(&mut cx, 0.0..=1.0).text("horizontal")).changed();
-            changed |= ui.add(egui::Slider::new(&mut cy, 0.0..=1.0).text("vertical")).changed();
-            changed |= ui.add(egui::Slider::new(&mut zoom, 0.0..=1.0).text("zoom")).changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut cx, 0.0..=1.0).text("horizontal"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut cy, 0.0..=1.0).text("vertical"))
+                .changed();
+            changed |= ui
+                .add(egui::Slider::new(&mut zoom, 0.0..=1.0).text("zoom"))
+                .changed();
             if changed {
                 crop.cx = cx as f64;
                 crop.cy = cy as f64;
@@ -866,21 +1091,45 @@ impl A1App {
             return;
         }
         self.picture(ui, ctx);
-        let cue = active_cues(&self.state, self.caption_source).into_iter().find(|c| self.playhead_ms >= c.start_ms && self.playhead_ms < c.end_ms);
+        let cue = active_cues(&self.state, self.caption_source)
+            .into_iter()
+            .find(|c| self.playhead_ms >= c.start_ms && self.playhead_ms < c.end_ms);
         if let Some(cue) = cue {
-            ui.label(RichText::new(&cue.text).size(22.0).color(ink_color(&self.caption_style)));
+            ui.label(
+                RichText::new(&cue.text)
+                    .size(22.0)
+                    .color(ink_color(&self.caption_style)),
+            );
         }
-        ui.label(RichText::new("WHERE DO THE WORDS COME FROM?").small().color(MUTED));
+        ui.label(
+            RichText::new("WHERE DO THE WORDS COME FROM?")
+                .small()
+                .color(MUTED),
+        );
         ui.horizontal(|ui| {
-            if ui.selectable_label(self.caption_source == CaptionSource::Transcript, "Transcript").clicked() {
+            if ui
+                .selectable_label(
+                    self.caption_source == CaptionSource::Transcript,
+                    "Transcript",
+                )
+                .clicked()
+            {
                 self.caption_source = CaptionSource::Transcript;
             }
-            if ui.selectable_label(self.caption_source == CaptionSource::Manual, "Caption file").clicked() {
+            if ui
+                .selectable_label(self.caption_source == CaptionSource::Manual, "Caption file")
+                .clicked()
+            {
                 self.caption_source = CaptionSource::Manual;
             }
         });
-        if self.caption_source == CaptionSource::Manual && ui.button("Choose a caption file").clicked() {
-            if let Some(path) = rfd::FileDialog::new().add_filter("Captions", &["srt", "txt", "vtt"]).pick_file() {
+        if self.caption_source == CaptionSource::Manual
+            && ui.button("Choose a caption file").clicked()
+        {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("Captions", &["srt", "txt", "vtt"])
+                .pick_file()
+            {
                 match std::fs::read_to_string(&path) {
                     Ok(text) => {
                         let cues = parse_loose_cues(&text);
@@ -889,7 +1138,13 @@ impl A1App {
                         } else {
                             self.dispatch(WizardAction::SetSegments(cues.clone()));
                             self.status.clear();
-                            let project = caption_project(self.caption_source, self.caption_look, self.caption_style.clone(), cues, Some(path.display().to_string()));
+                            let project = caption_project(
+                                self.caption_source,
+                                self.caption_look,
+                                self.caption_style.clone(),
+                                cues,
+                                Some(path.display().to_string()),
+                            );
                             self.save_captions(project);
                         }
                     }
@@ -902,10 +1157,19 @@ impl A1App {
             self.dispatch(WizardAction::ShowScreen(Screen::FixWords));
         }
         ui.horizontal(|ui| {
-            if ui.selectable_label(self.caption_look == CaptionLook::Srt, "Sidecar .srt").clicked() {
+            if ui
+                .selectable_label(self.caption_look == CaptionLook::Srt, "Sidecar .srt")
+                .clicked()
+            {
                 self.caption_look = CaptionLook::Srt;
             }
-            if ui.selectable_label(self.caption_look == CaptionLook::Burn, "Burn into the picture").clicked() {
+            if ui
+                .selectable_label(
+                    self.caption_look == CaptionLook::Burn,
+                    "Burn into the picture",
+                )
+                .clicked()
+            {
                 self.caption_look = CaptionLook::Burn;
             }
         });
@@ -926,20 +1190,34 @@ impl A1App {
             }
         } else if primary(ui, "Export captions").clicked() {
             let cues = active_cues(&self.state, self.caption_source);
-            self.save_captions(caption_project(self.caption_source, self.caption_look, self.caption_style.clone(), cues, None));
+            self.save_captions(caption_project(
+                self.caption_source,
+                self.caption_look,
+                self.caption_style.clone(),
+                cues,
+                None,
+            ));
             self.start_captions();
         }
     }
 
     fn fix_words(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Fix the words").heading().size(32.0).color(CREAM));
+        ui.label(
+            RichText::new("Fix the words")
+                .heading()
+                .size(32.0)
+                .color(CREAM),
+        );
         ui.label("Ask an agent to correct names and phrases. You can accept or reject the edit.");
         if self.agents.is_empty() {
             ui.label("None of grok, claude, codex, or agy is installed on this computer.");
         }
         ui.horizontal(|ui| {
             for (id, label) in self.agents.clone() {
-                if ui.selectable_label(self.agent_id.as_deref() == Some(id), label).clicked() {
+                if ui
+                    .selectable_label(self.agent_id.as_deref() == Some(id), label)
+                    .clicked()
+                {
                     self.agent_id = Some(id.to_string());
                 }
             }
@@ -963,7 +1241,13 @@ impl A1App {
             ui.horizontal(|ui| {
                 if primary(ui, "Accept").clicked() {
                     self.dispatch(WizardAction::SetSegments(lines.clone()));
-                    self.save_captions(caption_project(self.caption_source, self.caption_look, self.caption_style.clone(), lines, None));
+                    self.save_captions(caption_project(
+                        self.caption_source,
+                        self.caption_look,
+                        self.caption_style.clone(),
+                        lines,
+                        None,
+                    ));
                     self.pending_lines = None;
                     self.dispatch(WizardAction::ShowScreen(Screen::Captions));
                 }
@@ -1028,9 +1312,16 @@ impl A1App {
             if ui.button(label).clicked() {
                 self.toggle_play();
             }
-            ui.label(format!("{} / {}", clock(self.playhead_ms), clock(self.state.video_duration_ms)));
+            ui.label(format!(
+                "{} / {}",
+                clock(self.playhead_ms),
+                clock(self.state.video_duration_ms)
+            ));
             let mut volume = self.volume;
-            if ui.add(egui::Slider::new(&mut volume, 0.0..=1.0).text("volume")).changed() {
+            if ui
+                .add(egui::Slider::new(&mut volume, 0.0..=1.0).text("volume"))
+                .changed()
+            {
                 self.volume = volume;
                 if self.playing {
                     self.stop_audio();
@@ -1045,7 +1336,10 @@ impl A1App {
         } else {
             0.0
         };
-        if ui.add(egui::Slider::new(&mut t, 0.0..=1.0).text("time")).changed() {
+        if ui
+            .add(egui::Slider::new(&mut t, 0.0..=1.0).text("time"))
+            .changed()
+        {
             self.playhead_ms = (t as f64 * self.state.video_duration_ms as f64) as i64;
             self.frame_for = None;
         }
@@ -1140,9 +1434,20 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
-fn home_tile(ui: &mut egui::Ui, rect: egui::Rect, title: &str, detail: &str, tool: ToolId, compact: bool) -> egui::Response {
+fn home_tile(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    title: &str,
+    detail: &str,
+    tool: ToolId,
+    compact: bool,
+) -> egui::Response {
     let response = ui.interact(rect, ui.id().with(title), egui::Sense::click());
-    let border = if response.hovered() || response.has_focus() { HAIRLINE_HOVER } else { HAIRLINE };
+    let border = if response.hovered() || response.has_focus() {
+        HAIRLINE_HOVER
+    } else {
+        HAIRLINE
+    };
     ui.painter().rect(
         rect,
         egui::CornerRadius::same(12),
@@ -1158,7 +1463,8 @@ fn home_tile(ui: &mut egui::Ui, rect: egui::Rect, title: &str, detail: &str, too
     let inner = rect.shrink2(egui::vec2(pad, pad));
     ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
         ui.vertical_centered(|ui| {
-            let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(icon, icon), egui::Sense::hover());
+            let (icon_rect, _) =
+                ui.allocate_exact_size(egui::vec2(icon, icon), egui::Sense::hover());
             ui.painter().rect(
                 icon_rect,
                 egui::CornerRadius::same(if compact { 8 } else { 12 }),
@@ -1168,9 +1474,17 @@ fn home_tile(ui: &mut egui::Ui, rect: egui::Rect, title: &str, detail: &str, too
             );
             paint_tool_icon(ui.painter(), icon_rect, tool);
             ui.add_space(if compact { 8.0 } else { 16.0 });
-            ui.label(RichText::new(title).size(if compact { 18.0 } else { 22.0 }).color(CREAM_HEAD));
+            ui.label(
+                RichText::new(title)
+                    .size(if compact { 18.0 } else { 22.0 })
+                    .color(CREAM_HEAD),
+            );
             ui.add_space(2.0);
-            ui.label(RichText::new(detail).size(if compact { 13.0 } else { 15.0 }).color(MUTED));
+            ui.label(
+                RichText::new(detail)
+                    .size(if compact { 13.0 } else { 15.0 })
+                    .color(MUTED),
+            );
         });
     });
     response
@@ -1199,7 +1513,10 @@ fn paint_tool_icon(painter: &egui::Painter, tile: egui::Rect, tool: ToolId) {
             painter.line(vec![p(11.5, 26.5), p(20.5, 26.5)], stroke);
         }
         ToolId::Find => {
-            painter.line(vec![p(6.0, 9.5), p(9.2, 6.0), p(22.8, 6.0), p(26.0, 9.5)], stroke);
+            painter.line(
+                vec![p(6.0, 9.5), p(9.2, 6.0), p(22.8, 6.0), p(26.0, 9.5)],
+                stroke,
+            );
             painter.rect_stroke(
                 egui::Rect::from_min_size(p(6.0, 9.5), egui::vec2(20.0, 14.0)),
                 egui::CornerRadius::same(2),
@@ -1236,11 +1553,121 @@ fn paint_tool_icon(painter: &egui::Painter, tile: egui::Rect, tool: ToolId) {
 }
 
 fn primary(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    ui.add(egui::Button::new(RichText::new(label).color(Color32::WHITE).size(16.0)).fill(ORANGE).min_size(egui::vec2(180.0, 36.0)))
+    primary_sized(ui, label, 40.0, 14.0)
+}
+
+fn primary_lg(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    primary_sized(ui, label, 48.0, 16.0)
+}
+
+fn primary_sized(ui: &mut egui::Ui, label: &str, height: f32, text: f32) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(label).color(Color32::WHITE).size(text))
+            .fill(ORANGE)
+            .corner_radius(egui::CornerRadius::same(8))
+            .min_size(egui::vec2(180.0, height)),
+    )
+}
+
+fn text_hit(ui: &mut egui::Ui, label: &str, size: f32, chevron: bool) -> egui::Response {
+    let font = egui::FontId::proportional(size);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font, CREAM_HEAD);
+    let extra = if chevron { 18.0 } else { 0.0 };
+    let pad = egui::vec2(12.0, 8.0);
+    let (rect, response) = ui.allocate_exact_size(
+        galley.size() + pad + egui::vec2(extra, 0.0),
+        egui::Sense::click(),
+    );
+    if response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::same(8),
+            Color32::from_white_alpha(16),
+        );
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let text_pos = egui::pos2(
+        rect.left() + 6.0 + extra,
+        rect.center().y - galley.size().y * 0.5,
+    );
+    if chevron {
+        let c = rect.left_center() + egui::vec2(10.0, 0.0);
+        ui.painter().line(
+            vec![
+                c + egui::vec2(5.0, -5.0),
+                c + egui::vec2(-1.0, 0.0),
+                c + egui::vec2(5.0, 5.0),
+            ],
+            Stroke::new(1.6_f32, CREAM_HEAD),
+        );
+    }
+    ui.painter().galley(text_pos, galley, CREAM_HEAD);
+    response
+}
+
+fn recent_row(
+    ui: &mut egui::Ui,
+    name: &str,
+    note: &str,
+    first: bool,
+    last: bool,
+) -> egui::Response {
+    let width = ui.available_width();
+    let height = if note.is_empty() { 56.0 } else { 72.0 };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let radius = egui::CornerRadius {
+        nw: if first { 12 } else { 0 },
+        ne: if first { 12 } else { 0 },
+        sw: if last { 12 } else { 0 },
+        se: if last { 12 } else { 0 },
+    };
+    let fill = if response.hovered() {
+        Color32::from_rgba_unmultiplied(255, 255, 255, 10)
+    } else {
+        SURFACE
+    };
+    ui.painter().rect(
+        rect,
+        radius,
+        fill,
+        Stroke::new(1.0_f32, HAIRLINE),
+        egui::StrokeKind::Inside,
+    );
+    if !last {
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom(),
+            Stroke::new(1.0_f32, HAIRLINE),
+        );
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let text = rect.shrink2(egui::vec2(16.0, 10.0));
+    ui.painter().text(
+        text.left_top(),
+        egui::Align2::LEFT_TOP,
+        name,
+        egui::FontId::proportional(16.0),
+        CREAM_HEAD,
+    );
+    if !note.is_empty() {
+        ui.painter().text(
+            text.left_top() + egui::vec2(0.0, 24.0),
+            egui::Align2::LEFT_TOP,
+            note,
+            egui::FontId::proportional(14.0),
+            MUTED,
+        );
+    }
+    response
 }
 
 fn progress(ui: &mut egui::Ui, percent: f64) {
-    let bar = egui::ProgressBar::new((percent as f32 / 100.0).clamp(0.0, 1.0)).text(format!("{percent:.0}%"));
+    let bar = egui::ProgressBar::new((percent as f32 / 100.0).clamp(0.0, 1.0))
+        .text(format!("{percent:.0}%"));
     ui.add(bar);
 }
 
@@ -1249,7 +1676,11 @@ fn clock(ms: i64) -> String {
 }
 
 fn file_name(path: &str) -> String {
-    std::path::Path::new(path).file_name().and_then(|s| s.to_str()).unwrap_or(path).to_string()
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path)
+        .to_string()
 }
 
 fn settings_of(state: &WizardState) -> AppSettings {
@@ -1282,7 +1713,12 @@ fn current_crop(state: &WizardState, ratio: CropRatio) -> ClipCrop {
     if ratio == CropRatio::Original {
         DEFAULT_CROP
     } else {
-        state.framing.get(&ratio).copied().unwrap_or(ClipCrop { ratio, cx: 0.5, cy: 0.5, zoom: 0.0 })
+        state.framing.get(&ratio).copied().unwrap_or(ClipCrop {
+            ratio,
+            cx: 0.5,
+            cy: 0.5,
+            zoom: 0.0,
+        })
     }
 }
 
@@ -1297,8 +1733,20 @@ fn active_cues(state: &WizardState, source: CaptionSource) -> Vec<TranscriptSegm
     state.segments.clone()
 }
 
-fn caption_project(source: CaptionSource, look: CaptionLook, style: CaptionStyle, cues: Vec<TranscriptSegment>, file_path: Option<String>) -> CaptionProject {
-    CaptionProject { source, look, style, cues, file_path }
+fn caption_project(
+    source: CaptionSource,
+    look: CaptionLook,
+    style: CaptionStyle,
+    cues: Vec<TranscriptSegment>,
+    file_path: Option<String>,
+) -> CaptionProject {
+    CaptionProject {
+        source,
+        look,
+        style,
+        cues,
+        file_path,
+    }
 }
 
 fn normalize_hex(value: &str) -> Option<String> {
@@ -1311,7 +1759,11 @@ fn normalize_hex(value: &str) -> Option<String> {
 }
 
 fn ink_color(style: &CaptionStyle) -> Color32 {
-    if let Some(hex) = style.custom_color.as_deref().and_then(|h| h.strip_prefix('#')) {
+    if let Some(hex) = style
+        .custom_color
+        .as_deref()
+        .and_then(|h| h.strip_prefix('#'))
+    {
         if hex.len() == 6 {
             if let (Ok(r), Ok(g), Ok(b)) = (
                 u8::from_str_radix(&hex[0..2], 16),
@@ -1337,8 +1789,16 @@ fn caption_color(color: CaptionColor) -> Color32 {
 fn style_controls(ui: &mut egui::Ui, style: &mut CaptionStyle, _look: &mut CaptionLook) {
     ui.label(RichText::new("COLOR").small().color(MUTED));
     ui.horizontal_wrapped(|ui| {
-        for (color, label) in [(CaptionColor::White, "White"), (CaptionColor::Cream, "Cream"), (CaptionColor::Yellow, "Yellow"), (CaptionColor::Black, "Black")] {
-            if ui.selectable_label(style.color == color && style.custom_color.is_none(), label).clicked() {
+        for (color, label) in [
+            (CaptionColor::White, "White"),
+            (CaptionColor::Cream, "Cream"),
+            (CaptionColor::Yellow, "Yellow"),
+            (CaptionColor::Black, "Black"),
+        ] {
+            if ui
+                .selectable_label(style.color == color && style.custom_color.is_none(), label)
+                .clicked()
+            {
                 style.color = color;
                 style.custom_color = None;
             }
@@ -1352,10 +1812,18 @@ fn style_controls(ui: &mut egui::Ui, style: &mut CaptionStyle, _look: &mut Capti
             style.custom_color = Some(hex);
         }
     }
-    ui.label(RichText::new("Or type a colour, like #ffb83e.").small().color(MUTED));
+    ui.label(
+        RichText::new("Or type a colour, like #ffb83e.")
+            .small()
+            .color(MUTED),
+    );
     ui.label(RichText::new("POSITION").small().color(MUTED));
     ui.horizontal(|ui| {
-        for (pos, label) in [(CaptionPosition::Bottom, "Bottom"), (CaptionPosition::Middle, "Middle"), (CaptionPosition::Top, "Top")] {
+        for (pos, label) in [
+            (CaptionPosition::Bottom, "Bottom"),
+            (CaptionPosition::Middle, "Middle"),
+            (CaptionPosition::Top, "Top"),
+        ] {
             if ui.selectable_label(style.position == pos, label).clicked() {
                 style.position = pos;
             }
@@ -1363,7 +1831,11 @@ fn style_controls(ui: &mut egui::Ui, style: &mut CaptionStyle, _look: &mut Capti
     });
     ui.label(RichText::new("SIZE").small().color(MUTED));
     ui.horizontal(|ui| {
-        for (size, label) in [(CaptionSize::Small, "Small"), (CaptionSize::Medium, "Medium"), (CaptionSize::Large, "Large")] {
+        for (size, label) in [
+            (CaptionSize::Small, "Small"),
+            (CaptionSize::Medium, "Medium"),
+            (CaptionSize::Large, "Large"),
+        ] {
             if ui.selectable_label(style.size == size, label).clicked() {
                 style.size = size;
                 style.font_size = None;
@@ -1372,7 +1844,11 @@ fn style_controls(ui: &mut egui::Ui, style: &mut CaptionStyle, _look: &mut Capti
     });
     ui.label(RichText::new("FONT").small().color(MUTED));
     ui.horizontal(|ui| {
-        for (font, label) in [(CaptionFont::Sans, "Sans"), (CaptionFont::Serif, "Serif"), (CaptionFont::Mono, "Mono")] {
+        for (font, label) in [
+            (CaptionFont::Sans, "Sans"),
+            (CaptionFont::Serif, "Serif"),
+            (CaptionFont::Mono, "Mono"),
+        ] {
             if ui.selectable_label(style.font == font, label).clicked() {
                 style.font = font;
             }
@@ -1390,7 +1866,11 @@ fn load_recent() -> Vec<(String, String)> {
                 parts.push("Transcript saved".to_string());
             }
             if info.has_clips {
-                parts.push(if info.clip_count == 1 { "1 clip".into() } else { format!("{} clips", info.clip_count) });
+                parts.push(if info.clip_count == 1 {
+                    "1 clip".into()
+                } else {
+                    format!("{} clips", info.clip_count)
+                });
             }
             if info.has_framing {
                 parts.push("Frame saved".into());
@@ -1407,14 +1887,32 @@ fn parse_loose_cues(text: &str) -> Vec<TranscriptSegment> {
     // SRT blocks, then the plain transcript lines this app writes.
     let mut cues = Vec::new();
     for block in text.split("\n\n") {
-        let lines: Vec<&str> = block.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-        let Some(time) = lines.iter().find(|l| l.contains("-->")) else { continue };
-        let Some((start, end)) = time.split_once("-->") else { continue };
+        let lines: Vec<&str> = block
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        let Some(time) = lines.iter().find(|l| l.contains("-->")) else {
+            continue;
+        };
+        let Some((start, end)) = time.split_once("-->") else {
+            continue;
+        };
         let start_ms = srt_clock(start.trim());
         let end_ms = srt_clock(end.trim());
-        let body = lines.iter().skip_while(|l| !l.contains("-->")).skip(1).copied().collect::<Vec<_>>().join("\n");
+        let body = lines
+            .iter()
+            .skip_while(|l| !l.contains("-->"))
+            .skip(1)
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n");
         if end_ms > start_ms && !body.is_empty() {
-            cues.push(TranscriptSegment { start_ms, end_ms, text: body });
+            cues.push(TranscriptSegment {
+                start_ms,
+                end_ms,
+                text: body,
+            });
         }
     }
     if !cues.is_empty() {
@@ -1434,8 +1932,16 @@ fn parse_loose_cues(text: &str) -> Vec<TranscriptSegment> {
     rows.iter()
         .enumerate()
         .map(|(i, (start, text))| {
-            let end = rows.get(i + 1).map(|(n, _)| *n).filter(|n| *n > *start).unwrap_or(start + 2000);
-            TranscriptSegment { start_ms: *start, end_ms: end, text: text.clone() }
+            let end = rows
+                .get(i + 1)
+                .map(|(n, _)| *n)
+                .filter(|n| *n > *start)
+                .unwrap_or(start + 2000);
+            TranscriptSegment {
+                start_ms: *start,
+                end_ms: end,
+                text: text.clone(),
+            }
         })
         .collect()
 }
@@ -1449,7 +1955,12 @@ fn srt_clock(text: &str) -> i64 {
     let mut sec = rest.split('.');
     let s: i64 = sec.next().unwrap_or("0").parse().unwrap_or(0);
     let frac = sec.next().unwrap_or("0");
-    let millis: i64 = format!("{frac:0<3}").chars().take(3).collect::<String>().parse().unwrap_or(0);
+    let millis: i64 = format!("{frac:0<3}")
+        .chars()
+        .take(3)
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
     h * 3_600_000 + m * 60_000 + s * 1000 + millis
 }
 
@@ -1457,7 +1968,11 @@ fn loose_clock(text: &str) -> i64 {
     let bits: Vec<&str> = text.split(':').collect();
     match bits.as_slice() {
         [m, s] => m.parse::<i64>().unwrap_or(0) * 60_000 + s.parse::<i64>().unwrap_or(0) * 1000,
-        [h, m, s] => h.parse::<i64>().unwrap_or(0) * 3_600_000 + m.parse::<i64>().unwrap_or(0) * 60_000 + s.parse::<i64>().unwrap_or(0) * 1000,
+        [h, m, s] => {
+            h.parse::<i64>().unwrap_or(0) * 3_600_000
+                + m.parse::<i64>().unwrap_or(0) * 60_000
+                + s.parse::<i64>().unwrap_or(0) * 1000
+        }
         _ => 0,
     }
 }
@@ -1467,7 +1982,17 @@ fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::process::Chil
     let vol = ((volume.clamp(0.0, 1.0)) * 100.0) as i32;
     if backend::which("ffplay").is_some() {
         return std::process::Command::new("ffplay")
-            .args(["-nodisp", "-autoexit", "-ss", &sec, "-volume", &vol.to_string(), "-loglevel", "quiet", path])
+            .args([
+                "-nodisp",
+                "-autoexit",
+                "-ss",
+                &sec,
+                "-volume",
+                &vol.to_string(),
+                "-loglevel",
+                "quiet",
+                path,
+            ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -1476,7 +2001,13 @@ fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::process::Chil
     }
     if backend::which("mpv").is_some() {
         return std::process::Command::new("mpv")
-            .args(["--no-video", "--really-quiet", &format!("--start={sec}"), &format!("--volume={vol}"), path])
+            .args([
+                "--no-video",
+                "--really-quiet",
+                &format!("--start={sec}"),
+                &format!("--volume={vol}"),
+                path,
+            ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -1485,4 +2016,3 @@ fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::process::Chil
     }
     None
 }
-
