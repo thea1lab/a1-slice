@@ -789,70 +789,132 @@ impl A1App {
                     "Keep or drop each part, nudge the start and end, then export.",
                 ],
             );
+            ui.add_space(80.0);
             return;
         }
-        if !self.state.project_ready {
-            ui.label("Opening the video…");
-            return;
-        }
-        if self.state.segments.is_empty() {
-            ui.label(
-                RichText::new("Find best parts")
-                    .heading()
-                    .size(36.0)
-                    .color(CREAM),
+        let serif = egui::FontId::new(52.0, egui::FontFamily::Name("Noto Serif".into()));
+        with_sheet(ui, |ui| {
+            if !self.state.project_ready {
+                ui.label(RichText::new("Opening the video…").size(16.0).color(MUTED));
+                return;
+            }
+            ui.label(RichText::new("Find best parts").font(serif.clone()).color(CREAM_HEAD));
+            ui.add_space(12.0);
+            if self.state.segments.is_empty() {
+                ui.label(RichText::new("This video has no transcript yet. The words have to be written down before the best parts can be found.").size(18.0).color(MUTED));
+                ui.add_space(20.0);
+                if primary_lg(ui, "Transcribe this video").clicked() {
+                    self.dispatch(WizardAction::PrepareTranscribe(ReturnTo::Find));
+                }
+                return;
+            }
+            ui.label(RichText::new("An agent reads the transcript and suggests clips, with a start and an end for each one. You can also mark a part yourself.").size(18.0).color(MUTED));
+            ui.add_space(28.0);
+            if !self.state.analyzing && !self.state.clips.is_empty() {
+                let count = self.state.clips.len();
+                egui::Frame::new()
+                    .fill(SURFACE)
+                    .stroke(Stroke::new(1.0_f32, HAIRLINE))
+                    .corner_radius(egui::CornerRadius::same(12))
+                    .inner_margin(20.0)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(format!(
+                            "A search is already saved for this video ({count} {}). Open it, or set up a new search below.",
+                            if count == 1 { "clip" } else { "clips" }
+                        )).size(16.0).color(CREAM));
+                        ui.add_space(14.0);
+                        if primary_lg(ui, "Open the saved search").clicked() {
+                            self.dispatch(WizardAction::ShowScreen(Screen::Review));
+                        }
+                    });
+                ui.add_space(28.0);
+            }
+            let lines = self.state.segments.len();
+            egui::CollapsingHeader::new(
+                RichText::new(format!("Transcript · {lines} {}", if lines == 1 { "line" } else { "lines" }))
+                    .size(18.0)
+                    .color(CREAM_HEAD),
+            )
+            .show(ui, |ui| {
+                for segment in &self.state.segments {
+                    ui.label(format!("{}  {}", clock(segment.start_ms), segment.text));
+                }
+            });
+            ui.add_space(20.0);
+            if !self.state.analyzing && secondary(ui, "Mark a part yourself").clicked() {
+                self.dispatch(WizardAction::AddClip);
+            }
+            ui.add_space(28.0);
+            ui.label(RichText::new("Which agent").size(18.0).color(CREAM_HEAD));
+            ui.add_space(8.0);
+            ui.label(RichText::new("The words are sent to this agent so it can suggest clips. The video stays on this computer.").size(16.0).color(MUTED));
+            ui.add_space(12.0);
+            if self.agents.is_empty() {
+                ui.label(RichText::new("This computer has no agent to run. You can still mark a part yourself.").size(16.0).color(MUTED));
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                    for (id, label) in self.agents.clone() {
+                        let selected = self.agent_id.as_deref() == Some(id);
+                        if choice(ui, label, selected).clicked() && !self.state.analyzing {
+                            self.agent_id = Some(id.to_string());
+                        }
+                    }
+                });
+            }
+            ui.add_space(16.0);
+            ui.label(RichText::new("What should it look for?").size(16.0).color(MUTED));
+            ui.add_space(8.0);
+            let mut hint = self.state.user_hint.clone();
+            let hint_edit = ui.add(
+                egui::TextEdit::multiline(&mut hint)
+                    .desired_rows(3)
+                    .hint_text("Two clips about the demo, or the part where the bug shows up.")
+                    .desired_width(f32::INFINITY),
             );
-            ui.label("This video has no transcript yet. The words have to be written down before the best parts can be found.");
-            if primary(ui, "Transcribe this video").clicked() {
-                self.dispatch(WizardAction::PrepareTranscribe(ReturnTo::Find));
+            if hint_edit.changed() {
+                self.dispatch(WizardAction::SetUserHint(hint));
             }
-            return;
-        }
-        ui.label(
-            RichText::new("Find best parts")
-                .heading()
-                .size(36.0)
-                .color(CREAM),
-        );
-        if self.state.analyzing {
-            ui.label(&self.state.analyze_message);
-            progress(ui, self.state.analyze_percent);
-            if ui.button("Cancel").clicked() {
-                self.cancel();
+            ui.add_space(6.0);
+            ui.label(RichText::new("Optional. Name a theme, a number of clips, or a moment to keep.").size(16.0).color(MUTED));
+            if self.state.analyzing {
+                ui.add_space(16.0);
+                progress(ui, self.state.analyze_percent);
+                ui.label(RichText::new(&self.state.analyze_message).size(15.0).color(MUTED));
             }
-            return;
-        }
-        if let Some(error) = &self.state.analyze_error {
-            if !error.is_empty() {
-                ui.label(RichText::new(error).color(ORANGE));
+            if let Some(error) = &self.state.analyze_error {
+                if !error.is_empty() {
+                    ui.add_space(16.0);
+                    egui::Frame::new()
+                        .fill(Color32::from_rgb(0x3a, 0x20, 0x1c))
+                        .stroke(Stroke::new(1.0_f32, Color32::from_rgb(0x7a, 0x3b, 0x32)))
+                        .corner_radius(egui::CornerRadius::same(12))
+                        .inner_margin(16.0)
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("Could not find clips").size(16.0).color(Color32::from_rgb(0xfc, 0xa5, 0xa5)));
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(error).size(14.0).color(Color32::from_rgb(0xfc, 0xa5, 0xa5)));
+                        });
+                }
             }
-        }
-        ui.label(RichText::new("WHICH AGENT").small().color(MUTED));
-        if self.agents.is_empty() {
-            ui.label("None of grok, claude, codex, or agy is installed on this computer.");
-        }
-        ui.horizontal(|ui| {
-            for (id, label) in self.agents.clone() {
-                let selected = self.agent_id.as_deref() == Some(id);
-                if ui.selectable_label(selected, label).clicked() {
-                    self.agent_id = Some(id.to_string());
+            ui.add_space(16.0);
+            if !self.state.analyzing && !self.state.clips.is_empty() && secondary(ui, "Back to the clips").clicked() {
+                self.dispatch(WizardAction::ShowScreen(Screen::Review));
+            }
+            ui.add_space(12.0);
+            if self.state.analyzing {
+                if danger(ui, "Cancel").clicked() {
+                    self.cancel();
+                }
+            } else {
+                let label = if self.state.clips.is_empty() { "Find clips" } else { "Search again" };
+                let enabled = self.agent_id.is_some();
+                if primary_lg(ui, label).clicked() && enabled {
+                    self.start_find();
                 }
             }
         });
-        ui.label("What should the clips be about?");
-        let mut hint = self.state.user_hint.clone();
-        if ui.text_edit_multiline(&mut hint).changed() {
-            self.dispatch(WizardAction::SetUserHint(hint));
-        }
-        if primary(ui, "Find the best parts").clicked() {
-            self.start_find();
-        }
-        if ui.button("Add a clip by hand").clicked() {
-            self.dispatch(WizardAction::AddClip);
-        }
-        if !self.state.clips.is_empty() && ui.button("Back to the clips").clicked() {
-            self.dispatch(WizardAction::ShowScreen(Screen::Review));
-        }
+        ui.add_space(80.0);
     }
 
     fn review(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1552,6 +1614,20 @@ fn paint_tool_icon(painter: &egui::Painter, tile: egui::Rect, tool: ToolId) {
     }
 }
 
+fn with_sheet(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
+    let avail = ui.available_width();
+    let sheet_w = avail.min(720.0).max(240.0);
+    let side = ((avail - sheet_w) * 0.5).max(0.0);
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        ui.add_space(side);
+        ui.vertical(|ui| {
+            ui.set_width(sheet_w);
+            body(ui);
+        });
+    });
+}
+
 fn primary(ui: &mut egui::Ui, label: &str) -> egui::Response {
     primary_sized(ui, label, 40.0, 14.0)
 }
@@ -1560,13 +1636,103 @@ fn primary_lg(ui: &mut egui::Ui, label: &str) -> egui::Response {
     primary_sized(ui, label, 48.0, 16.0)
 }
 
-fn primary_sized(ui: &mut egui::Ui, label: &str, height: f32, text: f32) -> egui::Response {
-    ui.add(
-        egui::Button::new(RichText::new(label).color(Color32::WHITE).size(text))
-            .fill(ORANGE)
-            .corner_radius(egui::CornerRadius::same(8))
-            .min_size(egui::vec2(180.0, height)),
+fn secondary(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    painted_button(
+        ui,
+        label,
+        14.0,
+        CREAM,
+        Color32::TRANSPARENT,
+        Color32::from_white_alpha(16),
+        Stroke::new(1.0_f32, Color32::from_rgb(0x4a, 0x4a, 0x4a)),
+        40.0,
+        20.0,
     )
+}
+
+fn danger(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    painted_button(
+        ui,
+        label,
+        14.0,
+        CREAM,
+        Color32::TRANSPARENT,
+        Color32::from_rgb(0x3a, 0x20, 0x1c),
+        Stroke::new(1.0_f32, Color32::from_rgb(0x7a, 0x3b, 0x32)),
+        40.0,
+        20.0,
+    )
+}
+
+fn choice(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let color = if selected { CREAM_HEAD } else { CREAM };
+    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(16.0), color);
+    let size = egui::vec2((galley.size().x + 32.0).max(72.0), 44.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let border = if selected {
+        ORANGE
+    } else if response.hovered() {
+        Color32::from_rgb(0x8a, 0x8a, 0x8a)
+    } else {
+        Color32::from_rgb(0x3a, 0x3a, 0x3a)
+    };
+    let fill = if selected { Color32::from_rgb(0x24, 0x1c, 0x18) } else { SURFACE };
+    ui.painter().rect(rect, egui::CornerRadius::same(8), fill, Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
+    let pos = egui::pos2(rect.center().x - galley.size().x * 0.5, rect.center().y - galley.size().y * 0.5);
+    ui.painter().galley(pos, galley, color);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+fn primary_sized(ui: &mut egui::Ui, label: &str, height: f32, text: f32) -> egui::Response {
+    painted_button(
+        ui,
+        label,
+        text,
+        Color32::WHITE,
+        ORANGE,
+        Color32::from_rgb(0xcc, 0x3a, 0x05),
+        Stroke::NONE,
+        height,
+        22.0,
+    )
+}
+
+fn painted_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    text_size: f32,
+    text_color: Color32,
+    fill: Color32,
+    hover_fill: Color32,
+    stroke: Stroke,
+    height: f32,
+    pad_x: f32,
+) -> egui::Response {
+    let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(text_size), text_color);
+    let width = galley.size().x + pad_x * 2.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let fill = if response.hovered() { hover_fill } else { fill };
+    let stroke = if response.hovered() && stroke.color == Color32::from_rgb(0x4a, 0x4a, 0x4a) {
+        Stroke::new(1.0_f32, CREAM)
+    } else {
+        stroke
+    };
+    ui.painter().rect(
+        rect,
+        egui::CornerRadius::same(8),
+        fill,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    let pos = egui::pos2(rect.center().x - galley.size().x * 0.5, rect.center().y - galley.size().y * 0.5);
+    ui.painter().galley(pos, galley, text_color);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
 }
 
 fn text_hit(ui: &mut egui::Ui, label: &str, size: f32, chevron: bool) -> egui::Response {
