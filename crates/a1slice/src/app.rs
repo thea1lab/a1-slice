@@ -1967,20 +1967,25 @@ fn paint_player_scrim(painter: &egui::Painter, rect: egui::Rect) {
     if rect.height() < 1.0 || rect.width() < 1.0 {
         return;
     }
-    let slices = rect.height().round().clamp(8.0, 96.0) as i32;
-    for i in 0..slices {
-        let t0 = i as f32 / slices as f32;
-        let t1 = (i + 1) as f32 / slices as f32;
-        let t = (t0 + t1) * 0.5;
-        let alpha = (t * t * 210.0) as u8;
-        let y0 = egui::lerp(rect.top()..=rect.bottom(), t0);
-        let y1 = egui::lerp(rect.top()..=rect.bottom(), t1);
-        painter.rect_filled(
-            egui::Rect::from_min_max(egui::pos2(rect.left(), y0), egui::pos2(rect.right(), y1)),
-            0.0,
-            Color32::from_black_alpha(alpha),
-        );
+    // Vertex colors interpolate, so the fade is continuous instead of a stack of bars.
+    let rows = 16;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=rows {
+        let t = i as f32 / rows as f32;
+        let y = egui::lerp(rect.top()..=rect.bottom(), t);
+        let color = Color32::from_black_alpha((t * t * 210.0).round() as u8);
+        mesh.colored_vertex(egui::pos2(rect.left(), y), color);
+        mesh.colored_vertex(egui::pos2(rect.right(), y), color);
     }
+    for i in 0..rows {
+        let left = (i * 2) as u32;
+        let right = left + 1;
+        let next_left = left + 2;
+        let next_right = left + 3;
+        mesh.add_triangle(left, right, next_right);
+        mesh.add_triangle(left, next_right, next_left);
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 fn paint_icon_hover(painter: &egui::Painter, response: &egui::Response) {
