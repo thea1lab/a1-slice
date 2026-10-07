@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
+use a1slice_core::clips::{self, ClipViewWindow, CLIP_VIEW_PAD_MS, FINE_DRAG_PX};
 use a1slice_core::crop::{self, CROP_PRESETS};
 use a1slice_core::sidecars::{self, with_clip_status};
 use a1slice_core::types::*;
@@ -22,6 +23,32 @@ const INK: Color32 = Color32::from_rgb(0x1f, 0x1f, 0x1f);
 const BEIGE: Color32 = Color32::from_rgb(0xe6, 0xd5, 0xa8);
 const HAIRLINE: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 20);
 const HAIRLINE_HOVER: Color32 = Color32::from_rgb(0xc7, 0xc7, 0xc7);
+const HOLD_ARM_SECS: f64 = 0.280;
+const HOLD_STEP_SECS: f64 = 0.340;
+
+enum ReviewTrim {
+    Idle,
+    Handle {
+        edge: &'static str,
+        frozen_start: i64,
+        frozen_end: i64,
+        view: ClipViewWindow,
+        outward_since: Option<f64>,
+        steps: i32,
+        step_origin: Option<i64>,
+        last_step_at: f64,
+        /// Where playback was before the handle moved, so the loop can resume inside the clip.
+        resume_ms: i64,
+    },
+    Clock {
+        edge: &'static str,
+        origin_x: f32,
+        origin_start: i64,
+        origin_end: i64,
+        applied: i64,
+        resume_ms: i64,
+    },
+}
 
 pub struct A1App {
     state: WizardState,
@@ -49,6 +76,11 @@ pub struct A1App {
     fix_log: String,
     pending_lines: Option<Vec<TranscriptSegment>>,
     status: String,
+    review_index: usize,
+    review_for: Option<String>,
+    review_view: Option<ClipViewWindow>,
+    loop_at_clip: bool,
+    trim: ReviewTrim,
 }
 
 impl A1App {
@@ -102,6 +134,11 @@ impl A1App {
             fix_log: String::new(),
             pending_lines: None,
             status: String::new(),
+            review_index: 0,
+            review_for: None,
+            review_view: None,
+            loop_at_clip: true,
+            trim: ReviewTrim::Idle,
         }
     }
 
@@ -150,6 +187,10 @@ impl A1App {
             duration_ms: duration,
         });
         self.playhead_ms = 0;
+        self.review_index = 0;
+        self.review_for = None;
+        self.review_view = None;
+        self.trim = ReviewTrim::Idle;
         self.frame = None;
         self.frame_for = None;
         self.frame_rx = None;
@@ -216,6 +257,10 @@ impl A1App {
                     clips: with,
                     raw_response: raw,
                 });
+                self.review_index = 0;
+                self.review_for = None;
+                self.review_view = None;
+                self.trim = ReviewTrim::Idle;
             }
             Ok(Ok(JobDone::CaptionLines(lines))) => {
                 self.pending_lines = Some(lines);
@@ -468,13 +513,19 @@ impl A1App {
             end
         };
         self.playhead_ms = ms.clamp(0, cap);
+        if self.state.screen == Screen::Review {
+            if let Some(clip) = self.review_clip() {
+                self.loop_at_clip = self.playhead_ms < clip.end_ms;
+            }
+        }
         if self.playing {
             self.restart_audio();
         }
     }
 
     fn player_keys(&mut self, ctx: &egui::Context) {
-        let (play, back, forward, to_start, to_end) = ctx.input_mut(|input| {
+        let review = self.state.screen == Screen::Review && !self.state.clips.is_empty();
+        let (play, back, forward, to_start, to_end, drop) = ctx.input_mut(|input| {
             (
                 input.consume_key(egui::Modifiers::NONE, egui::Key::Space)
                     || input.consume_key(egui::Modifiers::NONE, egui::Key::K),
@@ -482,10 +533,31 @@ impl A1App {
                 input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
                 input.consume_key(egui::Modifiers::NONE, egui::Key::Home),
                 input.consume_key(egui::Modifiers::NONE, egui::Key::End),
+                review && input.consume_key(egui::Modifiers::NONE, egui::Key::D),
             )
         });
         if play {
             self.toggle_play();
+        }
+        if review {
+            if back {
+                self.step_review(-1);
+            }
+            if forward {
+                self.step_review(1);
+            }
+            if drop {
+                self.toggle_review_clip();
+            }
+            if let Some(clip) = self.review_clip() {
+                if to_start {
+                    self.seek_playhead(clip.start_ms);
+                }
+                if to_end {
+                    self.seek_playhead(clip.end_ms.saturating_sub(1));
+                }
+            }
+            return;
         }
         if to_start {
             self.seek_playhead(0);
@@ -496,6 +568,143 @@ impl A1App {
             self.seek_playhead(self.state.video_duration_ms);
         } else if forward {
             self.seek_playhead(self.playhead_ms + 5_000);
+        }
+    }
+
+    fn video_limit_ms(&self) -> f64 {
+        let end = self.state.video_duration_ms.max(0) as f64;
+        if end > 0.0 {
+            end
+        } else {
+            1.0
+        }
+    }
+
+    fn review_clip(&self) -> Option<ClipSegmentWithStatus> {
+        if self.state.screen != Screen::Review || self.state.clips.is_empty() {
+            return None;
+        }
+        let index = self.review_index.min(self.state.clips.len() - 1);
+        Some(self.state.clips[index].clone())
+    }
+
+    fn focus_review_clip(&mut self) {
+        if self.state.screen != Screen::Review || self.state.clips.is_empty() {
+            return;
+        }
+        if self.review_index >= self.state.clips.len() {
+            self.review_index = self.state.clips.len() - 1;
+        }
+        let clip = self.state.clips[self.review_index].clone();
+        if self.review_for.as_deref() == Some(clip.id.as_str()) {
+            return;
+        }
+        self.review_view = Some(clips::clip_view_window(
+            clip.start_ms,
+            clip.end_ms,
+            self.video_limit_ms(),
+            CLIP_VIEW_PAD_MS,
+        ));
+        self.review_for = Some(clip.id);
+        self.loop_at_clip = true;
+        self.trim = ReviewTrim::Idle;
+        self.seek_playhead(clip.start_ms);
+    }
+
+    fn step_review(&mut self, delta: isize) {
+        let len = self.state.clips.len() as isize;
+        if len == 0 {
+            return;
+        }
+        let next = (self.review_index as isize + delta).clamp(0, len - 1) as usize;
+        if next == self.review_index {
+            return;
+        }
+        self.review_index = next;
+        self.review_for = None;
+        self.focus_review_clip();
+    }
+
+    fn toggle_review_clip(&mut self) {
+        let Some(clip) = self.review_clip() else {
+            return;
+        };
+        let discarding = clip.approved;
+        let len = self.state.clips.len();
+        self.dispatch(WizardAction::ToggleClip(clip.id));
+        self.persist_clips();
+        if discarding && self.review_index + 1 < len {
+            self.step_review(1);
+        }
+    }
+
+    fn persist_clips(&self) {
+        let Some(path) = &self.state.video_path else {
+            return;
+        };
+        let stored: Vec<_> = self
+            .state
+            .clips
+            .iter()
+            .map(|clip| clip.to_stored())
+            .collect();
+        let raw = if self.state.raw_response.is_empty() {
+            None
+        } else {
+            Some(self.state.raw_response.as_str())
+        };
+        let _ = sidecars::write_clips(std::path::Path::new(path), &stored, raw);
+    }
+
+    fn set_review_edges(&mut self, id: &str, start_ms: i64, end_ms: i64) {
+        self.state = wizard::wizard_reduce(
+            &self.state,
+            WizardAction::UpdateClipTimes {
+                id: id.to_string(),
+                start_ms,
+                end_ms,
+            },
+        );
+    }
+
+    fn begin_review_trim(&mut self) {
+        self.loop_at_clip = true;
+        if self.playing {
+            self.stop_audio();
+        }
+    }
+
+    fn finish_review_trim(&mut self) {
+        let resume = match self.trim {
+            ReviewTrim::Handle { resume_ms, .. } | ReviewTrim::Clock { resume_ms, .. } => resume_ms,
+            ReviewTrim::Idle => self.playhead_ms,
+        };
+        let preview = self.playhead_ms;
+        if let Some(clip) = self.review_clip() {
+            if let Some(view) = self.review_view {
+                self.review_view = Some(clips::expand_view_to_fit(
+                    view,
+                    clip.start_ms,
+                    clip.end_ms,
+                    self.video_limit_ms(),
+                    CLIP_VIEW_PAD_MS,
+                ));
+            }
+            self.playhead_ms = playhead_after_trim(
+                resume,
+                preview,
+                clip.start_ms,
+                clip.end_ms,
+                self.playing,
+            );
+        }
+        self.trim = ReviewTrim::Idle;
+        self.scrubbing = false;
+        // The new end is the loop point. A drag must not leave playback running past it.
+        self.loop_at_clip = true;
+        self.persist_clips();
+        if self.playing {
+            self.restart_audio();
         }
     }
 
@@ -518,10 +727,32 @@ impl eframe::App for A1App {
         if self.playing && !self.scrubbing {
             let dt = ctx.input(|i| i.stable_dt);
             self.playhead_ms += (dt * 1000.0) as i64;
-            let end = self.state.video_duration_ms.max(1);
-            if self.playhead_ms >= end {
-                self.playhead_ms = 0;
-                self.stop_playback();
+            if let Some(clip) = self.review_clip() {
+                let view_start = self
+                    .review_view
+                    .map(|view| view.view_start)
+                    .unwrap_or(clip.start_ms);
+                let view_end = self
+                    .review_view
+                    .map(|view| view.view_end)
+                    .unwrap_or(clip.end_ms)
+                    .max(view_start + 1);
+                if self.loop_at_clip
+                    && clip.end_ms > clip.start_ms
+                    && self.playhead_ms >= clip.end_ms
+                {
+                    self.playhead_ms = clip.start_ms;
+                    self.restart_audio();
+                } else if !self.loop_at_clip && self.playhead_ms >= view_end {
+                    self.playhead_ms = view_start;
+                    self.restart_audio();
+                }
+            } else {
+                let end = self.state.video_duration_ms.max(1);
+                if self.playhead_ms >= end {
+                    self.playhead_ms = 0;
+                    self.stop_playback();
+                }
             }
             ctx.request_repaint();
         }
@@ -1073,20 +1304,93 @@ impl A1App {
     }
 
     fn review(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let avail = ui.available_width();
-        let column = avail.min(960.0);
-        let side = ((avail - column) * 0.5).max(0.0);
+        self.focus_review_clip();
+        let avail_w = ui.available_width();
+        let viewport_h = ui.clip_rect().height();
+        let avail_h = if viewport_h.is_finite() && viewport_h > 1.0 {
+            viewport_h
+        } else {
+            640.0
+        };
+        let tex = self
+            .frame
+            .as_ref()
+            .map(|texture| texture.size_vec2())
+            .unwrap_or(egui::vec2(16.0, 9.0));
+        let frame = review_frame(avail_w, avail_h, tex.x, tex.y);
+        let row_w = frame.button * 2.0 + frame.gap * 2.0 + frame.picture.x;
+        let side = ((avail_w - row_w) * 0.5).max(0.0);
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(side);
+            self.review_nav(ui, frame.button, frame.picture.y, -1);
+            ui.add_space(frame.gap);
             ui.vertical(|ui| {
-                ui.set_width(column);
-                self.review_column(ui, ctx);
+                ui.set_width(frame.picture.x);
+                self.picture_limited(ui, ctx, frame.picture.x, frame.picture.y);
+            });
+            ui.add_space(frame.gap);
+            self.review_nav(ui, frame.button, frame.picture.y, 1);
+        });
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(side + frame.button + frame.gap);
+            ui.vertical(|ui| {
+                ui.set_width(frame.picture.x);
+                self.review_column(ui);
             });
         });
     }
 
-    fn review_column(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        self.picture(ui, ctx);
+    fn review_nav(&mut self, ui: &mut egui::Ui, button: f32, video_h: f32, delta: isize) {
+        let (column, _) =
+            ui.allocate_exact_size(egui::vec2(button, video_h.max(button)), egui::Sense::hover());
+        let len = self.state.clips.len();
+        if len == 0 {
+            return;
+        }
+        let index = self.review_index.min(len - 1);
+        let enabled = if delta < 0 {
+            index > 0
+        } else {
+            index + 1 < len
+        };
+        if !enabled {
+            return;
+        }
+        let hit = egui::Rect::from_center_size(column.center(), egui::vec2(button, button));
+        let response = ui.interact(
+            hit,
+            ui.id().with(if delta < 0 { "prev-clip" } else { "next-clip" }),
+            egui::Sense::CLICK,
+        );
+        let fill = if response.hovered() {
+            Color32::from_rgb(0xcc, 0x3a, 0x05)
+        } else {
+            ORANGE
+        };
+        ui.painter().rect(
+            hit,
+            egui::CornerRadius::same(8),
+            fill,
+            Stroke::NONE,
+            egui::StrokeKind::Inside,
+        );
+        paint_chevron(ui.painter(), hit, delta < 0);
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if response.clicked() {
+            self.step_review(delta);
+        }
+        response.on_hover_text(if delta < 0 {
+            "Previous clip"
+        } else {
+            "Next clip"
+        });
+    }
+
+    fn review_column(&mut self, ui: &mut egui::Ui) {
         ui.add_space(16.0);
         let (hair, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
@@ -1098,84 +1402,53 @@ impl A1App {
         ui.add_space(16.0);
         let kept = self.state.clips.iter().filter(|clip| clip.approved).count();
         let total = self.state.clips.len();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 16.0;
-            ui.label(
-                RichText::new(format!(
-                    "{total} {}",
-                    if total == 1 { "clip" } else { "clips" }
-                ))
-                .size(15.0)
-                .color(MUTED),
-            );
-            ui.label(
-                RichText::new(format!("{kept} kept"))
-                    .size(15.0)
-                    .color(MUTED),
-            );
-        });
-        ui.add_space(6.0);
-        ui.label(
-            RichText::new("Turn a clip off to leave it out. Nudge the start and end, then export.")
-                .size(16.0)
-                .color(MUTED),
-        );
-        ui.add_space(16.0);
-        let ids: Vec<String> = self
-            .state
-            .clips
-            .iter()
-            .map(|clip| clip.id.clone())
-            .collect();
-        for id in ids {
-            let Some(clip) = self.state.clips.iter().find(|clip| clip.id == id).cloned() else {
-                continue;
-            };
+        if let Some(clip) = self.review_clip() {
+            let index = self.review_index.min(total.saturating_sub(1));
             ui.label(
                 RichText::new(&clip.title)
                     .size(18.0)
                     .color(if clip.approved { CREAM_HEAD } else { MUTED }),
             );
             ui.label(
-                RichText::new(format!("{} – {}", clock(clip.start_ms), clock(clip.end_ms)))
-                    .size(15.0)
+                RichText::new(format!(
+                    "{} – {}    {}",
+                    clock(clip.start_ms),
+                    clock(clip.end_ms),
+                    clip_length_label(clip.start_ms, clip.end_ms)
+                ))
+                .size(15.0)
+                .color(MUTED),
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 16.0;
+                ui.label(
+                    RichText::new(format!("Clip {} of {total}", index + 1))
+                        .size(15.0)
+                        .color(MUTED),
+                );
+                ui.label(
+                    RichText::new(format!("{kept} kept"))
+                        .size(15.0)
+                        .color(MUTED),
+                );
+            });
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(
+                    "Turn a clip off to leave it out. Drag the handles to set the start and end.",
+                )
+                .size(16.0)
+                .color(MUTED),
+            );
+        } else {
+            ui.label(
+                RichText::new("No clips to review yet.")
+                    .size(16.0)
                     .color(MUTED),
             );
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                let keep = if clip.approved {
-                    "Drop this one"
-                } else {
-                    "Keep this one"
-                };
-                if secondary(ui, keep).clicked() {
-                    self.dispatch(WizardAction::ToggleClip(id.clone()));
-                }
-                for (label, edge, delta) in [
-                    ("Start −1s", "start", -1000.0),
-                    ("Start +1s", "start", 1000.0),
-                    ("End −1s", "end", -1000.0),
-                    ("End +1s", "end", 1000.0),
-                ] {
-                    if secondary(ui, label).clicked() {
-                        let (start, end) = a1slice_core::clips::nudge_edge(
-                            clip.start_ms,
-                            clip.end_ms,
-                            edge,
-                            delta,
-                            self.state.video_duration_ms as f64,
-                        );
-                        self.dispatch(WizardAction::UpdateClipTimes {
-                            id: id.clone(),
-                            start_ms: start,
-                            end_ms: end,
-                        });
-                    }
-                }
-            });
-            ui.add_space(16.0);
         }
+        ui.add_space(16.0);
         if !self.status.is_empty() {
             ui.label(RichText::new(&self.status).color(ORANGE));
             ui.add_space(8.0);
@@ -1187,6 +1460,20 @@ impl A1App {
             }
             if secondary(ui, "Add a part").clicked() {
                 self.dispatch(WizardAction::AddClip);
+                self.review_index = self.state.clips.len().saturating_sub(1);
+                self.review_for = None;
+                self.persist_clips();
+                self.focus_review_clip();
+            }
+            if let Some(clip) = self.review_clip() {
+                let keep = if clip.approved {
+                    "Drop this one"
+                } else {
+                    "Keep this one"
+                };
+                if secondary(ui, keep).clicked() {
+                    self.toggle_review_clip();
+                }
             }
             let export_label =
                 format!("Export {kept} {}", if kept == 1 { "clip" } else { "clips" });
@@ -1194,7 +1481,7 @@ impl A1App {
                 self.start_export_clips();
             }
         });
-        ui.add_space(80.0);
+        ui.add_space(16.0);
     }
 
     fn export_screen(&mut self, ui: &mut egui::Ui) {
@@ -1535,21 +1822,35 @@ impl A1App {
         }
     }
 
-    fn picture(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
+    fn picture(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.picture_limited(ui, ctx, ui.available_width(), 460.0);
+    }
+
+    fn picture_limited(
+        &mut self,
+        ui: &mut egui::Ui,
+        _ctx: &egui::Context,
+        max_w: f32,
+        max_h: f32,
+    ) {
+        let fitted = self
+            .frame
+            .as_ref()
+            .map(|texture| texture.size_vec2())
+            .map(|size| fit_picture(size.x, size.y, max_w, max_h))
+            .unwrap_or_else(|| fit_picture(16.0, 9.0, max_w, max_h));
+        let (row, _) = ui.allocate_exact_size(egui::vec2(max_w, fitted.y), egui::Sense::hover());
+        let image = egui::Rect::from_center_size(row.center(), fitted);
         let Some(texture) = self.frame.clone() else {
-            ui.label(RichText::new("Reading a frame…").color(MUTED));
+            ui.painter().text(
+                image.center(),
+                egui::Align2::CENTER_CENTER,
+                "Reading a frame…",
+                egui::FontId::proportional(16.0),
+                MUTED,
+            );
             return;
         };
-        let size = texture.size_vec2();
-        let max_w = ui.available_width();
-        let mut width = max_w;
-        let mut height = width * size.y / size.x.max(1.0);
-        if height > 460.0 {
-            height = 460.0;
-            width = height * size.x / size.y.max(1.0);
-        }
-        let (row, _) = ui.allocate_exact_size(egui::vec2(max_w, height), egui::Sense::hover());
-        let image = egui::Rect::from_center_size(row.center(), egui::vec2(width, height));
         ui.painter().image(
             texture.id(),
             image,
@@ -1588,7 +1889,11 @@ impl A1App {
             }
             if framing {
                 if stage_response.dragged() {
-                    dragged = Some((stage_response.drag_delta(), width, height));
+                    dragged = Some((
+                        stage_response.drag_delta(),
+                        image.width(),
+                        image.height(),
+                    ));
                 }
                 if stage_response.hovered() {
                     scrolled = ui.input(|i| i.smooth_scroll_delta.y);
@@ -1596,50 +1901,42 @@ impl A1App {
             }
         }
 
-        let time_w = player_time_width(ui, self.state.video_duration_ms);
-        let slots = transport_slots(bar, time_w);
-        let play_tip = if self.playing { "Pause" } else { "Play" };
-        let play = ui.interact(slots.play, ui.id().with("play"), egui::Sense::CLICK);
-        paint_icon_hover(ui.painter(), &play);
-        if self.playing {
-            paint_pause_icon(ui.painter(), play.rect);
+        let review = self.review_clip();
+        if review.is_some() {
+            self.review_overlay(ui, image, bar);
+        }
+        if let Some(clip) = review {
+            self.review_transport(ui, bar, image, &clip);
         } else {
-            paint_play_icon(ui.painter(), play.rect);
-        }
-        if play.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if play.clicked() {
-            self.toggle_play();
-        }
-        play.on_hover_text(play_tip);
-
-        if let Some(hit) = player_seek(
-            ui,
-            slots.seek,
-            image,
-            self.playhead_ms,
-            self.state.video_duration_ms,
-        ) {
-            self.playhead_ms = hit.ms;
-            if hit.dragging {
-                self.scrubbing = true;
-            } else {
+            let time_w = player_time_width(ui, self.state.video_duration_ms);
+            let slots = transport_slots(bar, time_w);
+            self.play_control(ui, slots.play);
+            if let Some(hit) = player_seek(
+                ui,
+                slots.seek,
+                image,
+                self.playhead_ms,
+                self.state.video_duration_ms,
+            ) {
+                self.playhead_ms = hit.ms;
+                if hit.dragging {
+                    self.scrubbing = true;
+                } else {
+                    self.scrubbing = false;
+                    self.restart_audio();
+                }
+            } else if self.scrubbing && ui.input(|i| i.pointer.any_released()) {
                 self.scrubbing = false;
                 self.restart_audio();
             }
-        } else if self.scrubbing && ui.input(|i| i.pointer.any_released()) {
-            self.scrubbing = false;
-            self.restart_audio();
+            paint_player_time(
+                ui,
+                slots.time,
+                self.playhead_ms,
+                self.state.video_duration_ms,
+            );
+            self.player_volume(ui, slots.speaker, slots.slider);
         }
-
-        paint_player_time(
-            ui,
-            slots.time,
-            self.playhead_ms,
-            self.state.video_duration_ms,
-        );
-        self.player_volume(ui, slots.speaker, slots.slider);
 
         if framing {
             if let Some((delta, width, height)) = dragged {
@@ -1654,6 +1951,452 @@ impl A1App {
                 self.store_crop(crop::snap_crop_center(crop, 1.0, 1.0));
             }
         }
+    }
+
+    fn play_control(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let play_tip = if self.playing { "Pause" } else { "Play" };
+        let play = ui.interact(rect, ui.id().with("play"), egui::Sense::CLICK);
+        paint_icon_hover(ui.painter(), &play);
+        if self.playing {
+            paint_pause_icon(ui.painter(), play.rect);
+        } else {
+            paint_play_icon(ui.painter(), play.rect);
+        }
+        if play.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if play.clicked() {
+            self.toggle_play();
+        }
+        play.on_hover_text(play_tip);
+    }
+
+    fn review_overlay(&mut self, ui: &mut egui::Ui, image: egui::Rect, bar: egui::Rect) {
+        let Some(clip) = self.review_clip() else {
+            return;
+        };
+        let stage =
+            egui::Rect::from_min_max(image.left_top(), egui::pos2(image.right(), bar.top()));
+        if !clip.approved && stage.height() > 0.0 {
+            ui.painter()
+                .rect_filled(stage, 0.0, Color32::from_black_alpha(110));
+        }
+        let wash_bottom = (image.top() + 64.0).min(bar.top());
+        if wash_bottom > image.top() + 8.0 {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_max(image.left_top(), egui::pos2(image.right(), wash_bottom)),
+                0.0,
+                Color32::from_black_alpha(100),
+            );
+        }
+        ui.painter().text(
+            image.left_top() + egui::vec2(16.0, 10.0),
+            egui::Align2::LEFT_TOP,
+            &clip.title,
+            egui::FontId::proportional(18.0),
+            CREAM_HEAD,
+        );
+        ui.painter().text(
+            image.left_top() + egui::vec2(16.0, 34.0),
+            egui::Align2::LEFT_TOP,
+            format!("{} – {}", clock(clip.start_ms), clock(clip.end_ms)),
+            egui::FontId::proportional(14.0),
+            Color32::from_white_alpha(200),
+        );
+        let outside = self.playhead_ms < clip.start_ms - 40 || self.playhead_ms > clip.end_ms + 40;
+        if outside {
+            ui.painter().text(
+                egui::pos2(image.right() - 16.0, image.top() + 14.0),
+                egui::Align2::RIGHT_TOP,
+                "Outside the clip",
+                egui::FontId::proportional(14.0),
+                CREAM_HEAD,
+            );
+        }
+    }
+
+    fn review_transport(
+        &mut self,
+        ui: &mut egui::Ui,
+        bar: egui::Rect,
+        image: egui::Rect,
+        clip: &ClipSegmentWithStatus,
+    ) {
+        let duration = self.state.video_duration_ms.max(clip.end_ms);
+        let start_w = edge_label_width(ui, "Start ", duration);
+        let end_w = edge_label_width(ui, "End ", duration);
+        let time_w = mono_clock_width(ui, duration).ceil();
+        let slots = review_slots(bar, start_w, end_w, time_w);
+        self.play_control(ui, slots.play);
+        if slots.start_label.width() > 1.0 {
+            self.review_clock(ui, slots.start_label, "start", clip);
+        }
+        let view = self.review_view.unwrap_or_else(|| {
+            clips::clip_view_window(
+                clip.start_ms,
+                clip.end_ms,
+                self.video_limit_ms(),
+                CLIP_VIEW_PAD_MS,
+            )
+        });
+        self.review_seek(ui, slots.seek, image, clip, view);
+        if slots.end_label.width() > 1.0 {
+            let clip = self.review_clip().unwrap_or_else(|| clip.clone());
+            self.review_clock(ui, slots.end_label, "end", &clip);
+        }
+        let shown = self.review_clip().unwrap_or_else(|| clip.clone());
+        paint_clock(ui, slots.time, self.playhead_ms);
+        self.paint_review_handles(ui, slots.seek, &shown, view);
+        let shown = self.review_clip().unwrap_or(shown);
+        let hot = ui.input(|input| {
+            input
+                .pointer
+                .hover_pos()
+                .or(input.pointer.interact_pos())
+                .is_some_and(|pos| slots.seek.contains(pos))
+        });
+        paint_clip_track(
+            ui.painter(),
+            slots.seek,
+            view,
+            shown.start_ms,
+            shown.end_ms,
+            self.playhead_ms,
+            hot,
+        );
+        if self.scrubbing
+            && ui.input(|i| i.pointer.any_released())
+            && matches!(self.trim, ReviewTrim::Idle)
+        {
+            self.scrubbing = false;
+            self.restart_audio();
+        }
+        self.player_volume(ui, slots.speaker, slots.slider);
+    }
+
+    fn review_clock(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        edge: &'static str,
+        clip: &ClipSegmentWithStatus,
+    ) {
+        let response = ui.interact(rect, ui.id().with(("clip-clock", edge)), egui::Sense::DRAG);
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        let same = matches!(self.trim, ReviewTrim::Clock { edge: current, .. } if current == edge);
+        if response.dragged() && !same {
+            let origin_x = response
+                .interact_pointer_pos()
+                .map(|pos| pos.x)
+                .unwrap_or(rect.left());
+            self.begin_review_trim();
+            self.trim = ReviewTrim::Clock {
+                edge,
+                origin_x,
+                origin_start: clip.start_ms,
+                origin_end: clip.end_ms,
+                applied: 0,
+                resume_ms: self.playhead_ms,
+            };
+        }
+        if response.dragged() || response.drag_stopped() {
+            self.drag_review_clock(ui, &response, edge, &clip.id);
+        }
+        if response.drag_stopped()
+            && matches!(self.trim, ReviewTrim::Clock { edge: current, .. } if current == edge)
+        {
+            self.finish_review_trim();
+        }
+        let live = self.review_clip().unwrap_or_else(|| clip.clone());
+        let text = if edge == "start" {
+            format!("Start {}", clock(live.start_ms))
+        } else {
+            format!("End {}", clock(live.end_ms))
+        };
+        paint_edge_label(ui, rect, &text);
+        response.on_hover_text(if edge == "start" {
+            "Drag to move the start by seconds"
+        } else {
+            "Drag to move the end by seconds"
+        });
+    }
+
+    fn drag_review_clock(
+        &mut self,
+        ui: &mut egui::Ui,
+        response: &egui::Response,
+        edge: &'static str,
+        id: &str,
+    ) {
+        let (origin_x, origin_start, origin_end, applied, resume_ms) = match self.trim {
+            ReviewTrim::Clock {
+                edge: current,
+                origin_x,
+                origin_start,
+                origin_end,
+                applied,
+                resume_ms,
+            } if current == edge => (origin_x, origin_start, origin_end, applied, resume_ms),
+            _ => return,
+        };
+        let Some(pos) = response.interact_pointer_pos() else {
+            return;
+        };
+        let seconds = clips::seconds_from_drag((pos.x - origin_x) as f64, FINE_DRAG_PX);
+        if seconds == applied {
+            self.scrubbing = true;
+            return;
+        }
+        let (start, end) = clips::nudge_edge(
+            origin_start,
+            origin_end,
+            edge,
+            seconds as f64 * 1000.0,
+            self.video_limit_ms(),
+        );
+        self.set_review_edges(id, start, end);
+        let play = if edge == "start" { start } else { end };
+        self.playhead_ms = play.clamp(0, self.state.video_duration_ms.max(0));
+        self.loop_at_clip = true;
+        self.scrubbing = true;
+        self.trim = ReviewTrim::Clock {
+            edge,
+            origin_x,
+            origin_start,
+            origin_end,
+            applied: seconds,
+            resume_ms,
+        };
+        ui.ctx().request_repaint();
+    }
+
+    fn review_seek(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        image: egui::Rect,
+        clip: &ClipSegmentWithStatus,
+        view: ClipViewWindow,
+    ) {
+        let response = ui.interact(
+            rect,
+            ui.id().with("seek"),
+            egui::Sense::CLICK | egui::Sense::DRAG,
+        );
+        let (left, right) = level_span(rect);
+        let mut ms = self.playhead_ms;
+        if let Some(pos) = response
+            .interact_pointer_pos()
+            .filter(|_| response.dragged() || response.clicked() || response.drag_stopped())
+        {
+            ms = a1slice_core::preview::playback_ms_at(
+                pos.x as f64,
+                left as f64,
+                (right - left) as f64,
+                view.view_start as f64,
+                view.view_end as f64,
+            ) as i64;
+        }
+        let live = self.review_clip().unwrap_or_else(|| clip.clone());
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if let Some(pos) = response
+            .hover_pos()
+            .filter(|_| response.hovered() || response.dragged())
+        {
+            let tip_ms = if response.dragged() {
+                ms
+            } else {
+                a1slice_core::preview::playback_ms_at(
+                    pos.x as f64,
+                    left as f64,
+                    (right - left) as f64,
+                    view.view_start as f64,
+                    view.view_end as f64,
+                ) as i64
+            };
+            paint_seek_tip(ui.painter(), pos.x, rect.top(), &clock(tip_ms), image);
+        }
+        if response.dragged() {
+            self.playhead_ms = ms.clamp(0, self.state.video_duration_ms.max(0));
+            self.loop_at_clip = self.playhead_ms < live.end_ms;
+            self.scrubbing = true;
+        } else if response.clicked() || response.drag_stopped() {
+            self.scrubbing = false;
+            self.seek_playhead(ms);
+        }
+    }
+
+    fn paint_review_handles(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        clip: &ClipSegmentWithStatus,
+        view: ClipViewWindow,
+    ) {
+        let (left, right) = level_span(rect);
+        for (edge, ms) in [("start", clip.start_ms), ("end", clip.end_ms)] {
+            let x = ms_to_x(ms, view, left, right);
+            let hit = egui::Rect::from_center_size(
+                egui::pos2(x, rect.center().y),
+                egui::vec2(18.0, rect.height()),
+            );
+            let response = ui.interact(hit, ui.id().with(("clip-edge", edge)), egui::Sense::DRAG);
+            if response.hovered() || response.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            let same =
+                matches!(self.trim, ReviewTrim::Handle { edge: current, .. } if current == edge);
+            if response.dragged() && !same {
+                let resume_ms = self.playhead_ms;
+                self.begin_review_trim();
+                self.trim = ReviewTrim::Handle {
+                    edge,
+                    frozen_start: clip.start_ms,
+                    frozen_end: clip.end_ms,
+                    view,
+                    outward_since: None,
+                    steps: 0,
+                    step_origin: None,
+                    last_step_at: 0.0,
+                    resume_ms,
+                };
+            }
+            if response.dragged() || response.drag_stopped() {
+                self.drag_review_handle(ui, &response, edge, left, right, &clip.id);
+            }
+            if response.drag_stopped()
+                && matches!(self.trim, ReviewTrim::Handle { edge: current, .. } if current == edge)
+            {
+                self.finish_review_trim();
+            }
+            response.on_hover_text(if edge == "start" {
+                "Drag the start. Hold at the edge of the bar to go further."
+            } else {
+                "Drag the end. Hold at the edge of the bar to go further."
+            });
+        }
+    }
+
+    fn drag_review_handle(
+        &mut self,
+        ui: &mut egui::Ui,
+        response: &egui::Response,
+        edge: &'static str,
+        left: f32,
+        right: f32,
+        id: &str,
+    ) {
+        let (
+            frozen_start,
+            frozen_end,
+            view,
+            mut outward_since,
+            mut steps,
+            mut step_origin,
+            mut last_step_at,
+            resume_ms,
+        ) = match self.trim {
+            ReviewTrim::Handle {
+                edge: current,
+                frozen_start,
+                frozen_end,
+                view,
+                outward_since,
+                steps,
+                step_origin,
+                last_step_at,
+                resume_ms,
+            } if current == edge => (
+                frozen_start,
+                frozen_end,
+                view,
+                outward_since,
+                steps,
+                step_origin,
+                last_step_at,
+                resume_ms,
+            ),
+            _ => return,
+        };
+        let Some(pos) = response.interact_pointer_pos() else {
+            return;
+        };
+        let now = ui.input(|i| i.time);
+        let slop = if steps > 0 { 16.0 } else { 3.0 };
+        let outward = if edge == "start" {
+            pos.x <= left + slop
+        } else {
+            pos.x >= right - slop
+        };
+        let limit = self.video_limit_ms();
+        let pointer_ms = a1slice_core::preview::playback_ms_at(
+            pos.x as f64,
+            left as f64,
+            (right - left) as f64,
+            view.view_start as f64,
+            view.view_end as f64,
+        );
+        let (start, end) = if outward {
+            if outward_since.is_none() {
+                outward_since = Some(now);
+            }
+            let mut pair = clips::trim_edge(edge, pointer_ms, frozen_start, frozen_end, limit);
+            let since = outward_since.unwrap_or(now);
+            if steps == 0 && now - since >= HOLD_ARM_SECS {
+                steps = 1;
+                step_origin = Some(if edge == "start" { pair.0 } else { pair.1 });
+                last_step_at = now;
+            } else if steps > 0 && now - last_step_at >= HOLD_STEP_SECS {
+                steps += 1;
+                last_step_at = now;
+            }
+            if steps > 0 {
+                let origin = step_origin.unwrap_or(if edge == "start" {
+                    frozen_start
+                } else {
+                    frozen_end
+                });
+                let delta = (if edge == "start" { -1.0 } else { 1.0 }) * f64::from(steps) * 1000.0;
+                pair = clips::nudge_edge(
+                    if edge == "start" {
+                        origin
+                    } else {
+                        frozen_start
+                    },
+                    if edge == "end" { origin } else { frozen_end },
+                    edge,
+                    delta,
+                    limit,
+                );
+            }
+            pair
+        } else {
+            outward_since = None;
+            steps = 0;
+            step_origin = None;
+            clips::trim_edge(edge, pointer_ms, frozen_start, frozen_end, limit)
+        };
+        self.trim = ReviewTrim::Handle {
+            edge,
+            frozen_start,
+            frozen_end,
+            view,
+            outward_since,
+            steps,
+            step_origin,
+            last_step_at,
+            resume_ms,
+        };
+        self.set_review_edges(id, start, end);
+        let play = if edge == "start" { start } else { end };
+        self.playhead_ms = play.clamp(0, self.state.video_duration_ms.max(0));
+        self.loop_at_clip = true;
+        self.scrubbing = true;
+        ui.ctx().request_repaint();
     }
 
     fn player_volume(&mut self, ui: &mut egui::Ui, speaker: egui::Rect, slider: egui::Rect) {
@@ -1809,7 +2552,112 @@ fn transport_slots(bar: egui::Rect, time_width: f32) -> TransportSlots {
     }
 }
 
-fn player_time_width(ui: &egui::Ui, duration_ms: i64) -> f32 {
+struct ReviewSlots {
+    play: egui::Rect,
+    start_label: egui::Rect,
+    seek: egui::Rect,
+    end_label: egui::Rect,
+    time: egui::Rect,
+    speaker: egui::Rect,
+    slider: egui::Rect,
+}
+
+fn review_slots(bar: egui::Rect, mut start_w: f32, mut end_w: f32, time_w: f32) -> ReviewSlots {
+    let pad = 10.0;
+    let gap = 8.0;
+    let play_s = 40.0_f32.min((bar.height() - 8.0).max(24.0));
+    let speaker_s = 36.0_f32.min(play_s);
+    let full_slider = 68.0;
+    let min_seek = 48.0;
+    let label_extra = |start: f32, end: f32| {
+        let mut extra = 0.0;
+        if start > 0.0 {
+            extra += gap + start;
+        }
+        if end > 0.0 {
+            extra += gap + end;
+        }
+        extra
+    };
+    let fixed = pad * 2.0 + play_s + gap + min_seek + gap + time_w + gap + speaker_s;
+    let fits = |start: f32, end: f32, slider: f32| {
+        fixed + label_extra(start, end) + if slider > 0.0 { gap + slider } else { 0.0 }
+    };
+    let mut slider_w = full_slider;
+    if bar.width() < fits(start_w, end_w, slider_w) {
+        slider_w = 0.0;
+    }
+    if bar.width() < fits(start_w, end_w, slider_w) {
+        start_w = 0.0;
+        end_w = 0.0;
+    }
+    if slider_w == 0.0 && bar.width() >= fits(start_w, end_w, full_slider) {
+        slider_w = full_slider;
+    }
+
+    let mid = bar.center().y;
+    let mut right = bar.right() - pad;
+    let slider = if slider_w > 0.0 {
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(right - slider_w, mid - 14.0),
+            egui::pos2(right, mid + 14.0),
+        );
+        right = rect.left() - 4.0;
+        rect
+    } else {
+        egui::Rect::from_min_max(egui::pos2(right, mid), egui::pos2(right, mid))
+    };
+    let speaker = egui::Rect::from_center_size(
+        egui::pos2(right - speaker_s * 0.5, mid),
+        egui::vec2(speaker_s, speaker_s),
+    );
+    right = speaker.left() - gap;
+    let end_label = if end_w > 0.0 {
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(right - end_w, mid - 12.0),
+            egui::pos2(right, mid + 12.0),
+        );
+        right = rect.left() - gap;
+        rect
+    } else {
+        egui::Rect::from_min_max(egui::pos2(right, mid), egui::pos2(right, mid))
+    };
+    let play = egui::Rect::from_center_size(
+        egui::pos2(bar.left() + pad + play_s * 0.5, mid),
+        egui::vec2(play_s, play_s),
+    );
+    let mut left = play.right() + gap;
+    let time = egui::Rect::from_min_max(
+        egui::pos2(left, mid - 12.0),
+        egui::pos2(left + time_w, mid + 12.0),
+    );
+    left = time.right() + gap;
+    let start_label = if start_w > 0.0 {
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(left, mid - 12.0),
+            egui::pos2(left + start_w, mid + 12.0),
+        );
+        left = rect.right() + gap;
+        rect
+    } else {
+        egui::Rect::from_min_max(egui::pos2(left, mid), egui::pos2(left, mid))
+    };
+    let seek = egui::Rect::from_min_max(
+        egui::pos2(left, bar.top()),
+        egui::pos2(right.max(left), bar.bottom()),
+    );
+    ReviewSlots {
+        play,
+        start_label,
+        seek,
+        end_label,
+        time,
+        speaker,
+        slider,
+    }
+}
+
+fn mono_clock_width(ui: &egui::Ui, duration_ms: i64) -> f32 {
     let font = egui::FontId::proportional(13.0);
     let digit = (0..10)
         .map(|n| {
@@ -1821,18 +2669,32 @@ fn player_time_width(ui: &egui::Ui, duration_ms: i64) -> f32 {
         .fold(0.0_f32, f32::max);
     let colon = ui
         .painter()
-        .layout_no_wrap(":".to_string(), font.clone(), CREAM_HEAD)
+        .layout_no_wrap(":".to_string(), font, CREAM_HEAD)
         .size()
         .x;
+    clock(duration_ms).chars().fold(0.0, |width, ch| {
+        width + if ch.is_ascii_digit() { digit } else { colon }
+    })
+}
+
+fn player_time_width(ui: &egui::Ui, duration_ms: i64) -> f32 {
+    let font = egui::FontId::proportional(13.0);
     let slash = ui
         .painter()
         .layout_no_wrap(" / ".to_string(), font, CREAM_HEAD)
         .size()
         .x;
-    let clock_w = clock(duration_ms).chars().fold(0.0, |width, ch| {
-        width + if ch.is_ascii_digit() { digit } else { colon }
-    });
-    (clock_w * 2.0 + slash).ceil()
+    (mono_clock_width(ui, duration_ms) * 2.0 + slash).ceil()
+}
+
+fn edge_label_width(ui: &egui::Ui, prefix: &str, duration_ms: i64) -> f32 {
+    let font = egui::FontId::proportional(13.0);
+    let prefix_w = ui
+        .painter()
+        .layout_no_wrap(prefix.to_string(), font, CREAM_HEAD)
+        .size()
+        .x;
+    (prefix_w + mono_clock_width(ui, duration_ms)).ceil()
 }
 
 fn player_seek(
@@ -1937,6 +2799,173 @@ fn paint_player_time(ui: &egui::Ui, rect: egui::Rect, playhead_ms: i64, duration
     ui.painter().galley(egui::pos2(x, y), current, CREAM_HEAD);
     ui.painter()
         .galley(egui::pos2(x + width - rest.size().x, y), rest, CREAM_HEAD);
+}
+
+fn paint_clock(ui: &egui::Ui, rect: egui::Rect, playhead_ms: i64) {
+    let galley = ui.painter().layout_no_wrap(
+        clock(playhead_ms),
+        egui::FontId::proportional(13.0),
+        CREAM_HEAD,
+    );
+    let y = rect.center().y - galley.size().y * 0.5;
+    ui.painter()
+        .galley(egui::pos2(rect.left(), y), galley, CREAM_HEAD);
+}
+
+fn paint_edge_label(ui: &egui::Ui, rect: egui::Rect, text: &str) {
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        egui::FontId::proportional(13.0),
+        CREAM_HEAD,
+    );
+    let y = rect.center().y - galley.size().y * 0.5;
+    ui.painter()
+        .galley(egui::pos2(rect.left(), y), galley, CREAM_HEAD);
+}
+
+fn ms_to_x(ms: i64, view: ClipViewWindow, left: f32, right: f32) -> f32 {
+    let span = (view.view_end - view.view_start).max(1) as f32;
+    let t = (ms - view.view_start) as f32 / span;
+    egui::lerp(left..=right, t.clamp(0.0, 1.0))
+}
+
+fn paint_clip_track(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    view: ClipViewWindow,
+    start_ms: i64,
+    end_ms: i64,
+    play_ms: i64,
+    hot: bool,
+) {
+    let (left, right) = level_span(rect);
+    let mid = rect.center().y;
+    let track_h = if hot { 6.0 } else { 4.0 };
+    let track = egui::Rect::from_min_max(
+        egui::pos2(left, mid - track_h * 0.5),
+        egui::pos2(right, mid + track_h * 0.5),
+    );
+    painter.rect_filled(track, track_h * 0.5, Color32::from_white_alpha(80));
+    let x0 = ms_to_x(start_ms, view, left, right);
+    let x1 = ms_to_x(end_ms, view, left, right);
+    let fill = egui::Rect::from_min_max(
+        egui::pos2(x0.min(x1), track.top()),
+        egui::pos2(x0.max(x1).max(x0.min(x1) + 2.0).min(right), track.bottom()),
+    );
+    painter.rect_filled(fill, track_h * 0.5, ORANGE);
+    let play_x = ms_to_x(play_ms, view, left, right);
+    painter.line_segment(
+        [
+            egui::pos2(play_x, mid - 10.0),
+            egui::pos2(play_x, mid + 10.0),
+        ],
+        Stroke::new(1.5_f32, CREAM_HEAD),
+    );
+    painter.circle_filled(
+        egui::pos2(play_x, mid),
+        if hot { 6.0 } else { 5.0 },
+        CREAM_HEAD,
+    );
+    for x in [x0, x1] {
+        let handle = egui::Rect::from_center_size(egui::pos2(x, mid), egui::vec2(4.0, 18.0));
+        painter.rect_filled(handle, 1.5, ORANGE);
+    }
+}
+
+fn paint_chevron(painter: &egui::Painter, rect: egui::Rect, left: bool) {
+    let center = rect.center();
+    // A positive direction puts the tip on the left.
+    let direction = if left { 1.0 } else { -1.0 };
+    let reach = (rect.width().min(rect.height()) * 0.16).clamp(6.0, 14.0);
+    let rise = reach * 1.15;
+    let stroke = Stroke::new((reach * 0.22).clamp(1.8, 2.8), CREAM_HEAD);
+    painter.line_segment(
+        [
+            center + egui::vec2(direction * reach, -rise),
+            center + egui::vec2(-direction * reach * 0.75, 0.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            center + egui::vec2(-direction * reach * 0.75, 0.0),
+            center + egui::vec2(direction * reach, rise),
+        ],
+        stroke,
+    );
+}
+
+struct ReviewFrame {
+    picture: egui::Vec2,
+    button: f32,
+    gap: f32,
+}
+
+fn review_frame(avail_w: f32, avail_h: f32, tex_w: f32, tex_h: f32) -> ReviewFrame {
+    let button = if avail_w < 720.0 { 56.0 } else { 76.0 };
+    let gap = 24.0;
+    let margin = 24.0;
+    // Title, times, and the action row stay on screen under the picture.
+    let dock = 210.0;
+    let max_w = (avail_w - 2.0 * (button + gap + margin)).max(160.0);
+    let max_h = (avail_h - dock).max(180.0);
+    ReviewFrame {
+        picture: fit_picture(tex_w, tex_h, max_w, max_h),
+        button,
+        gap,
+    }
+}
+
+fn fit_picture(tex_w: f32, tex_h: f32, max_w: f32, max_h: f32) -> egui::Vec2 {
+    let tex_w = tex_w.max(1.0);
+    let tex_h = tex_h.max(1.0);
+    let max_w = max_w.max(1.0);
+    let max_h = max_h.max(1.0);
+    let mut width = max_w;
+    let mut height = width * tex_h / tex_w;
+    if height > max_h {
+        height = max_h;
+        width = height * tex_w / tex_h;
+    }
+    egui::vec2(width, height)
+}
+
+/// After a start or end drag, playback stays inside the clip and the loop stays on.
+fn playhead_after_trim(
+    resume_ms: i64,
+    preview_ms: i64,
+    start_ms: i64,
+    end_ms: i64,
+    playing: bool,
+) -> i64 {
+    let end_ms = end_ms.max(start_ms);
+    if playing {
+        if resume_ms >= start_ms && resume_ms < end_ms {
+            resume_ms
+        } else {
+            start_ms
+        }
+    } else if preview_ms >= end_ms {
+        end_ms.saturating_sub(1).max(start_ms)
+    } else if preview_ms < start_ms {
+        start_ms
+    } else {
+        preview_ms
+    }
+}
+
+fn clip_length_label(start_ms: i64, end_ms: i64) -> String {
+    let total = ((end_ms - start_ms).max(0)) / 1000;
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn paint_seek_tip(
@@ -2864,7 +3893,10 @@ fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::process::Chil
 
 #[cfg(test)]
 mod tests {
-    use super::transport_slots;
+    use super::{
+        fit_picture, ms_to_x, playhead_after_trim, review_frame, review_slots, transport_slots,
+        ClipViewWindow,
+    };
 
     #[test]
     fn transport_row_is_play_seek_time_then_volume() {
@@ -2888,6 +3920,84 @@ mod tests {
         ] {
             assert!((center - mid).abs() < 0.5);
         }
+    }
+
+    #[test]
+    fn review_row_places_handles_between_the_times() {
+        let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(900.0, 56.0));
+        let slots = review_slots(bar, 80.0, 70.0, 48.0);
+        assert!(slots.play.right() < slots.time.left());
+        assert!(slots.time.right() <= slots.start_label.left());
+        assert!(slots.start_label.right() <= slots.seek.left());
+        assert!(slots.seek.right() <= slots.end_label.left());
+        assert!(slots.end_label.right() < slots.speaker.left());
+        assert!(slots.speaker.right() < slots.slider.left());
+        assert!(slots.seek.width() > 48.0);
+        assert!(slots.slider.width() > 0.0);
+    }
+
+    #[test]
+    fn narrow_review_row_drops_the_time_labels() {
+        let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(280.0, 56.0));
+        let slots = review_slots(bar, 80.0, 70.0, 48.0);
+        assert_eq!(slots.start_label.width(), 0.0);
+        assert_eq!(slots.end_label.width(), 0.0);
+        assert_eq!(slots.slider.width(), 0.0);
+        assert!(slots.seek.width() > 8.0);
+        assert!(slots.play.right() < slots.time.left());
+        assert!(slots.time.right() <= slots.seek.left());
+        assert!(slots.seek.right() <= slots.speaker.left());
+    }
+
+    #[test]
+    fn review_picture_grows_with_the_window() {
+        let wide = review_frame(1600.0, 900.0, 1920.0, 1080.0);
+        assert!(wide.picture.y > 460.0);
+        assert!(wide.picture.x > 960.0);
+        assert!(wide.button >= 72.0);
+        let row = wide.button * 2.0 + wide.gap * 2.0 + wide.picture.x;
+        assert!(row < 1600.0);
+        let narrow = review_frame(1100.0, 700.0, 1920.0, 1080.0);
+        assert!(wide.picture.x > narrow.picture.x);
+        assert!(wide.picture.y > narrow.picture.y);
+        let fitted = fit_picture(1920.0, 1080.0, wide.picture.x, wide.picture.y);
+        assert!((fitted.x - wide.picture.x).abs() < 0.5);
+        assert!((fitted.y - wide.picture.y).abs() < 0.5);
+    }
+
+    #[test]
+    fn dragging_the_end_keeps_playback_inside_the_clip() {
+        let start = 3_460;
+        let end = 25_710;
+        let resume = 12_000;
+        let preview = end;
+        assert_eq!(
+            playhead_after_trim(resume, preview, start, end, true),
+            resume
+        );
+        let pulled_in = 8_000;
+        assert_eq!(
+            playhead_after_trim(resume, pulled_in, start, pulled_in, true),
+            start
+        );
+        assert_eq!(
+            playhead_after_trim(resume, preview, start, end, false),
+            end - 1
+        );
+        assert!(playhead_after_trim(resume, preview, start, end, false) < end);
+    }
+
+    #[test]
+    fn clip_handle_sits_on_its_time() {
+        let view = ClipViewWindow {
+            view_start: 0,
+            view_end: 10_000,
+        };
+        let start = ms_to_x(2_000, view, 0.0, 100.0);
+        let end = ms_to_x(8_000, view, 0.0, 100.0);
+        assert!((start - 20.0).abs() < 0.1);
+        assert!((end - 80.0).abs() < 0.1);
+        assert!(start < end);
     }
 
     #[test]
