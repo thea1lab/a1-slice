@@ -81,6 +81,8 @@ pub struct A1App {
     review_view: Option<ClipViewWindow>,
     loop_at_clip: bool,
     trim: ReviewTrim,
+    /// Height of the review dock last frame, so the picture leaves room for it.
+    review_dock_px: f32,
 }
 
 impl A1App {
@@ -139,6 +141,7 @@ impl A1App {
             review_view: None,
             loop_at_clip: true,
             trim: ReviewTrim::Idle,
+            review_dock_px: 0.0,
         }
     }
 
@@ -1317,7 +1320,13 @@ impl A1App {
             .as_ref()
             .map(|texture| texture.size_vec2())
             .unwrap_or(egui::vec2(16.0, 9.0));
-        let frame = review_frame(avail_w, avail_h, tex.x, tex.y);
+        // 8px is the gap the parent layout inserts between the picture and the dock.
+        let dock = if self.review_dock_px > 1.0 {
+            self.review_dock_px + 8.0
+        } else {
+            248.0
+        };
+        let frame = review_frame(avail_w, avail_h, tex.x, tex.y, dock);
         let row_w = frame.button * 2.0 + frame.gap * 2.0 + frame.picture.x;
         let side = ((avail_w - row_w) * 0.5).max(0.0);
         ui.horizontal(|ui| {
@@ -1332,7 +1341,7 @@ impl A1App {
             ui.add_space(frame.gap);
             self.review_nav(ui, frame.button, frame.picture.y, 1);
         });
-        ui.horizontal(|ui| {
+        let dock_row = ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(side + frame.button + frame.gap);
             ui.vertical(|ui| {
@@ -1340,6 +1349,7 @@ impl A1App {
                 self.review_column(ui);
             });
         });
+        self.review_dock_px = dock_row.response.rect.height();
     }
 
     fn review_nav(&mut self, ui: &mut egui::Ui, button: f32, video_h: f32, delta: isize) {
@@ -1391,6 +1401,7 @@ impl A1App {
     }
 
     fn review_column(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().item_spacing.y = 0.0;
         ui.add_space(16.0);
         let (hair, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
@@ -1404,43 +1415,7 @@ impl A1App {
         let total = self.state.clips.len();
         if let Some(clip) = self.review_clip() {
             let index = self.review_index.min(total.saturating_sub(1));
-            ui.label(
-                RichText::new(&clip.title)
-                    .size(18.0)
-                    .color(if clip.approved { CREAM_HEAD } else { MUTED }),
-            );
-            ui.label(
-                RichText::new(format!(
-                    "{} – {}    {}",
-                    clock(clip.start_ms),
-                    clock(clip.end_ms),
-                    clip_length_label(clip.start_ms, clip.end_ms)
-                ))
-                .size(15.0)
-                .color(MUTED),
-            );
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 16.0;
-                ui.label(
-                    RichText::new(format!("Clip {} of {total}", index + 1))
-                        .size(15.0)
-                        .color(MUTED),
-                );
-                ui.label(
-                    RichText::new(format!("{kept} kept"))
-                        .size(15.0)
-                        .color(MUTED),
-                );
-            });
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(
-                    "Turn a clip off to leave it out. Drag the handles to set the start and end.",
-                )
-                .size(16.0)
-                .color(MUTED),
-            );
+            self.review_identity(ui, &clip, index, total, kept);
         } else {
             ui.label(
                 RichText::new("No clips to review yet.")
@@ -1448,17 +1423,145 @@ impl A1App {
                     .color(MUTED),
             );
         }
-        ui.add_space(16.0);
         if !self.status.is_empty() {
-            ui.label(RichText::new(&self.status).color(ORANGE));
             ui.add_space(8.0);
+            ui.label(RichText::new(&self.status).color(ORANGE));
         }
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            if secondary(ui, "Find again").clicked() {
+        ui.add_space(20.0);
+        self.review_actions(ui, kept);
+        ui.add_space(16.0);
+    }
+
+    fn review_identity(
+        &self,
+        ui: &mut egui::Ui,
+        clip: &ClipSegmentWithStatus,
+        index: usize,
+        total: usize,
+        kept: usize,
+    ) {
+        let width = ui.available_width();
+        let time_size = if width < 560.0 {
+            36.0
+        } else if width < 900.0 {
+            44.0
+        } else {
+            52.0
+        };
+        let cream_soft = Color32::from_rgb(0xd9, 0xd3, 0xc5);
+        let length = clip_length_words(clip.start_ms, clip.end_ms);
+        let mut length_size_px = time_size;
+        let mut length_galley = ui.painter().layout_no_wrap(
+            length.clone(),
+            egui::FontId::new(
+                length_size_px,
+                egui::FontFamily::Name("Noto Serif".into()),
+            ),
+            CREAM_HEAD,
+        );
+        while length_size_px > 32.0 && length_galley.size().x > width {
+            length_size_px -= 4.0;
+            length_galley = ui.painter().layout_no_wrap(
+                length.clone(),
+                egui::FontId::new(
+                    length_size_px,
+                    egui::FontFamily::Name("Noto Serif".into()),
+                ),
+                CREAM_HEAD,
+            );
+        }
+        if length_galley.size().x > width {
+            length_galley = ui.painter().layout(
+                length,
+                egui::FontId::new(
+                    length_size_px,
+                    egui::FontFamily::Name("Noto Serif".into()),
+                ),
+                CREAM_HEAD,
+                width,
+            );
+        }
+        let range = format!("{} – {}", clock(clip.start_ms), clock(clip.end_ms));
+        let range_galley = ui.painter().layout_no_wrap(
+            range,
+            egui::FontId::proportional(15.0),
+            cream_soft,
+        );
+        let meta = format!("Clip {} of {total}  ·  {kept} kept", index + 1);
+        let meta_galley = ui.painter().layout_no_wrap(
+            meta,
+            egui::FontId::proportional(13.0),
+            MUTED,
+        );
+        let title_color = if clip.approved { CREAM } else { MUTED };
+        let title_font = egui::FontId::proportional(16.0);
+        let meta_size = meta_galley.size();
+        let title_plain = ui.painter().layout_no_wrap(
+            clip.title.clone(),
+            title_font.clone(),
+            title_color,
+        );
+        let meta_gap = 20.0;
+        let meta_beside = title_plain.size().x + meta_gap + meta_size.x <= width;
+        let title_galley = if meta_beside {
+            title_plain
+        } else {
+            ui.painter()
+                .layout(clip.title.clone(), title_font, title_color, width)
+        };
+        let now_size = length_galley.size();
+        let range_size = range_galley.size();
+        let title_size = title_galley.size();
+        let beside_gap = 28.0;
+        let range_beside = now_size.x + beside_gap + range_size.x <= width;
+        let time_h = if range_beside {
+            now_size.y
+        } else {
+            now_size.y + 4.0 + range_size.y
+        };
+        let gap_title = 12.0;
+        let name_h = if meta_beside {
+            title_size.y.max(meta_size.y)
+        } else {
+            title_size.y + 4.0 + meta_size.y
+        };
+        let height = time_h + gap_title + name_h;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        let painter = ui.painter();
+        painter.galley(rect.left_top(), length_galley, CREAM_HEAD);
+        let range_pos = if range_beside {
+            egui::pos2(
+                rect.left() + now_size.x + beside_gap,
+                rect.top() + (now_size.y - range_size.y) * 0.5,
+            )
+        } else {
+            egui::pos2(rect.left(), rect.top() + now_size.y + 4.0)
+        };
+        painter.galley(range_pos, range_galley, cream_soft);
+        let title_y = rect.top() + time_h + gap_title;
+        painter.galley(egui::pos2(rect.left(), title_y), title_galley, title_color);
+        let meta_pos = if meta_beside {
+            egui::pos2(
+                rect.left() + title_size.x + meta_gap,
+                title_y + (title_size.y - meta_size.y) * 0.5,
+            )
+        } else {
+            egui::pos2(rect.left(), title_y + title_size.y + 4.0)
+        };
+        painter.galley(meta_pos, meta_galley, MUTED);
+    }
+
+    fn review_actions(&mut self, ui: &mut egui::Ui, kept: usize) {
+        let width = ui.available_width();
+        let export_label = format!("Export {kept} {}", if kept == 1 { "clip" } else { "clips" });
+        let export_w = text_button_width(ui, &export_label, 16.0, 22.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.set_min_width(width);
+            if review_secondary(ui, "Find again").clicked() {
                 self.dispatch(WizardAction::ShowScreen(Screen::Find));
             }
-            if secondary(ui, "Add a part").clicked() {
+            if review_secondary(ui, "Add a part").clicked() {
                 self.dispatch(WizardAction::AddClip);
                 self.review_index = self.state.clips.len().saturating_sub(1);
                 self.review_for = None;
@@ -1471,62 +1574,84 @@ impl A1App {
                 } else {
                     "Keep this one"
                 };
-                if secondary(ui, keep).clicked() {
+                if review_secondary(ui, keep).clicked() {
                     self.toggle_review_clip();
                 }
             }
-            let export_label =
-                format!("Export {kept} {}", if kept == 1 { "clip" } else { "clips" });
+            let spare = ui.available_width() - export_w - 8.0;
+            if spare > 8.0 {
+                ui.add_space(spare);
+            }
             if primary_lg(ui, &export_label).clicked() {
                 self.start_export_clips();
             }
         });
-        ui.add_space(16.0);
     }
 
     fn export_screen(&mut self, ui: &mut egui::Ui) {
         let done =
             self.state.export_stage == PipelineStage::Done && self.state.output_dir.is_some();
+        let failed = self.state.export_error.is_some();
         let title = if done {
             "Export complete"
-        } else if self.state.export_error.is_some() {
+        } else if failed {
             "Export failed"
         } else {
             "Exporting"
         };
-        ui.label(RichText::new(title).heading().size(36.0).color(CREAM));
-        if done {
-            if let Some(dir) = &self.state.output_dir {
-                ui.label(format!("Saved in {}.", file_name(dir)));
-                if primary(ui, "Open folder").clicked() {
-                    let _ = backend::open_path(std::path::Path::new(dir));
+        with_sheet(ui, |ui| {
+            let title_size = if ui.available_width() < 520.0 {
+                40.0
+            } else {
+                52.0
+            };
+            let serif = egui::FontId::new(title_size, egui::FontFamily::Name("Noto Serif".into()));
+            ui.label(RichText::new(title).font(serif).color(CREAM_HEAD));
+            ui.add_space(16.0);
+            if done {
+                let folder = self.state.output_dir.clone();
+                if let Some(dir) = folder {
+                    ui.label(
+                        RichText::new(format!("Saved in {}.", file_name(&dir)))
+                            .size(18.0)
+                            .color(MUTED),
+                    );
+                    ui.add_space(24.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        if primary_lg(ui, "Open folder").clicked() {
+                            let _ = backend::open_path(std::path::Path::new(&dir));
+                        }
+                        if review_secondary(ui, "Back to home").clicked() {
+                            self.go_home();
+                        }
+                    });
+                }
+            } else if let Some(error) = &self.state.export_error {
+                if !error.is_empty() {
+                    ui.label(RichText::new(error).size(18.0).color(ORANGE));
+                    ui.add_space(24.0);
+                }
+                if primary_lg(ui, "Back to home").clicked() {
+                    self.go_home();
+                }
+            } else {
+                if !self.state.export_message.is_empty() {
+                    ui.label(
+                        RichText::new(&self.state.export_message)
+                            .size(18.0)
+                            .color(CREAM),
+                    );
+                    ui.add_space(20.0);
+                }
+                export_progress(ui, self.state.export_percent);
+                ui.add_space(24.0);
+                if secondary(ui, "Cancel").clicked() {
+                    self.cancel();
                 }
             }
-            if ui.button("Reframe").clicked() {
-                if let Some(path) = self.state.video_path.clone() {
-                    self.open_video(ToolId::Reframe, PathBuf::from(path));
-                }
-            }
-            if ui.button("Captions").clicked() {
-                if let Some(path) = self.state.video_path.clone() {
-                    self.open_video(ToolId::Captions, PathBuf::from(path));
-                }
-            }
-            if ui.button("Back to home").clicked() {
-                self.go_home();
-            }
-        } else if let Some(error) = &self.state.export_error {
-            ui.label(RichText::new(error).color(ORANGE));
-            if ui.button("Back to home").clicked() {
-                self.go_home();
-            }
-        } else {
-            progress(ui, self.state.export_percent);
-            ui.label(&self.state.export_message);
-            if ui.button("Cancel").clicked() {
-                self.cancel();
-            }
-        }
+        });
+        ui.add_space(80.0);
     }
 
     fn reframe(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -2901,14 +3026,13 @@ struct ReviewFrame {
     gap: f32,
 }
 
-fn review_frame(avail_w: f32, avail_h: f32, tex_w: f32, tex_h: f32) -> ReviewFrame {
+fn review_frame(avail_w: f32, avail_h: f32, tex_w: f32, tex_h: f32, dock: f32) -> ReviewFrame {
     let button = if avail_w < 720.0 { 56.0 } else { 76.0 };
     let gap = 24.0;
     let margin = 24.0;
-    // Title, times, and the action row stay on screen under the picture.
-    let dock = 210.0;
+    // Leave the measured dock on screen, plus a couple of pixels so a scrollbar does not appear.
     let max_w = (avail_w - 2.0 * (button + gap + margin)).max(160.0);
-    let max_h = (avail_h - dock).max(180.0);
+    let max_h = (avail_h - dock - 2.0).max(180.0);
     ReviewFrame {
         picture: fit_picture(tex_w, tex_h, max_w, max_h),
         button,
@@ -2954,18 +3078,42 @@ fn playhead_after_trim(
     }
 }
 
-fn clip_length_label(start_ms: i64, end_ms: i64) -> String {
-    let total = ((end_ms - start_ms).max(0)) / 1000;
+fn clip_length_words(start_ms: i64, end_ms: i64) -> String {
+    let total = (end_ms - start_ms).max(0) / 1000;
     let hours = total / 3600;
     let minutes = (total % 3600) / 60;
     let seconds = total % 60;
+    let mut parts = Vec::new();
     if hours > 0 {
-        format!("{hours}h {minutes}m {seconds}s")
-    } else if minutes > 0 {
-        format!("{minutes}m {seconds}s")
-    } else {
-        format!("{seconds}s")
+        parts.push(count_words(hours, "hour", "hours"));
     }
+    if minutes > 0 {
+        parts.push(count_words(minutes, "minute", "minutes"));
+    }
+    if seconds > 0 || parts.is_empty() {
+        parts.push(count_words(seconds, "second", "seconds"));
+    }
+    match parts.len() {
+        1 => parts.remove(0),
+        2 => format!("{} and {}", parts[0], parts[1]),
+        _ => {
+            let last = parts.pop().expect("at least one part");
+            format!("{} and {last}", parts.join(", "))
+        }
+    }
+}
+
+fn count_words(count: i64, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+fn text_button_width(ui: &egui::Ui, label: &str, text_size: f32, pad_x: f32) -> f32 {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_string(),
+        egui::FontId::proportional(text_size),
+        Color32::WHITE,
+    );
+    galley.size().x + pad_x * 2.0
 }
 
 fn paint_seek_tip(
@@ -3336,6 +3484,20 @@ fn secondary(ui: &mut egui::Ui, label: &str) -> egui::Response {
     )
 }
 
+fn review_secondary(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    painted_button(
+        ui,
+        label,
+        14.0,
+        CREAM,
+        Color32::TRANSPARENT,
+        Color32::from_white_alpha(16),
+        Stroke::new(1.0_f32, Color32::from_rgb(0x4a, 0x4a, 0x4a)),
+        48.0,
+        20.0,
+    )
+}
+
 fn danger(ui: &mut egui::Ui, label: &str) -> egui::Response {
     painted_button(
         ui,
@@ -3543,6 +3705,41 @@ fn progress(ui: &mut egui::Ui, percent: f64) {
     let bar = egui::ProgressBar::new((percent as f32 / 100.0).clamp(0.0, 1.0))
         .text(format!("{percent:.0}%"));
     ui.add(bar);
+}
+
+fn export_progress(ui: &mut egui::Ui, percent: f64) {
+    let percent = percent.clamp(0.0, 100.0);
+    let galley = ui.painter().layout_no_wrap(
+        format!("{percent:.0}%"),
+        egui::FontId::proportional(15.0),
+        CREAM,
+    );
+    let label = galley.size();
+    let gap = 16.0;
+    let bar_h = 6.0;
+    let width = ui.available_width();
+    let row_h = label.y.max(bar_h);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_h), egui::Sense::hover());
+    let bar_w = (width - gap - label.x).max(24.0);
+    let track = egui::Rect::from_min_size(
+        egui::pos2(rect.left(), rect.center().y - bar_h * 0.5),
+        egui::vec2(bar_w, bar_h),
+    );
+    ui.painter()
+        .rect_filled(track, bar_h * 0.5, Color32::from_white_alpha(40));
+    let fill_w = (bar_w * (percent as f32 / 100.0)).clamp(0.0, bar_w);
+    if fill_w > 0.5 {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(track.min, egui::vec2(fill_w, bar_h)),
+            bar_h * 0.5,
+            ORANGE,
+        );
+    }
+    ui.painter().galley(
+        egui::pos2(rect.right() - label.x, rect.center().y - label.y * 0.5),
+        galley,
+        CREAM,
+    );
 }
 
 fn clock(ms: i64) -> String {
@@ -3894,8 +4091,8 @@ fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::process::Chil
 #[cfg(test)]
 mod tests {
     use super::{
-        fit_picture, ms_to_x, playhead_after_trim, review_frame, review_slots, transport_slots,
-        ClipViewWindow,
+        clip_length_words, fit_picture, ms_to_x, playhead_after_trim, review_frame, review_slots,
+        transport_slots, ClipViewWindow,
     };
 
     #[test]
@@ -3951,13 +4148,13 @@ mod tests {
 
     #[test]
     fn review_picture_grows_with_the_window() {
-        let wide = review_frame(1600.0, 900.0, 1920.0, 1080.0);
+        let wide = review_frame(1600.0, 900.0, 1920.0, 1080.0, 248.0);
         assert!(wide.picture.y > 460.0);
         assert!(wide.picture.x > 960.0);
         assert!(wide.button >= 72.0);
         let row = wide.button * 2.0 + wide.gap * 2.0 + wide.picture.x;
         assert!(row < 1600.0);
-        let narrow = review_frame(1100.0, 700.0, 1920.0, 1080.0);
+        let narrow = review_frame(1100.0, 700.0, 1920.0, 1080.0, 248.0);
         assert!(wide.picture.x > narrow.picture.x);
         assert!(wide.picture.y > narrow.picture.y);
         let fitted = fit_picture(1920.0, 1080.0, wide.picture.x, wide.picture.y);
@@ -4010,5 +4207,24 @@ mod tests {
         assert!(slots.time.right() < slots.speaker.left());
         assert!(slots.speaker.right() <= bar.right());
         assert!(slots.seek.width() > 8.0);
+    }
+
+    #[test]
+    fn clip_length_is_spoken_in_words() {
+        assert_eq!(clip_length_words(0, 0), "0 seconds");
+        assert_eq!(clip_length_words(0, 1_000), "1 second");
+        assert_eq!(clip_length_words(0, 59_000), "59 seconds");
+        assert_eq!(clip_length_words(0, 60_000), "1 minute");
+        assert_eq!(clip_length_words(0, 75_000), "1 minute and 15 seconds");
+        assert_eq!(clip_length_words(0, 121_000), "2 minutes and 1 second");
+        assert_eq!(clip_length_words(0, 3_600_000), "1 hour");
+        assert_eq!(
+            clip_length_words(0, 3_600_000 + 15_000),
+            "1 hour and 15 seconds"
+        );
+        assert_eq!(
+            clip_length_words(0, 7_200_000 + 120_000 + 5_000),
+            "2 hours, 2 minutes and 5 seconds"
+        );
     }
 }
