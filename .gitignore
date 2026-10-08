@@ -1,4 +1,5 @@
 target/
+dist/
 
 # Whisper binaries built by scripts/build-whisper.sh
 resources/bin/*

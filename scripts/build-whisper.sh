@@ -57,18 +57,29 @@ case "$OS" in
     chmod +x "$BIN_DIR/${NAME}-gpu"
     ;;
   Linux)
-    # Linux: CPU only
     NAME="whisper-cli-linux-x64"
     [ "$ARCH" = "aarch64" ] && NAME="whisper-cli-linux-arm64"
 
     echo "Building whisper-cli (CPU)..."
-    cmake -S "$TMP_DIR/whisper.cpp" -B "$TMP_DIR/whisper.cpp/build" \
+    cmake -S "$TMP_DIR/whisper.cpp" -B "$TMP_DIR/whisper.cpp/build-cpu" \
       -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
       -DGGML_METAL=OFF -DGGML_CUDA=OFF
-    cmake --build "$TMP_DIR/whisper.cpp/build" --config Release \
+    cmake --build "$TMP_DIR/whisper.cpp/build-cpu" --config Release \
       --target whisper-cli -j"$NPROC"
-    cp "$TMP_DIR/whisper.cpp/build/bin/whisper-cli" "$BIN_DIR/$NAME"
+    cp "$TMP_DIR/whisper.cpp/build-cpu/bin/whisper-cli" "$BIN_DIR/$NAME"
     chmod +x "$BIN_DIR/$NAME"
+
+    if command -v nvcc >/dev/null 2>&1; then
+      echo "Building whisper-cli (GPU, CUDA)..."
+      cmake -S "$TMP_DIR/whisper.cpp" -B "$TMP_DIR/whisper.cpp/build-gpu" \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+        -DGGML_METAL=OFF -DGGML_CUDA=ON \
+        -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90"
+      cmake --build "$TMP_DIR/whisper.cpp/build-gpu" --config Release \
+        --target whisper-cli -j"$NPROC"
+      cp "$TMP_DIR/whisper.cpp/build-gpu/bin/whisper-cli" "$BIN_DIR/${NAME}-gpu"
+      chmod +x "$BIN_DIR/${NAME}-gpu"
+    fi
     ;;
   MINGW*|MSYS*|CYGWIN*)
     # Windows: CPU only

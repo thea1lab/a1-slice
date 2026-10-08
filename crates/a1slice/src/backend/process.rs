@@ -22,7 +22,7 @@ pub fn which(cmd: &str) -> Option<PathBuf> {
 
 fn whisper_names() -> (&'static str, &'static str) {
     if cfg!(windows) {
-        ("whisper-cli-win-x64.exe", "whisper-cli-win-x64.exe")
+        ("whisper-cli-win-x64-gpu.exe", "whisper-cli-win-x64.exe")
     } else if cfg!(target_os = "macos") {
         if cfg!(target_arch = "aarch64") {
             ("whisper-cli-mac-arm64-gpu", "whisper-cli-mac-arm64")
@@ -30,18 +30,29 @@ fn whisper_names() -> (&'static str, &'static str) {
             ("whisper-cli-mac-x64-gpu", "whisper-cli-mac-x64")
         }
     } else if cfg!(target_arch = "aarch64") {
-        ("whisper-cli-linux-arm64", "whisper-cli-linux-arm64")
+        ("whisper-cli-linux-arm64-gpu", "whisper-cli-linux-arm64")
     } else {
-        ("whisper-cli-linux-x64", "whisper-cli-linux-x64")
+        ("whisper-cli-linux-x64-gpu", "whisper-cli-linux-x64")
     }
 }
 
 pub fn whisper_binary() -> Option<PathBuf> {
     let (gpu, cpu) = whisper_names();
-    let roots = [
+    let mut roots = vec![
         PathBuf::from("resources/bin"),
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources/bin"),
     ];
+    if let Ok(appdir) = std::env::var("APPDIR") {
+        roots.insert(0, PathBuf::from(appdir).join("resources/bin"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            roots.push(parent.join("resources/bin"));
+            if let Some(grandparent) = parent.parent() {
+                roots.push(grandparent.join("resources/bin"));
+            }
+        }
+    }
     for name in [gpu, cpu] {
         for root in &roots {
             let path = root.join(name);
@@ -247,4 +258,21 @@ pub(super) fn tail(text: &str) -> String {
     }
     let start = trimmed.len().saturating_sub(400);
     trimmed[start..].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn whisper_names_include_gpu_variant() {
+        let (gpu, cpu) = whisper_names();
+        assert!(gpu.contains("gpu"));
+        assert!(!cpu.contains("gpu"));
+    }
+
+    #[test]
+    fn tail_returns_ffmpeg_failed_on_empty() {
+        assert_eq!(tail("   "), "ffmpeg failed");
+    }
 }
