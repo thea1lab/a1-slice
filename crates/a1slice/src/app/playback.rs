@@ -9,7 +9,7 @@ use eframe::egui::{self};
 use std::sync::mpsc::{self};
 
 use super::layout::playhead_after_trim;
-use super::support::start_audio;
+use super::support::{start_audio, stop_child};
 use super::{A1App, ReviewTrim};
 
 pub(super) struct FrameResult {
@@ -279,8 +279,8 @@ impl A1App {
     }
 
     pub(super) fn stop_audio(&mut self) {
-        if let Some(mut child) = self.audio.take() {
-            let _ = child.kill();
+        if let Some(child) = self.audio.take() {
+            stop_child(child);
         }
     }
 }

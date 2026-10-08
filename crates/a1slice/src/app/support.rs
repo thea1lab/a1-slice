@@ -220,6 +220,15 @@ pub(super) fn load_recent() -> Vec<(String, String)> {
         .collect()
 }
 
+/// End a playback process and wait until it is gone.
+///
+/// Dropping a `Child` leaves ffplay or mpv running, so closing the window
+/// would keep the video's sound going.
+pub(super) fn stop_child(mut child: std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub(super) fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::process::Child> {
     let sec = format!("{:.3}", at_ms.max(0) as f64 / 1000.0);
     let vol = ((volume.clamp(0.0, 1.0)) * 100.0) as i32;
@@ -276,5 +285,22 @@ mod tests {
     fn file_name_keeps_the_last_path_piece() {
         assert_eq!(file_name("/tmp/interview.mp4"), "interview.mp4");
         assert_eq!(file_name("interview.mp4"), "interview.mp4");
+    }
+
+    #[test]
+    fn stop_child_ends_the_process() {
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sleep");
+        let pid = child.id();
+        super::stop_child(child);
+        assert!(
+            std::fs::metadata(format!("/proc/{pid}")).is_err(),
+            "process {pid} was still running"
+        );
     }
 }

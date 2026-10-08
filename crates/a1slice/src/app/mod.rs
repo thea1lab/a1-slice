@@ -210,7 +210,18 @@ impl A1App {
     }
 }
 
+impl Drop for A1App {
+    fn drop(&mut self) {
+        // The player is a separate process. Closing the window must stop it.
+        self.stop_audio();
+    }
+}
+
 impl eframe::App for A1App {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.stop_audio();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
         self.tick_find_progress(ctx);
