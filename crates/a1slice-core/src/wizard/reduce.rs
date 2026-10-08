@@ -257,6 +257,15 @@ pub fn wizard_reduce(state: &WizardState, action: WizardAction) -> WizardState {
             export_error: Some(error),
             ..state.clone()
         },
+        WizardAction::CancelExport(screen) => WizardState {
+            screen,
+            export_stage: PipelineStage::Idle,
+            export_message: String::new(),
+            export_percent: 0.0,
+            export_error: None,
+            output_dir: None,
+            ..state.clone()
+        },
     }
 }
 

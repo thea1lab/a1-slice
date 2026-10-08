@@ -22,12 +22,19 @@ pub fn generate_srt(segments: &[TranscriptSegment]) -> String {
 }
 
 pub fn parse_ffmpeg_progress(stderr: &str) -> Option<i64> {
+    parse_ffmpeg_time_ms(stderr).map(|ms| ms / 1000)
+}
+
+/// Last `time=` or `out_time=` in an ffmpeg progress log, in milliseconds.
+pub fn parse_ffmpeg_time_ms(text: &str) -> Option<i64> {
     let mut last = None;
-    let mut rest = stderr;
+    let mut rest = text;
     while let Some(idx) = rest.find("time=") {
         let after = &rest[idx + 5..];
-        if let Some((hours, minutes, seconds, _)) = parse_hms_frac_prefix(after) {
-            last = Some(hours * 3600 + minutes * 60 + seconds);
+        if let Some((hours, minutes, seconds, frac)) = parse_hms_frac_prefix(after) {
+            let frac_value: f64 = format!("0.{frac}").parse().unwrap_or(0.0);
+            let ms = (frac_value * 1000.0).round() as i64;
+            last = Some(hours * 3_600_000 + minutes * 60_000 + seconds * 1000 + ms);
         }
         rest = &rest[idx + 5..];
     }

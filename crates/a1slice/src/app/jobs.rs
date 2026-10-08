@@ -32,7 +32,11 @@ impl A1App {
         if let Some(saved) = framing.keys().copied().next() {
             self.ratio = saved;
         }
-        let duration = backend::probe(&path).map(|(ms, _, _)| ms).unwrap_or(0);
+        let probed = backend::probe(&path).ok();
+        let duration = probed.map(|(ms, _, _)| ms).unwrap_or(0);
+        self.picture_px = probed
+            .map(|(_, width, height)| (width, height))
+            .unwrap_or((0, 0));
         self.dispatch(WizardAction::ProjectLoaded {
             segments,
             clips: with_clip_status(&clips),
@@ -126,11 +130,16 @@ impl A1App {
                 self.dispatch(WizardAction::ExportDone(path.display().to_string()));
             }
             Ok(Err(error)) if error == "Stopped." => {
+                let export_from = self.export_from;
+                let on_export = self.state.screen == Screen::Export;
                 self.dispatch(WizardAction::TranscribeError(String::new()));
                 self.state.transcribe_error = None;
                 self.state.analyzing = false;
                 self.state.analyze_error = None;
                 self.state.analyze_message.clear();
+                if on_export {
+                    self.dispatch(WizardAction::CancelExport(export_from));
+                }
             }
             Ok(Err(error)) => {
                 if self.state.screen == Screen::Transcribe {
@@ -208,6 +217,8 @@ impl A1App {
             return;
         }
         let segments = self.state.segments.clone();
+        self.stop_playback();
+        self.export_from = Screen::Review;
         self.dispatch(WizardAction::StartExport);
         let (tx, rx) = mpsc::channel();
         self.progress_rx = Some(rx);
@@ -231,9 +242,26 @@ impl A1App {
             return;
         };
         let crop = current_crop(&self.state, self.ratio);
-        self.dispatch(WizardAction::StartRender);
+        self.stop_playback();
+        self.export_from = Screen::Reframe;
+        self.dispatch(WizardAction::StartExport);
+        self.dispatch(WizardAction::ExportProgress(ProgressUpdate {
+            stage: PipelineStage::Cutting,
+            message: "Reframing the picture…".into(),
+            percent: 0.0,
+        }));
+        let (tx, rx) = mpsc::channel();
+        self.progress_rx = Some(rx);
         self.job = Some(backend::spawn_job(move |cancel, child| {
-            let dir = backend::export_reframe(std::path::Path::new(&path), crop, &cancel, &child)?;
+            let dir = backend::export_reframe(
+                std::path::Path::new(&path),
+                crop,
+                &cancel,
+                &child,
+                |update| {
+                    let _ = tx.send(update);
+                },
+            )?;
             Ok(JobDone::Folder(dir))
         }));
     }

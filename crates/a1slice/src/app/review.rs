@@ -15,12 +15,7 @@ impl A1App {
     pub(super) fn review(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.focus_review_clip();
         let avail_w = ui.available_width();
-        let viewport_h = ui.clip_rect().height();
-        let avail_h = if viewport_h.is_finite() && viewport_h > 1.0 {
-            viewport_h
-        } else {
-            640.0
-        };
+        let avail_h = super::layout::viewport_height(ui);
         let tex = self
             .frame
             .as_ref()
@@ -30,7 +25,7 @@ impl A1App {
         let dock = if self.review_dock_px > 1.0 {
             self.review_dock_px + 8.0
         } else {
-            248.0
+            320.0
         };
         let frame = review_frame(avail_w, avail_h, tex.x, tex.y, dock);
         let row_w = frame.button * 2.0 + frame.gap * 2.0 + frame.picture.x;

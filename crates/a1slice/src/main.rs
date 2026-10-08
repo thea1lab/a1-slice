@@ -108,8 +108,8 @@ fn main() -> eframe::Result<()> {
     ensure_linux_desktop_entry();
 
     let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([1100.0, 760.0])
-        .with_min_inner_size([420.0, 640.0])
+        .with_inner_size([1280.0, 960.0])
+        .with_min_inner_size([800.0, 680.0])
         .with_title("A1 Slice")
         .with_app_id("a1slice");
 

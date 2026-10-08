@@ -2,17 +2,26 @@
 
 use a1slice_core::clip_find::format_clip_transcript;
 use a1slice_core::crop::ffmpeg_crop_filter;
+use a1slice_core::ffmpeg_cmd::{caption_burn_filter, find_caption_font};
 use a1slice_core::sidecars::{self, generate_srt, shift_subtitles};
 use a1slice_core::types::{
-    CaptionFont, CaptionLook, CaptionStyle, ClipCrop, ClipSegment, CropRatio, PipelineStage,
-    ProgressUpdate, TranscriptSegment,
+    CaptionLook, CaptionStyle, ClipCrop, ClipSegment, CropRatio, PipelineStage, ProgressUpdate,
+    TranscriptSegment,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::process::{probe, run_ffmpeg};
+use super::process::{probe, run_ffmpeg, run_ffmpeg_watch};
+
+/// Percent of an encode, held under 100 until the file is actually written.
+pub(crate) fn encode_percent(time_ms: i64, duration_ms: i64) -> f64 {
+    if duration_ms <= 0 {
+        return 0.0;
+    }
+    ((time_ms.max(0) as f64 / duration_ms as f64) * 100.0).clamp(0.0, 99.0)
+}
 
 fn cut_args(
     input: &Path,
@@ -147,6 +156,7 @@ pub fn export_reframe(
     crop: ClipCrop,
     cancel: &AtomicBool,
     child_slot: &Mutex<Option<std::process::Child>>,
+    mut on_progress: impl FnMut(ProgressUpdate),
 ) -> Result<PathBuf, String> {
     let (duration, w, h) = probe(video)?;
     let (dir, stem) = sidecars::video_stem(video);
@@ -163,10 +173,27 @@ pub fn export_reframe(
         ffmpeg_crop_filter(crop, w as f64, h as f64)
     };
     let duration_sec = (duration as f64 / 1000.0).max(0.2);
-    run_ffmpeg(
+    on_progress(ProgressUpdate {
+        stage: PipelineStage::Cutting,
+        message: "Reframing the picture…".into(),
+        percent: 0.0,
+    });
+    let last = std::cell::Cell::new(0.0_f64);
+    run_ffmpeg_watch(
         &cut_args(video, &file, 0.0, duration_sec, filter.as_deref()),
         cancel,
         child_slot,
+        |time_ms| {
+            let percent = encode_percent(time_ms, duration);
+            if percent - last.get() >= 1.0 {
+                last.set(percent);
+                on_progress(ProgressUpdate {
+                    stage: PipelineStage::Cutting,
+                    message: "Reframing the picture…".into(),
+                    percent,
+                });
+            }
+        },
     )?;
     Ok(out_dir)
 }
@@ -195,9 +222,15 @@ pub fn export_captions(
     let file = out_dir.join(format!("{stem}.mp4"));
     let srt = std::env::temp_dir().join(format!("a1slice-{stamp}.srt"));
     std::fs::write(&srt, generate_srt(cues)).map_err(|e| e.to_string())?;
-    let font = find_font(style.font)
+    let font = find_caption_font(style.font, &[])
         .ok_or_else(|| "No caption font found on this computer".to_string())?;
-    let filter = caption_burn_filter(&srt, &font.0, &font.1, style);
+    let filter = caption_burn_filter(
+        &srt.display().to_string(),
+        &font.dir,
+        &font.name,
+        style,
+        font.cell_ratio,
+    );
     let duration_sec = (duration as f64 / 1000.0).max(0.2);
     let result = run_ffmpeg(
         &cut_args(video, &file, 0.0, duration_sec, Some(&filter)),
@@ -209,119 +242,16 @@ pub fn export_captions(
     Ok(out_dir)
 }
 
-fn find_font(font: CaptionFont) -> Option<(PathBuf, String)> {
-    let candidates: &[(&str, &str)] = match font {
-        CaptionFont::Serif => &[
-            (
-                "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf",
-                "Noto Serif",
-            ),
-            ("/usr/share/fonts/noto/NotoSerif-Regular.ttf", "Noto Serif"),
-            (
-                "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
-                "Liberation Serif",
-            ),
-            (
-                "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
-                "DejaVu Serif",
-            ),
-        ],
-        CaptionFont::Mono => &[
-            (
-                "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
-                "Noto Sans Mono",
-            ),
-            (
-                "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
-                "Noto Sans Mono",
-            ),
-            (
-                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-                "DejaVu Sans Mono",
-            ),
-        ],
-        CaptionFont::Sans => &[
-            (
-                "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-                "Noto Sans",
-            ),
-            ("/usr/share/fonts/noto/NotoSans-Regular.ttf", "Noto Sans"),
-            (
-                "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-                "Liberation Sans",
-            ),
-            (
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                "DejaVu Sans",
-            ),
-        ],
-    };
-    candidates
-        .iter()
-        .find(|(path, _)| Path::new(path).is_file())
-        .map(|(p, n)| (PathBuf::from(p), (*n).to_string()))
-}
+#[cfg(test)]
+mod tests {
+    use super::encode_percent;
 
-fn caption_burn_filter(
-    srt: &Path,
-    fonts_dir: &Path,
-    font_name: &str,
-    style: &CaptionStyle,
-) -> String {
-    let (ass, outline, size, margin, align) = style_force(style);
-    let force = format!(
-        "FontName={font_name}\\,FontSize={size}\\,PrimaryColour={ass}\\,OutlineColour={outline}\\,BorderStyle=1\\,Outline=0.55\\,Shadow=0\\,Bold=0\\,Alignment={align}\\,MarginV={margin}"
-    );
-    let srt = escape_filter(srt);
-    let fonts = escape_filter(fonts_dir);
-    format!("subtitles='{srt}':fontsdir='{fonts}':force_style='{force}'")
-}
-
-fn style_force(style: &CaptionStyle) -> (String, String, i64, i64, i32) {
-    let (ass, outline) = if let Some(hex) = style.custom_color.as_deref().and_then(hex_to_ass) {
-        (hex, "&H00000000".to_string())
-    } else {
-        match style.color {
-            a1slice_core::types::CaptionColor::Cream => ("&H00E0F8FF".into(), "&H00000000".into()),
-            a1slice_core::types::CaptionColor::Yellow => ("&H004AE1FF".into(), "&H00000000".into()),
-            a1slice_core::types::CaptionColor::Black => ("&H00111111".into(), "&H00FFFFFF".into()),
-            a1slice_core::types::CaptionColor::White => ("&H00FFFFFF".into(), "&H00000000".into()),
-        }
-    };
-    let (preset, margin) = match style.size {
-        a1slice_core::types::CaptionSize::Small => (18, 36),
-        a1slice_core::types::CaptionSize::Medium => (24, 60),
-        a1slice_core::types::CaptionSize::Large => (28, 90),
-    };
-    let size = style.font_size.unwrap_or(preset).clamp(8, 96);
-    let align = match style.position {
-        a1slice_core::types::CaptionPosition::Top => 8,
-        a1slice_core::types::CaptionPosition::Middle => 5,
-        a1slice_core::types::CaptionPosition::Bottom => 2,
-    };
-    let margin = if matches!(style.position, a1slice_core::types::CaptionPosition::Middle) {
-        0
-    } else {
-        margin
-    };
-    (ass, outline, size, margin, align)
-}
-
-fn hex_to_ass(hex: &str) -> Option<String> {
-    let hex = hex.trim().trim_start_matches('#');
-    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
+    #[test]
+    fn encode_percent_tracks_the_file_and_holds_the_last_step() {
+        assert_eq!(encode_percent(0, 10_000), 0.0);
+        assert_eq!(encode_percent(5_000, 10_000), 50.0);
+        assert_eq!(encode_percent(20_000, 10_000), 99.0);
+        assert_eq!(encode_percent(-10, 10_000), 0.0);
+        assert_eq!(encode_percent(100, 0), 0.0);
     }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some(format!("&H00{b:02X}{g:02X}{r:02X}"))
-}
-
-fn escape_filter(path: &Path) -> String {
-    path.display()
-        .to_string()
-        .replace('\\', "/")
-        .replace(':', "\\:")
-        .replace('\'', "\\'")
 }

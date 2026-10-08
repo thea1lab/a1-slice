@@ -82,7 +82,15 @@ mod tests {
             cy: 0.5,
             zoom: 0.0,
         };
-        let out = export_reframe(&src, crop, &cancel, &slot).unwrap();
+        let mut percents = Vec::new();
+        let out = export_reframe(&src, crop, &cancel, &slot, |update| {
+            percents.push(update.percent);
+        })
+        .unwrap();
+        assert!(
+            percents.iter().any(|percent| *percent > 0.0),
+            "reframe progress should move, got {percents:?}"
+        );
         let mp4 = std::fs::read_dir(&out)
             .unwrap()
             .find_map(|e| e.ok())
@@ -90,8 +98,9 @@ mod tests {
             .path();
         let (_ms, ow, oh) = probe(&mp4).unwrap();
         assert_eq!(
-            ow, oh,
-            "square export should have equal sides, got {ow}x{oh}"
+            (ow, oh),
+            (1080, 1080),
+            "square export should be 1080×1080, got {ow}x{oh}"
         );
 
         let cues = vec![TranscriptSegment {
@@ -110,6 +119,19 @@ mod tests {
         let burned =
             export_captions(&src, &cues, CaptionLook::Burn, &style, &cancel, &slot).unwrap();
         assert!(burned.is_dir());
+        let burned_mp4 = std::fs::read_dir(&burned)
+            .unwrap()
+            .find_map(|entry| entry.ok().map(|entry| entry.path()))
+            .unwrap();
+        let (_bw, _bh, pixels) = grab_frame(&burned_mp4, 200, 160).unwrap();
+        let marked = pixels
+            .chunks(4)
+            .filter(|px| px[1] > 40 || px[2] > 40)
+            .count();
+        assert!(
+            marked > 20,
+            "burned caption should mark the red frame, marked {marked} pixels"
+        );
         let srt = export_captions(&src, &cues, CaptionLook::Srt, &style, &cancel, &slot).unwrap();
         let text = std::fs::read_to_string(&srt).unwrap();
         assert!(text.contains("Hello"));

@@ -4,7 +4,7 @@ use crate::backend::{self};
 use a1slice_core::sidecars::{self};
 use a1slice_core::types::*;
 use a1slice_core::wizard::WizardState;
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
 use super::theme::MUTED;
 
@@ -59,6 +59,19 @@ pub(super) fn current_crop(state: &WizardState, ratio: CropRatio) -> ClipCrop {
     }
 }
 
+/// The line drawn on the picture. The cue under the playhead wins.
+/// Before the first cue starts, the first line is shown so the style is visible.
+pub(super) fn caption_on_picture<'a>(
+    cues: &'a [TranscriptSegment],
+    playhead_ms: i64,
+) -> Option<&'a str> {
+    let spoken = |text: &'a str| (!text.trim().is_empty()).then_some(text);
+    cues.iter()
+        .find(|cue| playhead_ms >= cue.start_ms && playhead_ms <= cue.end_ms)
+        .and_then(|cue| spoken(&cue.text))
+        .or_else(|| cues.first().and_then(|cue| spoken(&cue.text)))
+}
+
 pub(super) fn active_cues(state: &WizardState, source: CaptionSource) -> Vec<TranscriptSegment> {
     if source == CaptionSource::Manual {
         if let Some(captions) = &state.captions {
@@ -92,34 +105,6 @@ fn normalize_hex(value: &str) -> Option<String> {
         Some(format!("#{}", hex.to_ascii_lowercase()))
     } else {
         None
-    }
-}
-
-pub(super) fn ink_color(style: &CaptionStyle) -> Color32 {
-    if let Some(hex) = style
-        .custom_color
-        .as_deref()
-        .and_then(|h| h.strip_prefix('#'))
-    {
-        if hex.len() == 6 {
-            if let (Ok(r), Ok(g), Ok(b)) = (
-                u8::from_str_radix(&hex[0..2], 16),
-                u8::from_str_radix(&hex[2..4], 16),
-                u8::from_str_radix(&hex[4..6], 16),
-            ) {
-                return Color32::from_rgb(r, g, b);
-            }
-        }
-    }
-    caption_color(style.color)
-}
-
-fn caption_color(color: CaptionColor) -> Color32 {
-    match color {
-        CaptionColor::White => Color32::WHITE,
-        CaptionColor::Cream => Color32::from_rgb(0xff, 0xf8, 0xe0),
-        CaptionColor::Yellow => Color32::from_rgb(0xff, 0xe1, 0x4a),
-        CaptionColor::Black => Color32::from_rgb(0x11, 0x11, 0x11),
     }
 }
 
@@ -271,7 +256,16 @@ pub(super) fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::pr
 
 #[cfg(test)]
 mod tests {
-    use super::{file_name, normalize_hex};
+    use super::{caption_on_picture, file_name, normalize_hex};
+    use a1slice_core::types::TranscriptSegment;
+
+    fn cue(start_ms: i64, end_ms: i64, text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            start_ms,
+            end_ms,
+            text: text.into(),
+        }
+    }
 
     #[test]
     fn hex_colour_gains_a_hash_and_lowercase() {
@@ -302,5 +296,20 @@ mod tests {
             std::fs::metadata(format!("/proc/{pid}")).is_err(),
             "process {pid} was still running"
         );
+    }
+
+    #[test]
+    fn caption_on_picture_shows_the_line_under_the_playhead() {
+        let cues = vec![cue(0, 1000, "Hello"), cue(1000, 2000, "There")];
+        assert_eq!(caption_on_picture(&cues, 1500), Some("There"));
+        assert_eq!(caption_on_picture(&cues, 250), Some("Hello"));
+    }
+
+    #[test]
+    fn caption_on_picture_uses_the_first_line_before_it_starts() {
+        let cues = vec![cue(1500, 3000, "Later")];
+        assert_eq!(caption_on_picture(&cues, 0), Some("Later"));
+        assert_eq!(caption_on_picture(&[], 0), None);
+        assert_eq!(caption_on_picture(&[cue(0, 10, "  ")], 5), None);
     }
 }

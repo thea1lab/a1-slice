@@ -31,6 +31,8 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     ctx.set_visuals(visuals);
     ctx.style_mut(|style| {
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        // A floating bar paints over the last letters. A solid bar keeps its own column.
+        style.spacing.scroll = egui::style::ScrollStyle::solid();
         style.visuals.override_text_color = Some(CREAM);
     });
 }

@@ -1,6 +1,18 @@
 use crate::types::{ClipCrop, CropRatio, DEFAULT_CROP};
 
 pub const MAX_ZOOM_SCALE: f64 = 0.42;
+/// Slider and wheel range. 0 is the fitted frame, 1 is the old maximum, 2 is twice as tight.
+pub const MAX_CROP_ZOOM: f64 = 2.0;
+
+/// Window size relative to the fitted frame. 1 keeps today's zoom of 1, and 2 halves that window.
+pub fn zoom_window_scale(zoom: f64) -> f64 {
+    let zoom = clamp(zoom, 0.0, MAX_CROP_ZOOM);
+    if zoom <= 1.0 {
+        1.0 - zoom * (1.0 - MAX_ZOOM_SCALE)
+    } else {
+        MAX_ZOOM_SCALE / zoom
+    }
+}
 
 pub fn ratio_pair(ratio: CropRatio) -> Option<(f64, f64)> {
     Some(match ratio {
@@ -89,8 +101,7 @@ pub fn crop_rect(crop: ClipCrop, vw: f64, vh: f64) -> Rect {
         h = vh;
         w = h * (rw / rh);
     }
-    let zoom = clamp(crop.zoom, 0.0, 1.0);
-    let scale = 1.0 - zoom * (1.0 - MAX_ZOOM_SCALE);
+    let scale = zoom_window_scale(crop.zoom);
     w *= scale;
     h *= scale;
     let mut x = crop.cx * vw - w / 2.0;
@@ -110,6 +121,68 @@ pub fn snap_crop_center(crop: ClipCrop, vw: f64, vh: f64) -> ClipCrop {
         cy: (r.y + r.h / 2.0) / vh,
         ..crop
     }
+}
+
+/// Move the frame with the pointer. `dx_px` and `dy_px` are in the same space as `vw` and `vh`.
+///
+/// A positive `dx_px` moves the frame right. One wheel notch is about 40 points and
+/// changes zoom by 0.06, matching the main player: content moving down zooms in.
+pub fn pan_crop(crop: ClipCrop, dx_px: f64, dy_px: f64, vw: f64, vh: f64) -> ClipCrop {
+    if vw <= 0.0 || vh <= 0.0 {
+        return crop;
+    }
+    snap_crop_center(
+        ClipCrop {
+            cx: crop.cx + dx_px / vw,
+            cy: crop.cy + dy_px / vh,
+            ..crop
+        },
+        vw,
+        vh,
+    )
+}
+
+const SCROLL_POINTS_PER_NOTCH: f64 = 40.0;
+const SCROLL_ZOOM_STEP: f64 = 0.06;
+
+pub fn zoom_from_scroll(zoom: f64, content_delta_y: f64) -> f64 {
+    clamp(
+        zoom + content_delta_y * (SCROLL_ZOOM_STEP / SCROLL_POINTS_PER_NOTCH),
+        0.0,
+        MAX_CROP_ZOOM,
+    )
+}
+
+/// Zoom from a corner handle. The pointer is in the same space as `vw` and `vh`.
+///
+/// The handle at the edge of the widest frame fits the picture. Pulling toward
+/// the middle zooms in, the same as the main player.
+pub fn zoom_from_corner(
+    crop: ClipCrop,
+    pointer_x: f64,
+    pointer_y: f64,
+    vw: f64,
+    vh: f64,
+) -> ClipCrop {
+    if vw <= 0.0 || vh <= 0.0 {
+        return crop;
+    }
+    let max_box = crop_rect(ClipCrop { zoom: 0.0, ..crop }, vw, vh);
+    let cx = max_box.x + max_box.w / 2.0;
+    let cy = max_box.y + max_box.h / 2.0;
+    let dist = ((pointer_x - cx).powi(2) + (pointer_y - cy).powi(2)).sqrt();
+    let max_dist = ((max_box.w / 2.0).powi(2) + (max_box.h / 2.0).powi(2)).sqrt();
+    let min_dist = max_dist * zoom_window_scale(MAX_CROP_ZOOM);
+    let span = (max_dist - min_dist).max(1e-6);
+    let zoom = MAX_CROP_ZOOM * (1.0 - (clamp(dist, min_dist, max_dist) - min_dist) / span);
+    snap_crop_center(
+        ClipCrop {
+            zoom: clamp(zoom, 0.0, MAX_CROP_ZOOM),
+            ..crop
+        },
+        vw,
+        vh,
+    )
 }
 
 pub fn ffmpeg_crop_filter(crop: ClipCrop, vw: f64, vh: f64) -> Option<String> {
@@ -295,6 +368,22 @@ mod tests {
         );
         assert!(zoomed.w < fit.w);
         assert!(zoomed.h < fit.h);
+        let tighter = crop_rect(
+            ClipCrop {
+                ratio: CropRatio::R4x3,
+                cx: 0.5,
+                cy: 0.5,
+                zoom: MAX_CROP_ZOOM,
+            },
+            1920.0,
+            1080.0,
+        );
+        assert!(
+            (tighter.w - zoomed.w * 0.5).abs() < 0.5,
+            "200% should be half the 100% window, got {} vs {}",
+            tighter.w,
+            zoomed.w
+        );
     }
 
     #[test]
@@ -485,5 +574,62 @@ mod tests {
         close(r.h, 100.0 * (1080.0 / 1920.0));
         close(r.x, 0.0);
         close(r.y, (100.0 - r.h) / 2.0);
+    }
+
+    fn square_crop() -> ClipCrop {
+        ClipCrop {
+            ratio: CropRatio::Square,
+            cx: 0.5,
+            cy: 0.5,
+            zoom: 0.35,
+        }
+    }
+
+    #[test]
+    fn pan_moves_the_frame_with_the_pointer() {
+        let crop = square_crop();
+        let before = crop_rect(crop, 1920.0, 1080.0);
+        let moved = pan_crop(crop, 80.0, 40.0, 1920.0, 1080.0);
+        let after = crop_rect(moved, 1920.0, 1080.0);
+        assert!(
+            after.x > before.x + 40.0,
+            "frame should follow a right drag"
+        );
+        assert!(after.y > before.y + 10.0, "frame should follow a down drag");
+    }
+
+    #[test]
+    fn wheel_up_zooms_in_and_wheel_down_zooms_out() {
+        let closer = zoom_from_scroll(0.2, 40.0);
+        close(closer, 0.26);
+        let wider = zoom_from_scroll(closer, -40.0);
+        close(wider, 0.2);
+        assert_eq!(zoom_from_scroll(MAX_CROP_ZOOM, 80.0), MAX_CROP_ZOOM);
+        assert_eq!(zoom_from_scroll(0.0, -80.0), 0.0);
+        assert!(zoom_from_scroll(1.0, 40.0) > 1.0);
+    }
+
+    #[test]
+    fn corner_at_the_edge_fits_and_the_middle_zooms_in() {
+        let crop = square_crop();
+        let max_box = crop_rect(ClipCrop { zoom: 0.0, ..crop }, 1920.0, 1080.0);
+        let fitted = zoom_from_corner(crop, max_box.x, max_box.y, 1920.0, 1080.0);
+        assert!(
+            fitted.zoom < 0.05,
+            "edge handle should fit, got {}",
+            fitted.zoom
+        );
+        let tight = zoom_from_corner(
+            crop,
+            max_box.x + max_box.w / 2.0,
+            max_box.y + max_box.h / 2.0,
+            1920.0,
+            1080.0,
+        );
+        assert!(
+            tight.zoom > 1.9,
+            "center should reach the tightest zoom, got {}",
+            tight.zoom
+        );
     }
 }

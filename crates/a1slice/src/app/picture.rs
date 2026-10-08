@@ -5,19 +5,16 @@ use a1slice_core::types::*;
 use eframe::egui::{self, Color32};
 
 use super::layout::{fit_picture, player_time_width, transport_slots};
+use super::overlay::{self};
 use super::paint::{
     paint_icon_hover, paint_pause_icon, paint_play_icon, paint_player_scrim, paint_player_time,
     player_seek,
 };
-use super::support::current_crop;
+use super::support::{active_cues, caption_on_picture, current_crop};
 use super::theme::MUTED;
 use super::A1App;
 
 impl A1App {
-    pub(super) fn picture(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        self.picture_limited(ui, ctx, ui.available_width(), 460.0);
-    }
-
     pub(super) fn picture_limited(
         &mut self,
         ui: &mut egui::Ui,
@@ -62,29 +59,52 @@ impl A1App {
         );
 
         let framing = self.state.screen == Screen::Reframe && self.ratio != CropRatio::Original;
+        let shown_crop = framing.then(|| current_crop(&self.state, self.ratio));
+        if let Some(crop) = shown_crop {
+            overlay::paint_crop_frame(ui.painter(), image, crop);
+        }
+        if self.state.screen == Screen::Captions {
+            let cues = active_cues(&self.state, self.caption_source);
+            if let Some(text) = caption_on_picture(&cues, self.playhead_ms) {
+                overlay::paint_caption(ui.painter(), image, bar.top(), text, &self.caption_style);
+            }
+        }
+
         let stage =
             egui::Rect::from_min_max(image.left_top(), egui::pos2(image.right(), bar.top()));
         let mut dragged = None;
         let mut scrolled = 0.0_f32;
         if stage.height() > 4.0 {
             let sense = if framing {
-                egui::Sense::CLICK | egui::Sense::DRAG
+                egui::Sense::click_and_drag()
             } else {
-                egui::Sense::CLICK
+                egui::Sense::click()
             };
             let stage_response = ui.interact(stage, ui.id().with("picture"), sense);
             if stage_response.clicked() {
                 self.toggle_play();
             }
             if stage_response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                let icon = if framing && stage_response.dragged() {
+                    egui::CursorIcon::Grabbing
+                } else if framing {
+                    egui::CursorIcon::Grab
+                } else {
+                    egui::CursorIcon::PointingHand
+                };
+                ui.ctx().set_cursor_icon(icon);
             }
-            if framing {
-                if stage_response.dragged() {
-                    dragged = Some((stage_response.drag_delta(), image.width(), image.height()));
-                }
-                if stage_response.hovered() {
-                    scrolled = ui.input(|i| i.smooth_scroll_delta.y);
+            if framing && stage_response.dragged() {
+                dragged = Some(stage_response.drag_delta());
+            }
+            if framing && stage_response.hovered() {
+                scrolled = ui.input(|input| input.smooth_scroll_delta.y);
+                if scrolled != 0.0 {
+                    // The page sits in a scroll area. A wheel over the picture zooms the frame.
+                    ui.input_mut(|input| {
+                        input.smooth_scroll_delta = egui::Vec2::ZERO;
+                        input.raw_scroll_delta = egui::Vec2::ZERO;
+                    });
                 }
             }
         }
@@ -127,16 +147,38 @@ impl A1App {
         }
 
         if framing {
-            if let Some((delta, width, height)) = dragged {
-                let mut crop = current_crop(&self.state, self.ratio);
-                crop.cx = (crop.cx - delta.x as f64 / width as f64).clamp(0.0, 1.0);
-                crop.cy = (crop.cy - delta.y as f64 / height as f64).clamp(0.0, 1.0);
-                self.store_crop(crop::snap_crop_center(crop, 1.0, 1.0));
+            let displayed = (image.width() as f64, image.height() as f64);
+            let mut crop = current_crop(&self.state, self.ratio);
+            let mut changed = false;
+            if let Some(local) = shown_crop
+                .map(|crop| overlay::crop_box(image, crop))
+                .and_then(|frame| overlay::corner_drag(ui, frame, image))
+            {
+                crop = crop::zoom_from_corner(
+                    crop,
+                    local.x as f64,
+                    local.y as f64,
+                    displayed.0,
+                    displayed.1,
+                );
+                changed = true;
+            } else if let Some(delta) = dragged {
+                crop = crop::pan_crop(
+                    crop,
+                    delta.x as f64,
+                    delta.y as f64,
+                    displayed.0,
+                    displayed.1,
+                );
+                changed = true;
             }
             if scrolled != 0.0 {
-                let mut crop = current_crop(&self.state, self.ratio);
-                crop.zoom = (crop.zoom - scrolled as f64 / 400.0).clamp(0.0, 1.0);
-                self.store_crop(crop::snap_crop_center(crop, 1.0, 1.0));
+                crop.zoom = crop::zoom_from_scroll(crop.zoom, scrolled as f64);
+                crop = self.snap_crop_in(crop, displayed.0, displayed.1);
+                changed = true;
+            }
+            if changed {
+                self.store_crop(crop);
             }
         }
     }

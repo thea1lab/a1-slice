@@ -252,14 +252,38 @@ pub(super) fn review_frame(
     let button = if avail_w < 720.0 { 56.0 } else { 76.0 };
     let gap = 24.0;
     let margin = 24.0;
-    // Leave the measured dock on screen, plus a couple of pixels so a scrollbar does not appear.
+    // Leave the measured dock on screen. The slack stops a one-pixel overrun from opening a scrollbar.
     let max_w = (avail_w - 2.0 * (button + gap + margin)).max(160.0);
-    let max_h = (avail_h - dock - 2.0).max(180.0);
+    let max_h = (avail_h - dock - VIEW_SLACK).max(180.0);
     ReviewFrame {
         picture: fit_picture(tex_w, tex_h, max_w, max_h),
         button,
         gap,
     }
+}
+
+/// Pixels kept free under the picture so the content stays shorter than the viewport.
+///
+/// A scrollbar that appears for a one-pixel overrun covers the right edge, and it
+/// stays there when the window grows because the picture grows by the same amount.
+pub(super) const VIEW_SLACK: f32 = 16.0;
+
+/// Visible height inside the scroll area.
+///
+/// `clip_rect` is taller than the viewport by the clip margin, so sizing from it
+/// always overflows. `available_height` is the scroll viewport at the start of the page.
+pub(super) fn viewport_height(ui: &egui::Ui) -> f32 {
+    let height = ui.available_height();
+    if height.is_finite() && height > 1.0 {
+        height
+    } else {
+        640.0
+    }
+}
+
+/// Picture height that leaves `dock` pixels for the controls under it.
+pub(super) fn picture_room(viewport: f32, dock: f32, min_picture: f32) -> f32 {
+    (viewport - dock - VIEW_SLACK).max(min_picture)
 }
 
 pub(super) fn fit_picture(tex_w: f32, tex_h: f32, max_w: f32, max_h: f32) -> egui::Vec2 {
@@ -341,8 +365,8 @@ pub(super) fn text_button_width(ui: &egui::Ui, label: &str, text_size: f32, pad_
 #[cfg(test)]
 mod tests {
     use super::{
-        clip_length_words, fit_picture, ms_to_x, playhead_after_trim, review_frame, review_slots,
-        transport_slots, ClipViewWindow,
+        clip_length_words, fit_picture, ms_to_x, picture_room, playhead_after_trim, review_frame,
+        review_slots, transport_slots, ClipViewWindow,
     };
 
     #[test]
@@ -394,6 +418,20 @@ mod tests {
         assert!(slots.play.right() < slots.time.left());
         assert!(slots.time.right() <= slots.seek.left());
         assert!(slots.seek.right() <= slots.speaker.left());
+    }
+
+    #[test]
+    fn picture_room_keeps_the_controls_inside_the_window() {
+        assert_eq!(picture_room(900.0, 300.0, 180.0), 584.0);
+        assert_eq!(picture_room(400.0, 300.0, 180.0), 180.0);
+        let window = 960.0;
+        let header = 48.0;
+        let dock = 320.0;
+        let picture = picture_room(window - header, dock, 200.0);
+        assert!(picture + dock + header <= window);
+        let taller = picture_room(window - header + 200.0, dock, 200.0);
+        assert!(taller > picture);
+        assert!(taller + dock + header <= window + 200.0);
     }
 
     #[test]

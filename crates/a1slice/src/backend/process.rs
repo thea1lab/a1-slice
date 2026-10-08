@@ -1,7 +1,7 @@
 //! ffmpeg and ffprobe: probe a file, grab a frame, and run a command.
 
 use a1slice_core::types::Ms;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -153,6 +153,76 @@ pub(super) fn run_ffmpeg(
     if let Some(pipe) = stderr.as_mut() {
         let _ = pipe.read_to_string(&mut err_text);
     }
+    let status = {
+        let mut slot = child_slot.lock().unwrap();
+        let child = slot.take();
+        child
+            .map(|mut c| c.wait())
+            .transpose()
+            .map_err(|e| e.to_string())?
+    };
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Stopped.".into());
+    }
+    match status {
+        Some(code) if code.success() => Ok(()),
+        _ => Err(tail(&err_text)),
+    }
+}
+
+/// Run ffmpeg and report `out_time=` from `-progress pipe:1` while it encodes.
+pub(super) fn run_ffmpeg_watch(
+    args: &[String],
+    cancel: &AtomicBool,
+    child_slot: &Mutex<Option<std::process::Child>>,
+    mut on_time_ms: impl FnMut(i64),
+) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Stopped.".into());
+    }
+    let mut full = Vec::with_capacity(args.len() + 3);
+    full.push("-nostats".into());
+    full.push("-progress".into());
+    full.push("pipe:1".into());
+    full.extend(args.iter().cloned());
+    let mut child = Command::new("ffmpeg")
+        .args(full.iter().map(String::as_str))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("ffmpeg is not available ({e})"))?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    {
+        let mut slot = child_slot.lock().unwrap();
+        *slot = Some(child);
+    }
+    let err_text = std::thread::scope(|scope| {
+        let logged = scope.spawn(|| {
+            let mut text = String::new();
+            if let Some(mut pipe) = stderr {
+                let _ = pipe.read_to_string(&mut text);
+            }
+            text
+        });
+        if let Some(pipe) = stdout {
+            let mut reader = BufReader::new(pipe);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        if let Some(ms) = a1slice_core::ffmpeg_cmd::parse_ffmpeg_time_ms(&line) {
+                            on_time_ms(ms);
+                        }
+                    }
+                }
+            }
+        }
+        logged.join().unwrap_or_default()
+    });
     let status = {
         let mut slot = child_slot.lock().unwrap();
         let child = slot.take();

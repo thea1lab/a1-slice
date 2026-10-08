@@ -167,6 +167,8 @@ pub enum WizardAction {
     ExportProgress(ProgressUpdate),
     ExportDone(String),
     ExportError(String),
+    /// Leave the export sheet and clear a cancelled encode.
+    CancelExport(Screen),
 }
 
 pub(super) fn stored_api_key(api_keys: &BTreeMap<String, String>, provider: LlmProvider) -> String {

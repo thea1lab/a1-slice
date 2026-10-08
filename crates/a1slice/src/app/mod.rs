@@ -9,6 +9,7 @@ mod find;
 mod home;
 mod jobs;
 mod layout;
+mod overlay;
 mod paint;
 mod picture;
 mod playback;
@@ -67,6 +68,8 @@ pub struct A1App {
     agent_id: Option<String>,
     job: Option<Running>,
     progress_rx: Option<Receiver<ProgressUpdate>>,
+    /// Screen to reopen when an export is cancelled.
+    export_from: Screen,
     frame: Option<egui::TextureHandle>,
     frame_for: Option<(String, i64)>,
     frame_rx: Option<Receiver<FrameResult>>,
@@ -79,6 +82,8 @@ pub struct A1App {
     volume: f32,
     muted: bool,
     ratio: CropRatio,
+    /// Source picture size, so a saved crop matches the frame drawn on screen.
+    picture_px: (u32, u32),
     caption_style: CaptionStyle,
     caption_look: CaptionLook,
     caption_source: CaptionSource,
@@ -93,6 +98,10 @@ pub struct A1App {
     trim: ReviewTrim,
     /// Height of the review dock last frame, so the picture leaves room for it.
     review_dock_px: f32,
+    /// Height of the reframe controls last frame, so they stay above the stripe.
+    reframe_dock_px: f32,
+    /// Height of the caption controls last frame, so they stay above the stripe.
+    caption_dock_px: f32,
 }
 
 impl A1App {
@@ -127,6 +136,7 @@ impl A1App {
             agent_id,
             job: None,
             progress_rx: None,
+            export_from: Screen::Review,
             frame: None,
             frame_for: None,
             frame_rx: None,
@@ -139,6 +149,7 @@ impl A1App {
             volume: 1.0,
             muted: false,
             ratio: CropRatio::R9x16,
+            picture_px: (0, 0),
             caption_style: default_style(),
             caption_look: CaptionLook::Burn,
             caption_source: CaptionSource::Transcript,
@@ -152,6 +163,8 @@ impl A1App {
             loop_at_clip: true,
             trim: ReviewTrim::Idle,
             review_dock_px: 0.0,
+            reframe_dock_px: 0.0,
+            caption_dock_px: 0.0,
         }
     }
 
@@ -195,16 +208,20 @@ impl A1App {
             }
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .show(ui, |ui| match self.state.screen {
-                    Screen::Home => self.home(ui),
-                    Screen::Transcribe => self.transcribe(ui),
-                    Screen::TranscribeDone => self.transcribe_done(ui),
-                    Screen::Find => self.find(ui),
-                    Screen::Review => self.review(ui, ctx),
-                    Screen::Export => self.export_screen(ui),
-                    Screen::Reframe => self.reframe(ui, ctx),
-                    Screen::Captions => self.captions(ui, ctx),
-                    Screen::FixWords => self.fix_words(ui),
+                .show(ui, |ui| {
+                    // Keep the last letters off the scrollbar column.
+                    ui.set_max_width((ui.available_width() - 4.0).max(160.0));
+                    match self.state.screen {
+                        Screen::Home => self.home(ui),
+                        Screen::Transcribe => self.transcribe(ui),
+                        Screen::TranscribeDone => self.transcribe_done(ui),
+                        Screen::Find => self.find(ui),
+                        Screen::Review => self.review(ui, ctx),
+                        Screen::Export => self.export_screen(ui),
+                        Screen::Reframe => self.reframe(ui, ctx),
+                        Screen::Captions => self.captions(ui, ctx),
+                        Screen::FixWords => self.fix_words(ui),
+                    }
                 });
         });
     }
@@ -225,6 +242,9 @@ impl eframe::App for A1App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
         self.tick_find_progress(ctx);
+        if self.job.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         if self.playing && !self.scrubbing {
             let dt = ctx.input(|i| i.stable_dt);
             self.playhead_ms += (dt * 1000.0) as i64;

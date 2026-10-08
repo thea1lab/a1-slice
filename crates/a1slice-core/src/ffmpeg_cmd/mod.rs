@@ -6,8 +6,8 @@ mod fonts;
 
 pub use args::{
     build_copy_clip_args, build_cut_clip_args, build_preview_clip_args, extract_audio_args,
-    generate_srt, parse_ffmpeg_duration, parse_ffmpeg_progress, parse_ffmpeg_video_size,
-    shift_subtitles, split_wav_args, VideoSize,
+    generate_srt, parse_ffmpeg_duration, parse_ffmpeg_progress, parse_ffmpeg_time_ms,
+    parse_ffmpeg_video_size, shift_subtitles, split_wav_args, VideoSize,
 };
 pub use filters::{
     caption_burn_filter, escape_filter_path, format_srt_time, video_filter_for_export,
@@ -108,6 +108,17 @@ mod tests {
     #[test]
     fn parse_ffmpeg_progress_missing() {
         assert_eq!(parse_ffmpeg_progress("frame=1 fps=30"), None);
+        assert_eq!(parse_ffmpeg_time_ms("out_time_ms=1500000"), None);
+    }
+
+    #[test]
+    fn parse_ffmpeg_time_ms_keeps_the_fraction_and_the_last_line() {
+        let log = "out_time=00:00:01.500000\nout_time=00:00:03.250000\n";
+        assert_eq!(parse_ffmpeg_time_ms(log), Some(3250));
+        assert_eq!(
+            parse_ffmpeg_time_ms("time=00:00:03.20 bitrate=N/A"),
+            Some(3200)
+        );
     }
 
     #[test]

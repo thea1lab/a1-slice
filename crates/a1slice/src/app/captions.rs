@@ -6,10 +6,15 @@ use a1slice_core::types::*;
 use a1slice_core::wizard::WizardAction;
 use eframe::egui::{self, RichText};
 
-use super::support::{active_cues, caption_project, ink_color, style_controls};
+use super::support::{active_cues, caption_project, style_controls};
 use super::theme::{CREAM, MUTED, ORANGE};
 use super::widgets::{primary, progress};
 use super::A1App;
+
+/// Room under the picture for the source, style, and export rows.
+fn caption_dock_estimate() -> f32 {
+    36.0 * 12.0 + 48.0
+}
 
 impl A1App {
     pub(super) fn captions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -27,17 +32,16 @@ impl A1App {
             );
             return;
         }
-        self.picture(ui, ctx);
-        let cue = active_cues(&self.state, self.caption_source)
-            .into_iter()
-            .find(|c| self.playhead_ms >= c.start_ms && self.playhead_ms < c.end_ms);
-        if let Some(cue) = cue {
-            ui.label(
-                RichText::new(&cue.text)
-                    .size(22.0)
-                    .color(ink_color(&self.caption_style)),
-            );
-        }
+        let avail_w = ui.available_width();
+        let estimate = caption_dock_estimate();
+        let reserve = if self.caption_dock_px > 1.0 {
+            (self.caption_dock_px + 8.0).max(estimate)
+        } else {
+            estimate
+        };
+        let room = super::layout::picture_room(super::layout::viewport_height(ui), reserve, 180.0);
+        self.picture_limited(ui, ctx, avail_w, room.min(460.0));
+        let dock_top = ui.cursor().min.y;
         ui.label(
             RichText::new("WHERE DO THE WORDS COME FROM?")
                 .small()
@@ -136,6 +140,7 @@ impl A1App {
             ));
             self.start_captions();
         }
+        self.caption_dock_px = (ui.cursor().min.y - dock_top).max(0.0);
     }
 
     pub(super) fn fix_words(&mut self, ui: &mut egui::Ui) {
@@ -203,5 +208,21 @@ impl A1App {
         if let Some(path) = &self.state.video_path {
             let _ = sidecars::write_captions(std::path::Path::new(path), &project);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::caption_dock_estimate;
+    use crate::app::layout::picture_room;
+
+    #[test]
+    fn caption_controls_fit_the_opening_window() {
+        let window_h = 960.0;
+        let header = 48.0;
+        let dock = caption_dock_estimate();
+        let picture = picture_room(window_h - header, dock, 180.0).min(460.0);
+        assert!(picture >= 180.0);
+        assert!(picture + dock + header <= window_h);
     }
 }

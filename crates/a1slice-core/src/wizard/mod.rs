@@ -184,6 +184,12 @@ mod tests {
         assert_eq!(state.output_dir.as_deref(), Some("/output/folder"));
         state = wizard_reduce(&state, WizardAction::ExportError("ffmpeg failed".into()));
         assert_eq!(state.export_error.as_deref(), Some("ffmpeg failed"));
+        state = wizard_reduce(&state, WizardAction::CancelExport(Screen::Reframe));
+        assert_eq!(state.screen, Screen::Reframe);
+        assert_eq!(state.export_stage, PipelineStage::Idle);
+        assert!(state.export_error.is_none());
+        assert!(state.output_dir.is_none());
+        assert_eq!(state.export_percent, 0.0);
     }
 
     #[test]
