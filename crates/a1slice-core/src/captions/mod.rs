@@ -9,10 +9,10 @@ pub use palette::{
     CAPTION_PALETTE, DEFAULT_CAPTION_STYLE, MAX_CAPTION_FONT_SIZE, MIN_CAPTION_FONT_SIZE,
 };
 pub use style::{
-    blank_caption_project, caption_force_style, caption_ink, caption_metrics,
+    blank_caption_project, caption_force_style, caption_frame, caption_ink, caption_metrics,
     clamp_caption_font_size, coerce_caption_look, coerce_caption_style, parse_caption_style,
     parse_hex_color, present_caption_project, style_with_color, style_with_font_size,
-    style_with_preset_size, ResolvedCaptionInk,
+    style_with_preset_size, CaptionFrame, ResolvedCaptionInk,
 };
 
 #[cfg(test)]
@@ -40,6 +40,8 @@ mod tests {
         assert!(force.contains(&format!("FontSize={}", CAPTION_METRICS.medium.font_size)));
         assert!(force.contains(&format!("PrimaryColour={}", CAPTION_INK.yellow.ass)));
         assert!(force.contains("Alignment=8"));
+        assert!(force.contains("MarginL=10"));
+        assert!(force.contains("MarginR=10"));
         assert!(force.contains(&format!("MarginV={}", CAPTION_METRICS.medium.margin)));
         assert!(force.contains(&format!("Outline={CAPTION_BURN_OUTLINE}")));
         assert!(force.contains("Shadow=0"));
@@ -59,6 +61,29 @@ mod tests {
     }
 
     #[test]
+    fn places_a_caption_on_the_same_frame_the_burn_uses() {
+        let bottom = caption_frame(&DEFAULT_CAPTION_STYLE, 384.0, 288.0);
+        assert_eq!(bottom.font_px, 28.0);
+        assert_eq!(bottom.margin_v, 90.0);
+        assert_eq!(bottom.margin_x, 10.0);
+        assert!((bottom.outline_px - 0.55).abs() < 1e-9);
+        let video = caption_frame(&DEFAULT_CAPTION_STYLE, 1920.0, 1080.0);
+        assert_eq!(video.font_px, 105.0);
+        assert_eq!(video.margin_v, 337.5);
+        assert_eq!(video.margin_x, 50.0);
+        let middle = caption_frame(
+            &CaptionStyle {
+                position: CaptionPosition::Middle,
+                ..DEFAULT_CAPTION_STYLE.clone()
+            },
+            800.0,
+            450.0,
+        );
+        assert_eq!(middle.margin_v, 0.0);
+        assert!(middle.font_px > 28.0);
+    }
+
+    #[test]
     fn outlines_black_type_in_white() {
         let force = force(
             &CaptionStyle {
@@ -72,11 +97,12 @@ mod tests {
     }
 
     #[test]
-    fn keeps_the_older_large_and_small_sizes() {
+    fn keeps_the_large_size_and_a_smaller_small() {
         assert_eq!(CAPTION_METRICS.large.font_size, 28);
         assert_eq!(CAPTION_METRICS.large.margin, 90);
-        assert_eq!(CAPTION_METRICS.small.font_size, 18);
-        assert_eq!(CAPTION_METRICS.small.margin, 36);
+        assert_eq!(CAPTION_METRICS.medium.font_size, 24);
+        assert_eq!(CAPTION_METRICS.small.font_size, 12);
+        assert_eq!(CAPTION_METRICS.small.margin, 24);
     }
 
     #[test]
@@ -190,12 +216,24 @@ mod tests {
                 "position": "bottom",
                 "size": "large",
                 "font": "sans",
-                "fontSize": 18
+                "fontSize": 12
             })),
             Some(CaptionStyle {
                 size: CaptionSize::Small,
                 ..DEFAULT_CAPTION_STYLE.clone()
             })
+        );
+        assert_eq!(
+            parse_caption_style(&json!({
+                "color": "white",
+                "position": "bottom",
+                "size": "large",
+                "font": "sans",
+                "fontSize": 18
+            }))
+            .unwrap()
+            .font_size,
+            Some(18)
         );
     }
 

@@ -1,5 +1,9 @@
 //! Run an installed agent for clip finding and caption fixes.
 
+use a1slice_core::caption_edit::{
+    apply_edited_caption_text, caption_edit_prompt, caption_file_text, extract_printed_caption,
+    is_none_answer, CaptionEditRequest, CaptionEditResult,
+};
 use a1slice_core::clip_find::clip_find_prompt;
 use a1slice_core::types::{ClipSegment, TranscriptSegment};
 use std::io::{Read, Write};
@@ -30,38 +34,39 @@ pub fn find_clips(
 pub fn fix_words(
     segments: &[TranscriptSegment],
     agent_id: &str,
-    instruction: &str,
+    request: &CaptionEditRequest,
     cancel: &AtomicBool,
     child_slot: &Mutex<Option<std::process::Child>>,
 ) -> Result<Vec<TranscriptSegment>, String> {
-    let body = segments
-        .iter()
-        .map(|s| s.text.trim())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let prompt = format!(
-        "Rewrite this transcript. {instruction}\n\nKeep the same number of lines and the same order. Print only the new transcript, one line per cue.\n\n{body}"
-    );
+    let prompt = caption_edit_prompt(request, &caption_file_text(segments));
     let raw = run_agent(agent_id, &prompt, cancel, child_slot)?;
-    if raw.trim().eq_ignore_ascii_case("none") {
-        return Ok(segments.to_vec());
+    lines_from_agent_output(segments, &raw)
+}
+
+/// Read the transcript the agent printed. `NONE` keeps the lines that were sent.
+pub fn lines_from_agent_output(
+    before: &[TranscriptSegment],
+    output: &str,
+) -> Result<Vec<TranscriptSegment>, String> {
+    if is_none_answer(output) {
+        return Ok(before.to_vec());
     }
-    let lines: Vec<&str> = raw
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect();
-    if lines.len() != segments.len() {
-        return Err("The edit changed how many lines there are, so it was not applied.".into());
+    let Some(printed) = extract_printed_caption(output) else {
+        return Err(
+            "The agent did not return the edited lines. The lines were left as they are.".into(),
+        );
+    };
+    if normalize_caption_file(&printed) == normalize_caption_file(&caption_file_text(before)) {
+        return Ok(before.to_vec());
     }
-    Ok(segments
-        .iter()
-        .zip(lines)
-        .map(|(seg, text)| TranscriptSegment {
-            text: text.to_string(),
-            ..seg.clone()
-        })
-        .collect())
+    match apply_edited_caption_text(before, &printed) {
+        CaptionEditResult::Segments(lines) => Ok(lines),
+        CaptionEditResult::Error(message) => Err(message),
+    }
+}
+
+fn normalize_caption_file(text: &str) -> String {
+    text.replace("\r\n", "\n").trim().to_string()
 }
 
 fn run_agent(
@@ -212,5 +217,49 @@ fn agent_command(id: &str, prompt: &str, work_dir: &Path) -> (&'static str, Vec<
             }
             ("grok", args, false)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lines_from_agent_output;
+    use a1slice_core::types::TranscriptSegment;
+
+    fn seg(start_ms: i64, end_ms: i64, text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            start_ms,
+            end_ms,
+            text: text.to_string(),
+        }
+    }
+
+    fn before() -> Vec<TranscriptSegment> {
+        vec![
+            seg(0, 2000, "Hello teh world"),
+            seg(2000, 6000, "This line is much too long for one caption"),
+        ]
+    }
+
+    #[test]
+    fn none_keeps_the_lines_that_were_sent() {
+        assert_eq!(
+            lines_from_agent_output(&before(), "NONE").unwrap(),
+            before()
+        );
+    }
+
+    #[test]
+    fn a_printed_transcript_can_fix_a_typo_without_keeping_the_line_count() {
+        let output = "0:00  Hello the world\n0:02  This line is much\ntoo long for one caption\n";
+        let lines = lines_from_agent_output(&before(), output).unwrap();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].text, "Hello the world");
+        assert_eq!(lines[2].text, "too long for one caption");
+    }
+
+    #[test]
+    fn an_answer_without_caption_lines_is_refused() {
+        let error = lines_from_agent_output(&before(), "I rewrote it.").unwrap_err();
+        assert!(error.contains("did not return"));
     }
 }

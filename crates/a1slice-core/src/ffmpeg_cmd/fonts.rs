@@ -18,6 +18,14 @@ const SANS_FILES: &[FontFile] = &[
         name: "Noto Sans",
     },
     FontFile {
+        file: "/usr/share/fonts/truetype/noto/NotoSans-Medium.ttf",
+        name: "Noto Sans Medium",
+    },
+    FontFile {
+        file: "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        name: "Noto Sans",
+    },
+    FontFile {
         file: "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
         name: "Liberation Sans",
     },
@@ -57,6 +65,14 @@ const SERIF_FILES: &[FontFile] = &[
         name: "Noto Serif",
     },
     FontFile {
+        file: "/usr/share/fonts/truetype/noto/NotoSerif-Medium.ttf",
+        name: "Noto Serif Medium",
+    },
+    FontFile {
+        file: "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf",
+        name: "Noto Serif",
+    },
+    FontFile {
         file: "/usr/share/fonts/liberation/LiberationSerif-Regular.ttf",
         name: "Liberation Serif",
     },
@@ -89,6 +105,14 @@ const MONO_FILES: &[FontFile] = &[
     },
     FontFile {
         file: "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+        name: "Noto Sans Mono",
+    },
+    FontFile {
+        file: "/usr/share/fonts/truetype/noto/NotoSansMono-Medium.ttf",
+        name: "Noto Sans Mono Medium",
+    },
+    FontFile {
+        file: "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
         name: "Noto Sans Mono",
     },
     FontFile {

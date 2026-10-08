@@ -116,8 +116,16 @@ mod tests {
             font_size: None,
             font: CaptionFont::Sans,
         };
-        let burned =
-            export_captions(&src, &cues, CaptionLook::Burn, &style, &cancel, &slot).unwrap();
+        let burned = export_captions(
+            &src,
+            &cues,
+            CaptionLook::Burn,
+            &style,
+            &cancel,
+            &slot,
+            |_| {},
+        )
+        .unwrap();
         assert!(burned.is_dir());
         let burned_mp4 = std::fs::read_dir(&burned)
             .unwrap()
@@ -132,7 +140,16 @@ mod tests {
             marked > 20,
             "burned caption should mark the red frame, marked {marked} pixels"
         );
-        let srt = export_captions(&src, &cues, CaptionLook::Srt, &style, &cancel, &slot).unwrap();
+        let srt = export_captions(
+            &src,
+            &cues,
+            CaptionLook::Srt,
+            &style,
+            &cancel,
+            &slot,
+            |_| {},
+        )
+        .unwrap();
         let text = std::fs::read_to_string(&srt).unwrap();
         assert!(text.contains("Hello"));
         let _ = std::fs::remove_dir_all(&dir);

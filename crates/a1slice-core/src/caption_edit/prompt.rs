@@ -114,6 +114,34 @@ pub fn caption_file_text(segments: &[TranscriptSegment]) -> String {
     }
 }
 
+pub fn lines_longer_than(segments: &[TranscriptSegment], words_per_line: f64) -> usize {
+    let limit = clamp_words_per_line(words_per_line) as usize;
+    segments
+        .iter()
+        .filter(|segment| caption_words(&segment.text).len() > limit)
+        .count()
+}
+
+/// Split lines that are over the word limit, and say what happened.
+pub fn split_caption_note(
+    segments: &[TranscriptSegment],
+    words_per_line: f64,
+) -> (Vec<TranscriptSegment>, String) {
+    let limit = clamp_words_per_line(words_per_line);
+    let too_long = lines_longer_than(segments, words_per_line);
+    let next = break_caption_lines(segments, words_per_line);
+    let note = if too_long > 0 && next != segments {
+        if too_long == 1 {
+            format!("Split 1 line longer than {limit} words.")
+        } else {
+            format!("Split {too_long} lines longer than {limit} words.")
+        }
+    } else {
+        format!("Every line is already {limit} words or shorter.")
+    };
+    (next, note)
+}
+
 pub fn break_caption_lines(
     segments: &[TranscriptSegment],
     words_per_line: f64,

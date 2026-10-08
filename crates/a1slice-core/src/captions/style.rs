@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use super::palette::{
     CaptionMetrics, CAPTION_BURN_OUTLINE, CAPTION_INK, CAPTION_METRICS, CAPTION_PALETTE,
-    DEFAULT_CAPTION_STYLE, MAX_CAPTION_FONT_SIZE, MIN_CAPTION_FONT_SIZE,
+    CAPTION_PLAY_RES_X, CAPTION_PLAY_RES_Y, CAPTION_SIDE_MARGIN, DEFAULT_CAPTION_STYLE,
+    MAX_CAPTION_FONT_SIZE, MIN_CAPTION_FONT_SIZE,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +77,47 @@ pub fn caption_ink(style: &CaptionStyle) -> ResolvedCaptionInk {
         hex: ink.hex.to_string(),
         ass: ink.ass.to_string(),
         outline: ink.outline.to_string(),
+    }
+}
+
+/// Where a burned caption sits, in the same units as `frame_w` and `frame_h`.
+///
+/// Font size and `margin_v` scale with the picture height. The side inset scales
+/// with the width. That is how libass maps PlayRes 384×288 onto the video.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CaptionFrame {
+    pub font_px: f64,
+    pub margin_v: f64,
+    pub margin_x: f64,
+    pub outline_px: f64,
+    pub position: CaptionPosition,
+}
+
+pub fn caption_frame(style: &CaptionStyle, frame_w: f64, frame_h: f64) -> CaptionFrame {
+    let metrics = caption_metrics(style);
+    let height = positive_or(frame_h, CAPTION_PLAY_RES_Y);
+    let width = positive_or(frame_w, CAPTION_PLAY_RES_X);
+    let scale_y = height / CAPTION_PLAY_RES_Y;
+    let scale_x = width / CAPTION_PLAY_RES_X;
+    let margin_v = if style.position == CaptionPosition::Middle {
+        0.0
+    } else {
+        metrics.margin as f64 * scale_y
+    };
+    CaptionFrame {
+        font_px: metrics.font_size as f64 * scale_y,
+        margin_v,
+        margin_x: CAPTION_SIDE_MARGIN as f64 * scale_x,
+        outline_px: CAPTION_BURN_OUTLINE * scale_y,
+        position: style.position,
+    }
+}
+
+fn positive_or(value: f64, fallback: f64) -> f64 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        fallback
     }
 }
 
@@ -193,6 +235,8 @@ pub fn caption_force_style(style: &CaptionStyle, font_name: &str, cell_ratio: f6
         "Shadow=0".to_string(),
         "Bold=0".to_string(),
         format!("Alignment={alignment}"),
+        format!("MarginL={CAPTION_SIDE_MARGIN}"),
+        format!("MarginR={CAPTION_SIDE_MARGIN}"),
         format!("MarginV={margin}"),
     ]
     .join(",")

@@ -205,11 +205,17 @@ pub fn export_captions(
     style: &CaptionStyle,
     cancel: &AtomicBool,
     child_slot: &Mutex<Option<std::process::Child>>,
+    mut on_progress: impl FnMut(ProgressUpdate),
 ) -> Result<PathBuf, String> {
     let (dir, stem) = sidecars::video_stem(video);
     if look == CaptionLook::Srt {
         let path = dir.join(format!("{stem}.srt"));
         std::fs::write(&path, generate_srt(cues)).map_err(|e| e.to_string())?;
+        on_progress(ProgressUpdate {
+            stage: PipelineStage::Cutting,
+            message: "Writing the caption file…".into(),
+            percent: 100.0,
+        });
         return Ok(path);
     }
     let (duration, _, _) = probe(video)?;
@@ -232,10 +238,27 @@ pub fn export_captions(
         font.cell_ratio,
     );
     let duration_sec = (duration as f64 / 1000.0).max(0.2);
-    let result = run_ffmpeg(
+    on_progress(ProgressUpdate {
+        stage: PipelineStage::Cutting,
+        message: "Burning the words into the picture…".into(),
+        percent: 0.0,
+    });
+    let last = std::cell::Cell::new(0.0_f64);
+    let result = run_ffmpeg_watch(
         &cut_args(video, &file, 0.0, duration_sec, Some(&filter)),
         cancel,
         child_slot,
+        |time_ms| {
+            let percent = encode_percent(time_ms, duration);
+            if percent - last.get() >= 1.0 {
+                last.set(percent);
+                on_progress(ProgressUpdate {
+                    stage: PipelineStage::Cutting,
+                    message: "Burning the words into the picture…".into(),
+                    percent,
+                });
+            }
+        },
     );
     let _ = std::fs::remove_file(&srt);
     result?;

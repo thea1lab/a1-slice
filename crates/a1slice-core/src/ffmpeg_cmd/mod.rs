@@ -250,10 +250,10 @@ mod tests {
         };
         let burn = caption_burn_filter("/tmp/a.srt", "/fonts", "Noto Serif", &style, 1.0);
         assert!(burn.contains("FontName=Noto Serif"));
-        assert!(burn.contains("FontSize=18"));
+        assert!(burn.contains("FontSize=12"));
         assert!(burn.contains("PrimaryColour=&H004AE1FF"));
         assert!(burn.contains("Alignment=8"));
-        assert!(burn.contains("MarginV=36"));
+        assert!(burn.contains("MarginV=24"));
     }
 
     #[test]
@@ -297,6 +297,21 @@ mod tests {
         if Path::new(path).exists() {
             assert!((font_cell_ratio(path) - 1.1640625).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn find_caption_font_uses_distro_noto_when_present() {
+        let regular = "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf";
+        let medium = "/usr/share/fonts/truetype/noto/NotoSans-Medium.ttf";
+        if !Path::new(regular).exists() && !Path::new(medium).exists() {
+            return;
+        }
+        let got = find_caption_font(CaptionFont::Sans, &[]).unwrap();
+        assert!(
+            got.file == regular || got.file == medium,
+            "the burn should use Noto Sans, found {}",
+            got.file
+        );
     }
 
     #[test]

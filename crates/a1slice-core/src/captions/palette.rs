@@ -61,7 +61,8 @@ pub const CAPTION_INK: CaptionInkTable = CaptionInkTable {
     },
 };
 
-/// CSS pixels on a 288-tall caption frame. libass then scales that frame to the video.
+/// CSS pixels on the 288-tall ASS frame ffmpeg uses for an SRT.
+/// libass scales that frame to the video. The on-screen caption uses the same frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaptionMetrics {
     pub font_size: i64,
@@ -102,9 +103,10 @@ impl CaptionMetricsTable {
 }
 
 pub const CAPTION_METRICS: CaptionMetricsTable = CaptionMetricsTable {
+    // 18 sat next to medium 24, so Small read as a large caption on the picture.
     small: CaptionMetrics {
-        font_size: 18,
-        margin: 36,
+        font_size: 12,
+        margin: 24,
     },
     medium: CaptionMetrics {
         font_size: 24,
@@ -118,6 +120,12 @@ pub const CAPTION_METRICS: CaptionMetricsTable = CaptionMetricsTable {
 
 /// libass outline in PlayResY 288 script pixels. Outline 2 fills the letters.
 pub const CAPTION_BURN_OUTLINE: f64 = 0.55;
+
+/// PlayRes ffmpeg writes into the ASS header it builds from an SRT.
+pub const CAPTION_PLAY_RES_X: f64 = 384.0;
+pub const CAPTION_PLAY_RES_Y: f64 = 288.0;
+/// MarginL and MarginR in that header. The burn sets the same pair.
+pub const CAPTION_SIDE_MARGIN: i64 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaptionFontFamily {

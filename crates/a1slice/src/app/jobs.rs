@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self};
 use std::time::Instant;
 
-use super::support::{active_cues, current_crop, load_recent};
+use super::support::{active_cues, current_crop, default_style, load_recent};
 use super::{A1App, ReviewTrim};
 
 impl A1App {
@@ -28,6 +28,14 @@ impl A1App {
             self.caption_style = saved.style.clone();
             self.caption_look = saved.look;
             self.caption_source = saved.source;
+        } else {
+            self.caption_style = default_style();
+            self.caption_look = CaptionLook::Burn;
+            self.caption_source = if segments.is_empty() {
+                CaptionSource::Manual
+            } else {
+                CaptionSource::Transcript
+            };
         }
         if let Some(saved) = framing.keys().copied().next() {
             self.ratio = saved;
@@ -121,29 +129,31 @@ impl A1App {
                 self.review_view = None;
                 self.trim = ReviewTrim::Idle;
             }
-            Ok(Ok(JobDone::CaptionLines(lines))) => {
-                self.pending_lines = Some(lines);
-                self.fix_log
-                    .push_str("\nThe edit is ready. Accept it to keep the new words.");
-            }
+            Ok(Ok(JobDone::CaptionLines(lines))) => self.take_fix_result(lines),
             Ok(Ok(JobDone::Folder(path))) => {
                 self.dispatch(WizardAction::ExportDone(path.display().to_string()));
             }
             Ok(Err(error)) if error == "Stopped." => {
                 let export_from = self.export_from;
-                let on_export = self.state.screen == Screen::Export;
+                let screen = self.state.screen;
                 self.dispatch(WizardAction::TranscribeError(String::new()));
                 self.state.transcribe_error = None;
                 self.state.analyzing = false;
                 self.state.analyze_error = None;
                 self.state.analyze_message.clear();
-                if on_export {
+                if screen == Screen::Export {
                     self.dispatch(WizardAction::CancelExport(export_from));
+                } else if screen == Screen::Captions {
+                    self.dispatch(WizardAction::CancelExport(Screen::Captions));
+                } else if screen == Screen::FixWords {
+                    self.push_fix_log("Stopped.");
                 }
             }
             Ok(Err(error)) => {
                 if self.state.screen == Screen::Transcribe {
                     self.dispatch(WizardAction::TranscribeError(error));
+                } else if self.state.screen == Screen::FixWords {
+                    self.push_fix_log(&error);
                 } else if self.state.analyzing {
                     self.dispatch(WizardAction::AnalyzeError(error));
                 } else {
@@ -273,7 +283,21 @@ impl A1App {
         let cues = active_cues(&self.state, self.caption_source);
         let look = self.caption_look;
         let style = self.caption_style.clone();
+        self.stop_playback();
+        self.export_from = Screen::Captions;
         self.dispatch(WizardAction::StartRender);
+        let message = if look == CaptionLook::Burn {
+            "Burning the words into the picture…"
+        } else {
+            "Writing the caption file…"
+        };
+        self.dispatch(WizardAction::ExportProgress(ProgressUpdate {
+            stage: PipelineStage::Cutting,
+            message: message.into(),
+            percent: 0.0,
+        }));
+        let (tx, rx) = mpsc::channel();
+        self.progress_rx = Some(rx);
         self.job = Some(backend::spawn_job(move |cancel, child| {
             let out = backend::export_captions(
                 std::path::Path::new(&path),
@@ -282,22 +306,11 @@ impl A1App {
                 &style,
                 &cancel,
                 &child,
+                |update| {
+                    let _ = tx.send(update);
+                },
             )?;
             Ok(JobDone::Folder(out))
-        }));
-    }
-
-    pub(super) fn start_fix(&mut self) {
-        let Some(agent) = self.agent_id.clone() else {
-            self.fix_log = "Choose an agent.".into();
-            return;
-        };
-        let segments = active_cues(&self.state, self.caption_source);
-        let request = self.fix_request.clone();
-        self.fix_log = format!("Starting {agent}.");
-        self.job = Some(backend::spawn_job(move |cancel, child| {
-            let lines = backend::fix_words(&segments, &agent, &request, &cancel, &child)?;
-            Ok(JobDone::CaptionLines(lines))
         }));
     }
 

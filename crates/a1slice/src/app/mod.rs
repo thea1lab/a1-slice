@@ -3,9 +3,11 @@
 //! `A1App` lives here. Each screen, the player, and the shared widgets
 //! are sibling modules so they can use these fields.
 
+mod caption_controls;
 mod captions;
 mod export_screen;
 mod find;
+mod fix_words;
 mod home;
 mod jobs;
 mod layout;
@@ -88,8 +90,13 @@ pub struct A1App {
     caption_look: CaptionLook,
     caption_source: CaptionSource,
     fix_request: String,
+    fix_break_lines: bool,
+    fix_typos: bool,
+    fix_words_per_line: String,
     fix_log: String,
     pending_lines: Option<Vec<TranscriptSegment>>,
+    /// Lines sent to the agent, so an unchanged reply is not offered as a new edit.
+    fix_basis: Option<Vec<TranscriptSegment>>,
     status: String,
     review_index: usize,
     review_for: Option<String>,
@@ -154,8 +161,12 @@ impl A1App {
             caption_look: CaptionLook::Burn,
             caption_source: CaptionSource::Transcript,
             fix_request: String::new(),
+            fix_break_lines: true,
+            fix_typos: true,
+            fix_words_per_line: "8".to_string(),
             fix_log: String::new(),
             pending_lines: None,
+            fix_basis: None,
             status: String::new(),
             review_index: 0,
             review_for: None,

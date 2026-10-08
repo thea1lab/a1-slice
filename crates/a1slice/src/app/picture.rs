@@ -63,12 +63,6 @@ impl A1App {
         if let Some(crop) = shown_crop {
             overlay::paint_crop_frame(ui.painter(), image, crop);
         }
-        if self.state.screen == Screen::Captions {
-            let cues = active_cues(&self.state, self.caption_source);
-            if let Some(text) = caption_on_picture(&cues, self.playhead_ms) {
-                overlay::paint_caption(ui.painter(), image, bar.top(), text, &self.caption_style);
-            }
-        }
 
         let stage =
             egui::Rect::from_min_max(image.left_top(), egui::pos2(image.right(), bar.top()));
@@ -144,6 +138,12 @@ impl A1App {
                 self.state.video_duration_ms,
             );
             self.player_volume(ui, slots.speaker, slots.slider);
+        }
+        if self.state.screen == Screen::Captions && self.caption_look == CaptionLook::Burn {
+            let cues = active_cues(&self.state, self.caption_source);
+            if let Some(text) = caption_on_picture(&cues, self.playhead_ms) {
+                overlay::paint_caption(ui.painter(), image, text, &self.caption_style);
+            }
         }
 
         if framing {

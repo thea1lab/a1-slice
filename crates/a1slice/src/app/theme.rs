@@ -60,4 +60,15 @@ fn install_type(ctx: &egui::Context) {
             }],
         ));
     }
+    let mono = "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf";
+    if let Ok(bytes) = std::fs::read(mono) {
+        ctx.add_font(egui::epaint::text::FontInsert::new(
+            "Noto Sans Mono",
+            egui::FontData::from_owned(bytes),
+            vec![egui::epaint::text::InsertFontFamily {
+                family: egui::FontFamily::Name("Noto Sans Mono".into()),
+                priority: egui::epaint::text::FontPriority::Highest,
+            }],
+        ));
+    }
 }

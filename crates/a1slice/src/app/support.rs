@@ -4,9 +4,6 @@ use crate::backend::{self};
 use a1slice_core::sidecars::{self};
 use a1slice_core::types::*;
 use a1slice_core::wizard::WizardState;
-use eframe::egui::{self, RichText};
-
-use super::theme::MUTED;
 
 pub(super) fn clock(ms: i64) -> String {
     a1slice_core::preview::format_playback_clock(ms.max(0) as f64)
@@ -99,83 +96,13 @@ pub(super) fn caption_project(
     }
 }
 
-fn normalize_hex(value: &str) -> Option<String> {
+pub(super) fn normalize_hex(value: &str) -> Option<String> {
     let hex = value.trim().trim_start_matches('#');
     if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
         Some(format!("#{}", hex.to_ascii_lowercase()))
     } else {
         None
     }
-}
-
-pub(super) fn style_controls(ui: &mut egui::Ui, style: &mut CaptionStyle, _look: &mut CaptionLook) {
-    ui.label(RichText::new("COLOR").small().color(MUTED));
-    ui.horizontal_wrapped(|ui| {
-        for (color, label) in [
-            (CaptionColor::White, "White"),
-            (CaptionColor::Cream, "Cream"),
-            (CaptionColor::Yellow, "Yellow"),
-            (CaptionColor::Black, "Black"),
-        ] {
-            if ui
-                .selectable_label(style.color == color && style.custom_color.is_none(), label)
-                .clicked()
-            {
-                style.color = color;
-                style.custom_color = None;
-            }
-        }
-    });
-    let mut custom = style.custom_color.clone().unwrap_or_default();
-    if ui.text_edit_singleline(&mut custom).changed() {
-        if custom.trim().is_empty() {
-            style.custom_color = None;
-        } else if let Some(hex) = normalize_hex(&custom) {
-            style.custom_color = Some(hex);
-        }
-    }
-    ui.label(
-        RichText::new("Or type a colour, like #ffb83e.")
-            .small()
-            .color(MUTED),
-    );
-    ui.label(RichText::new("POSITION").small().color(MUTED));
-    ui.horizontal(|ui| {
-        for (pos, label) in [
-            (CaptionPosition::Bottom, "Bottom"),
-            (CaptionPosition::Middle, "Middle"),
-            (CaptionPosition::Top, "Top"),
-        ] {
-            if ui.selectable_label(style.position == pos, label).clicked() {
-                style.position = pos;
-            }
-        }
-    });
-    ui.label(RichText::new("SIZE").small().color(MUTED));
-    ui.horizontal(|ui| {
-        for (size, label) in [
-            (CaptionSize::Small, "Small"),
-            (CaptionSize::Medium, "Medium"),
-            (CaptionSize::Large, "Large"),
-        ] {
-            if ui.selectable_label(style.size == size, label).clicked() {
-                style.size = size;
-                style.font_size = None;
-            }
-        }
-    });
-    ui.label(RichText::new("FONT").small().color(MUTED));
-    ui.horizontal(|ui| {
-        for (font, label) in [
-            (CaptionFont::Sans, "Sans"),
-            (CaptionFont::Serif, "Serif"),
-            (CaptionFont::Mono, "Mono"),
-        ] {
-            if ui.selectable_label(style.font == font, label).clicked() {
-                style.font = font;
-            }
-        }
-    });
 }
 
 pub(super) fn load_recent() -> Vec<(String, String)> {

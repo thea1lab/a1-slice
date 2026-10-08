@@ -17,7 +17,7 @@ pub use log::{agent_output_text, empty_agent_log_state, interpret_agent_line, vi
 pub use prompt::{
     break_caption_lines, caption_edit_prompt, caption_file_text, caption_line,
     clamp_words_per_line, coerce_segments, format_caption_clock, guard_caption_edit,
-    is_none_answer, word_count,
+    is_none_answer, lines_longer_than, split_caption_note, word_count,
 };
 pub use types::{
     AgentLogState, CaptionEditRequest, CaptionEditResult, CaptionLogState, DiffKind, DiffRow,
@@ -80,6 +80,17 @@ mod tests {
         assert!(prompt.contains("Do not join or split lines."));
         assert!(is_none_answer("NONE"));
         assert!(!is_none_answer("I'll split the line."));
+    }
+
+    #[test]
+    fn says_how_many_lines_the_word_limit_split() {
+        let (next, note) = split_caption_note(&lines(), 8.0);
+        assert_eq!(note, "Split 1 line longer than 8 words.");
+        assert_eq!(next.len(), 3);
+        let (same, already) = split_caption_note(&next, 8.0);
+        assert_eq!(same, next);
+        assert_eq!(already, "Every line is already 8 words or shorter.");
+        assert_eq!(lines_longer_than(&lines(), 8.0), 1);
     }
 
     #[test]
