@@ -14,6 +14,17 @@ pub fn zoom_window_scale(zoom: f64) -> f64 {
     }
 }
 
+/// Inverse of `zoom_window_scale`. `scale` is 1 at the fitted frame and smaller when tighter.
+fn zoom_for_window_scale(scale: f64) -> f64 {
+    let tightest = zoom_window_scale(MAX_CROP_ZOOM);
+    let scale = clamp(scale, tightest, 1.0);
+    if scale >= MAX_ZOOM_SCALE {
+        (1.0 - scale) / (1.0 - MAX_ZOOM_SCALE)
+    } else {
+        MAX_ZOOM_SCALE / scale
+    }
+}
+
 pub fn ratio_pair(ratio: CropRatio) -> Option<(f64, f64)> {
     Some(match ratio {
         CropRatio::Original => return None,
@@ -155,8 +166,9 @@ pub fn zoom_from_scroll(zoom: f64, content_delta_y: f64) -> f64 {
 
 /// Zoom from a corner handle. The pointer is in the same space as `vw` and `vh`.
 ///
-/// The handle at the edge of the widest frame fits the picture. Pulling toward
-/// the middle zooms in, the same as the main player.
+/// Distance is measured from the current frame, so a click on its corner keeps
+/// the zoom. Pulling toward the middle zooms in. The widest frame still fits
+/// the picture, and the tightest reach is 200%.
 pub fn zoom_from_corner(
     crop: ClipCrop,
     pointer_x: f64,
@@ -167,17 +179,17 @@ pub fn zoom_from_corner(
     if vw <= 0.0 || vh <= 0.0 {
         return crop;
     }
-    let max_box = crop_rect(ClipCrop { zoom: 0.0, ..crop }, vw, vh);
-    let cx = max_box.x + max_box.w / 2.0;
-    let cy = max_box.y + max_box.h / 2.0;
+    let fitted = crop_rect(ClipCrop { zoom: 0.0, ..crop }, vw, vh);
+    let max_dist = ((fitted.w / 2.0).powi(2) + (fitted.h / 2.0).powi(2))
+        .sqrt()
+        .max(1e-6);
+    let frame = crop_rect(crop, vw, vh);
+    let cx = frame.x + frame.w / 2.0;
+    let cy = frame.y + frame.h / 2.0;
     let dist = ((pointer_x - cx).powi(2) + (pointer_y - cy).powi(2)).sqrt();
-    let max_dist = ((max_box.w / 2.0).powi(2) + (max_box.h / 2.0).powi(2)).sqrt();
-    let min_dist = max_dist * zoom_window_scale(MAX_CROP_ZOOM);
-    let span = (max_dist - min_dist).max(1e-6);
-    let zoom = MAX_CROP_ZOOM * (1.0 - (clamp(dist, min_dist, max_dist) - min_dist) / span);
     snap_crop_center(
         ClipCrop {
-            zoom: clamp(zoom, 0.0, MAX_CROP_ZOOM),
+            zoom: zoom_for_window_scale(dist / max_dist),
             ..crop
         },
         vw,
@@ -630,6 +642,80 @@ mod tests {
             tight.zoom > 1.9,
             "center should reach the tightest zoom, got {}",
             tight.zoom
+        );
+    }
+
+    #[test]
+    fn window_scale_round_trips_through_zoom() {
+        for zoom in [0.0, 0.25, 0.5, 1.0, 1.25, 1.5, 2.0] {
+            close(zoom_for_window_scale(zoom_window_scale(zoom)), zoom);
+        }
+    }
+
+    #[test]
+    fn grabbing_the_current_corner_keeps_the_zoom() {
+        for zoom in [0.0, 0.4, 1.0, 1.6, 2.0] {
+            let crop = ClipCrop {
+                ratio: CropRatio::Square,
+                cx: 0.5,
+                cy: 0.5,
+                zoom,
+            };
+            let frame = crop_rect(crop, 1920.0, 1080.0);
+            let held = zoom_from_corner(crop, frame.x, frame.y, 1920.0, 1080.0);
+            assert!(
+                (held.zoom - zoom).abs() < 0.02,
+                "corner grab at {zoom} jumped to {}",
+                held.zoom
+            );
+        }
+
+        let panned = ClipCrop {
+            ratio: CropRatio::R9x16,
+            cx: 0.3,
+            cy: 0.5,
+            zoom: 1.0,
+        };
+        let frame = crop_rect(panned, 1920.0, 1080.0);
+        let held = zoom_from_corner(panned, frame.x, frame.y, 1920.0, 1080.0);
+        assert!(
+            (held.zoom - 1.0).abs() < 0.02,
+            "panned grab jumped to {}",
+            held.zoom
+        );
+
+        let crop = ClipCrop {
+            ratio: CropRatio::Square,
+            cx: 0.5,
+            cy: 0.5,
+            zoom: 1.0,
+        };
+        let frame = crop_rect(crop, 1920.0, 1080.0);
+        let cx = frame.x + frame.w / 2.0;
+        let cy = frame.y + frame.h / 2.0;
+        let tighter = zoom_from_corner(
+            crop,
+            frame.x + (cx - frame.x) * 0.2,
+            frame.y + (cy - frame.y) * 0.2,
+            1920.0,
+            1080.0,
+        );
+        assert!(
+            tighter.zoom > crop.zoom + 0.05,
+            "inward drag should zoom in, got {}",
+            tighter.zoom
+        );
+        let wider = zoom_from_corner(
+            crop,
+            frame.x - (cx - frame.x) * 0.15,
+            frame.y - (cy - frame.y) * 0.15,
+            1920.0,
+            1080.0,
+        );
+        assert!(
+            wider.zoom < crop.zoom - 0.05,
+            "outward drag should zoom out, got {}",
+            wider.zoom
         );
     }
 }
