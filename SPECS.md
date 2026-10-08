@@ -51,8 +51,8 @@ The file is `ggml-large-v3.bin` from [ggerganov/whisper.cpp on Hugging Face](htt
 crates/
   a1slice/            eframe window
     src/main.rs       Window entry
-    src/app.rs        Screens
-    src/backend.rs    ffmpeg, whisper-cli, and installed agents
+    src/app/          One file per screen, plus the player and widgets
+    src/backend/      ffmpeg, whisper-cli, and installed agents
   a1slice-core/       Sidecar files, crop, clips, settings, wizard state
 resources/
   bin/                whisper.cpp binaries (built, not committed)

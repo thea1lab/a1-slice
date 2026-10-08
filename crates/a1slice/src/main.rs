@@ -47,14 +47,22 @@ fn ensure_linux_desktop_entry() {
 
     let svg_dest = icons_svg_dir.join("a1slice.svg");
     let mut icon_updated = false;
-    if !svg_dest.exists() || std::fs::read(&svg_dest).map(|b| b != ICON_SVG).unwrap_or(true) {
+    if !svg_dest.exists()
+        || std::fs::read(&svg_dest)
+            .map(|b| b != ICON_SVG)
+            .unwrap_or(true)
+    {
         if std::fs::write(&svg_dest, ICON_SVG).is_ok() {
             icon_updated = true;
         }
     }
 
     let png_dest = icons_png_dir.join("a1slice.png");
-    if !png_dest.exists() || std::fs::read(&png_dest).map(|b| b != ICON_PNG).unwrap_or(true) {
+    if !png_dest.exists()
+        || std::fs::read(&png_dest)
+            .map(|b| b != ICON_PNG)
+            .unwrap_or(true)
+    {
         if std::fs::write(&png_dest, ICON_PNG).is_ok() {
             icon_updated = true;
         }
@@ -87,7 +95,10 @@ fn ensure_linux_desktop_entry() {
          StartupWMClass=a1slice\n"
     );
 
-    if std::fs::read_to_string(&desktop_dest).map(|c| c != desktop_content).unwrap_or(true) {
+    if std::fs::read_to_string(&desktop_dest)
+        .map(|c| c != desktop_content)
+        .unwrap_or(true)
+    {
         let _ = std::fs::write(&desktop_dest, desktop_content);
     }
 }
