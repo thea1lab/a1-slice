@@ -388,6 +388,21 @@ mod tests {
             choose_whisper_binary_name("linux", "x64", &[]),
             "whisper-cli-linux-x64"
         );
+        assert_eq!(
+            choose_whisper_binary_name(
+                "windows",
+                "x86_64",
+                &[
+                    "whisper-cli-win-x64.exe",
+                    "whisper-cli-win-x64-gpu.exe",
+                ]
+            ),
+            "whisper-cli-win-x64-gpu.exe"
+        );
+        assert_eq!(
+            choose_whisper_binary_name("windows", "x86_64", &["whisper-cli-win-x64.exe"]),
+            "whisper-cli-win-x64.exe"
+        );
     }
 
     #[test]

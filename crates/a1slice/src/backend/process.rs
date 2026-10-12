@@ -20,24 +20,7 @@ pub fn which(cmd: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn whisper_names() -> (&'static str, &'static str) {
-    if cfg!(windows) {
-        ("whisper-cli-win-x64-gpu.exe", "whisper-cli-win-x64.exe")
-    } else if cfg!(target_os = "macos") {
-        if cfg!(target_arch = "aarch64") {
-            ("whisper-cli-mac-arm64-gpu", "whisper-cli-mac-arm64")
-        } else {
-            ("whisper-cli-mac-x64-gpu", "whisper-cli-mac-x64")
-        }
-    } else if cfg!(target_arch = "aarch64") {
-        ("whisper-cli-linux-arm64-gpu", "whisper-cli-linux-arm64")
-    } else {
-        ("whisper-cli-linux-x64-gpu", "whisper-cli-linux-x64")
-    }
-}
-
-pub fn whisper_binary() -> Option<PathBuf> {
-    let (gpu, cpu) = whisper_names();
+fn whisper_roots() -> Vec<PathBuf> {
     let mut roots = vec![
         PathBuf::from("resources/bin"),
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../resources/bin"),
@@ -53,15 +36,44 @@ pub fn whisper_binary() -> Option<PathBuf> {
             }
         }
     }
-    for name in [gpu, cpu] {
-        for root in &roots {
-            let path = root.join(name);
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-    }
-    None
+    roots
+}
+
+fn names_in(dir: &Path) -> Option<Vec<String>> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    Some(
+        entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect(),
+    )
+}
+
+/// GPU binary when that file is in any search directory. CPU binary otherwise.
+pub fn whisper_binary() -> Option<PathBuf> {
+    let listed: Vec<(PathBuf, Vec<String>)> = whisper_roots()
+        .into_iter()
+        .filter_map(|root| {
+            let names = names_in(&root)?;
+            Some((root, names))
+        })
+        .collect();
+    let borrowed: Vec<(&Path, Vec<&str>)> = listed
+        .iter()
+        .map(|(dir, names)| (dir.as_path(), names.iter().map(String::as_str).collect()))
+        .collect();
+    let locations: Vec<(&Path, &[&str])> = borrowed
+        .iter()
+        .map(|(dir, names)| (*dir, names.as_slice()))
+        .collect();
+    let fallback = listed.first().map(|(dir, _)| dir.clone())?;
+    let chosen = a1slice_core::whisper::choose_whisper_binary_path(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        &locations,
+        &fallback,
+    );
+    chosen.is_file().then_some(chosen)
 }
 
 pub fn probe(video: &Path) -> Result<(Ms, u32, u32), String> {

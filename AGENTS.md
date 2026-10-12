@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Rules for changing the A1 Slice Rust app. `CLAUDE.md` is the short map. This file is the one to follow when adding or moving code.
+Rules for changing the A1 Slice Rust app. This file is the one to follow when adding or moving code.
 
 ## Commands
 
@@ -20,6 +20,19 @@ Rust 1.85 or newer. Edition 2021. `ffmpeg` and `ffprobe` must be on `PATH`. `ffp
 - `crates/a1slice-core` is the library the window calls. It owns sidecar JSON, crop math, clip bounds, preview timing, wizard state, and settings. It does not spawn ffmpeg, whisper, or an agent.
 
 `lib.rs` only lists modules. Do not put logic there.
+
+## App
+
+`app/` loads settings, opens a video, and draws the current screen from the wizard state in `a1slice-core`. Screens: `home`, `transcribe`, `transcribe-done`, `find`, `review`, `export`, `reframe`, `captions`, `fix-words`. Home opens one of four tools (`transcribe`, `find`, `reframe`, `captions`) and the video is chosen on the next screen. Pipeline stages: `idle | extracting | downloading | transcribing | analyzing | cutting | done | error`.
+
+1. **FFmpeg** (`backend/`) extracts audio to WAV (16 kHz mono, with `afftdn` denoising), cuts clips, reframes, and burns captions. `ffprobe` reads duration and picture size.
+2. **Whisper.cpp.** `scripts/build-whisper.sh` builds a CPU binary, plus Metal on macOS, CUDA on Linux when `nvcc` is present, and CUDA or Vulkan on Windows. The binaries are gitignored. The large-v3 model must already be at `~/.a1slice/models/ggml-large-v3.bin`. The app does not download it. Names: `whisper-cli-win-x64.exe`, `whisper-cli-mac-arm64`, `whisper-cli-mac-x64`, `whisper-cli-linux-x64`, `whisper-cli-linux-arm64`, and the same names with `-gpu` before the extension. The app uses the GPU binary when that file is present and the CPU binary otherwise. `backend/process.rs` looks in `resources/bin` from the working directory, beside the executable, under `APPDIR`, and in `CARGO_MANIFEST_DIR/../../resources/bin`. If neither file is there, transcription tells the user to run `scripts/build-whisper.sh`.
+3. **Clip finding** runs an installed agent (`grok`, `claude`, `codex`, or `agy`). The parser accepts the last JSON clip list the agent prints. The screens do not collect an API key.
+4. **Caption edits.** Fix the words, using the same installed agents.
+
+Language and transcription tuning live in `~/.a1slice/settings.json`. Beside the source video: `{stem}-transcript.txt`, `{stem}.a1slice.json`, `{stem}.a1slice-clips.json`, `{stem}.a1slice-analysis.txt`, `{stem}.a1slice-framing.json`, `{stem}.a1slice-captions.json`.
+
+Find-best-parts export re-encodes each kept clip (libx264) and writes a sidecar `.srt` (subtitle mode `srt`, original picture). If that encode fails, it falls back to stream copy. Captions export burns the words into a new mp4. Reframe export writes one cropped file.
 
 ## Where a change goes
 

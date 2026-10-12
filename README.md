@@ -56,7 +56,7 @@ Language and the “If the words come out wrong” transcription controls are st
 
 ## For contributors
 
-Build steps, the whisper binary names, and the source layout are in [SPECS.md](SPECS.md). Notes for working in this repo are in [CLAUDE.md](CLAUDE.md). The visual system is [DESIGN.md](DESIGN.md).
+Build steps, the whisper binary names, and the source layout are in [SPECS.md](SPECS.md). Notes for working in this repo are in [AGENTS.md](AGENTS.md). The visual system is [DESIGN.md](DESIGN.md).
 
 ## License
 

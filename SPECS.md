@@ -13,7 +13,7 @@ The product description and how to run the app are in [README.md](README.md). Th
 
 Rust 1.85 or newer. `ffmpeg` and `ffprobe` must be on `PATH`.
 
-Transcription uses whisper.cpp **large-v3**. `scripts/build-whisper.sh` makes a CPU binary on Linux and Windows, and CPU plus Metal binaries on macOS.
+Transcription uses whisper.cpp **large-v3**. `scripts/build-whisper.sh` makes a CPU binary, plus a GPU binary when the machine can build one: Metal on macOS, CUDA on Linux when `nvcc` is present, and CUDA or Vulkan on Windows.
 
 ## Whisper
 
@@ -27,13 +27,13 @@ That clones whisper.cpp v1.8.3, builds `whisper-cli`, and copies it into place. 
 
 | Platform | File |
 | --- | --- |
-| Windows x64 | `whisper-cli-win-x64.exe` |
+| Windows x64 | `whisper-cli-win-x64.exe` and, when CUDA or Vulkan is available, `whisper-cli-win-x64-gpu.exe` |
 | macOS Apple Silicon | `whisper-cli-mac-arm64` and `whisper-cli-mac-arm64-gpu` |
 | macOS Intel | `whisper-cli-mac-x64` and `whisper-cli-mac-x64-gpu` |
 | Linux x64 | `whisper-cli-linux-x64` |
 | Linux arm64 | `whisper-cli-linux-arm64` |
 
-The app looks in `resources/bin/` from the working directory, then next to the crate at `crates/a1slice/../../resources/bin`. It prefers the GPU binary on macOS and falls back to the CPU binary.
+The app looks in `resources/bin/` from the working directory, then next to the crate at `crates/a1slice/../../resources/bin`. It prefers the GPU binary when that file is present and falls back to the CPU binary.
 
 The model is a separate download, about 3 GB. Save it as `~/.a1slice/models/ggml-large-v3.bin`:
 

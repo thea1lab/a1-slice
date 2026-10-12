@@ -34,6 +34,42 @@ ARCH="$(uname -m)"
 
 mkdir -p "$BIN_DIR"
 
+# Ninja and MinGW Makefiles write bin/whisper-cli.exe. Visual Studio writes
+# bin/Release/whisper-cli.exe.
+copy_whisper_exe() {
+  local build_dir="$1"
+  local dest="$2"
+  local built=""
+  local candidate
+  for candidate in \
+    "$build_dir/bin/whisper-cli.exe" \
+    "$build_dir/bin/Release/whisper-cli.exe"
+  do
+    if [[ -f "$candidate" ]]; then
+      built="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$built" ]]; then
+    echo "whisper-cli.exe was not produced in $build_dir" >&2
+    exit 1
+  fi
+  cp "$built" "$dest"
+}
+
+copy_mingw_runtime() {
+  if ! command -v gcc >/dev/null 2>&1; then
+    return
+  fi
+  local gcc_bin dll
+  gcc_bin="$(dirname "$(command -v gcc)")"
+  for dll in libgomp-1.dll libwinpthread-1.dll; do
+    if [[ -f "$gcc_bin/$dll" ]]; then
+      cp "$gcc_bin/$dll" "$BIN_DIR/$dll"
+    fi
+  done
+}
+
 case "$OS" in
   Darwin)
     # macOS: build CPU + GPU (Metal) variants
@@ -82,14 +118,87 @@ case "$OS" in
     fi
     ;;
   MINGW*|MSYS*|CYGWIN*)
-    # Windows: CPU only
+    # Git Bash has gcc, not nmake, so the default NMake generator cannot
+    # configure. CUDA's nvcc on Windows still needs cl.exe.
+    GEN_ARGS=()
+    COMPILER_ARGS=()
+    if command -v ninja >/dev/null 2>&1; then
+      GEN_ARGS=(-G Ninja)
+    elif command -v mingw32-make >/dev/null 2>&1; then
+      GEN_ARGS=(-G "MinGW Makefiles")
+    fi
+    if command -v gcc >/dev/null 2>&1 && ! command -v cl >/dev/null 2>&1; then
+      COMPILER_ARGS=(
+        -DCMAKE_C_COMPILER=gcc
+        -DCMAKE_CXX_COMPILER=g++
+        -DCMAKE_EXE_LINKER_FLAGS=-static
+      )
+    fi
+    if [[ -n "${VULKAN_SDK:-}" && -d "$VULKAN_SDK/Bin" ]]; then
+      export PATH="$VULKAN_SDK/Bin:$PATH"
+    fi
+
     echo "Building whisper-cli (CPU)..."
-    cmake -S "$TMP_DIR/whisper.cpp" -B "$TMP_DIR/whisper.cpp/build" \
+    cmake -S "$TMP_DIR/whisper.cpp" -B "$TMP_DIR/whisper.cpp/build-cpu" \
+      "${GEN_ARGS[@]}" \
+      "${COMPILER_ARGS[@]}" \
       -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-      -DGGML_METAL=OFF -DGGML_CUDA=OFF
-    cmake --build "$TMP_DIR/whisper.cpp/build" --config Release \
+      -DGGML_METAL=OFF -DGGML_CUDA=OFF -DGGML_VULKAN=OFF
+    cmake --build "$TMP_DIR/whisper.cpp/build-cpu" --config Release \
       --target whisper-cli -j"$NPROC"
-    cp "$TMP_DIR/whisper.cpp/build/bin/Release/whisper-cli.exe" "$BIN_DIR/whisper-cli-win-x64.exe"
+    copy_whisper_exe "$TMP_DIR/whisper.cpp/build-cpu" "$BIN_DIR/whisper-cli-win-x64.exe"
+    # OpenMP stays dynamic even with -static. Windows loads these from
+    # the directory that contains the exe.
+    copy_mingw_runtime
+
+    GPU_LABEL=""
+    GPU_ARGS=()
+    GPU_COMPILER=()
+    if command -v nvcc >/dev/null 2>&1 && command -v cl >/dev/null 2>&1; then
+      GPU_LABEL="CUDA"
+      # nvcc on Windows uses cl as the host compiler. If gcc is earlier on
+      # PATH, CMake would compile CUDA with cl and link with ld.
+      GPU_COMPILER=(
+        -DCMAKE_C_COMPILER=cl
+        -DCMAKE_CXX_COMPILER=cl
+        -DCMAKE_CUDA_HOST_COMPILER=cl
+      )
+      GPU_ARGS=(
+        -DGGML_METAL=OFF -DGGML_VULKAN=OFF -DGGML_CUDA=ON
+        -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90"
+      )
+    elif command -v nvcc >/dev/null 2>&1; then
+      echo "Skipping CUDA build: nvcc is installed, but cl.exe is not on PATH."
+      echo "Open the x64 Native Tools prompt, or install the Vulkan SDK for a Vulkan build."
+    elif command -v glslc >/dev/null 2>&1; then
+      GPU_LABEL="Vulkan"
+      GPU_ARGS=(-DGGML_METAL=OFF -DGGML_CUDA=OFF -DGGML_VULKAN=ON)
+      GPU_COMPILER=("${COMPILER_ARGS[@]}")
+    else
+      echo "Skipping GPU build. Install the CUDA toolkit plus Visual Studio, or the Vulkan SDK (glslc), then re-run."
+    fi
+
+    if [[ -n "$GPU_LABEL" ]]; then
+      echo "Building whisper-cli (GPU, $GPU_LABEL)..."
+      cmake -S "$TMP_DIR/whisper.cpp" -B "$TMP_DIR/whisper.cpp/build-gpu" \
+        "${GEN_ARGS[@]}" \
+        "${GPU_COMPILER[@]}" \
+        "${GPU_ARGS[@]}" \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+      cmake --build "$TMP_DIR/whisper.cpp/build-gpu" --config Release \
+        --target whisper-cli -j"$NPROC"
+      copy_whisper_exe "$TMP_DIR/whisper.cpp/build-gpu" "$BIN_DIR/whisper-cli-win-x64-gpu.exe"
+      if [[ "$GPU_LABEL" == "CUDA" ]]; then
+        cuda_bin="$(dirname "$(command -v nvcc)")"
+        for dir in "$cuda_bin" "$cuda_bin/x64"; do
+          for dll in "$dir"/cudart64_*.dll "$dir"/cublas64_*.dll "$dir"/cublasLt64_*.dll; do
+            if [[ -f "$dll" ]]; then
+              cp "$dll" "$BIN_DIR/"
+            fi
+          done
+        done
+      fi
+    fi
     ;;
   *)
     echo "Unsupported OS: $OS" >&2
