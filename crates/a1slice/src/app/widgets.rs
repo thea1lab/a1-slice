@@ -27,9 +27,6 @@ pub(super) fn home_tile(
         Stroke::new(1.0_f32, border),
         egui::StrokeKind::Inside,
     );
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
     let pad = if compact { 12.0 } else { 28.0 };
     let icon = if compact { 48.0 } else { 64.0 };
     let inner = rect.shrink2(egui::vec2(pad, pad));
@@ -46,20 +43,29 @@ pub(super) fn home_tile(
             );
             paint_tool_icon(ui.painter(), icon_rect, tool);
             ui.add_space(if compact { 8.0 } else { 16.0 });
-            ui.label(
-                RichText::new(title)
-                    .size(if compact { 18.0 } else { 22.0 })
-                    .color(CREAM_HEAD),
-            );
+            // Labels are not selectable. A selectable label sits on top of the
+            // card, shows the text cursor, and keeps the click for itself.
+            ui.add(tile_caption(
+                title,
+                if compact { 18.0 } else { 22.0 },
+                CREAM_HEAD,
+            ));
             ui.add_space(2.0);
-            ui.label(
-                RichText::new(detail)
-                    .size(if compact { 13.0 } else { 15.0 })
-                    .color(MUTED),
-            );
+            ui.add(tile_caption(
+                detail,
+                if compact { 13.0 } else { 15.0 },
+                MUTED,
+            ));
         });
     });
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     response
+}
+
+fn tile_caption(text: &str, size: f32, color: Color32) -> egui::Label {
+    egui::Label::new(RichText::new(text).size(size).color(color)).selectable(false)
 }
 
 pub(super) fn with_sheet(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
@@ -257,6 +263,22 @@ pub(super) fn text_hit(ui: &mut egui::Ui, label: &str, size: f32, chevron: bool)
     response
 }
 
+/// Tool-screen bar. Home stays at the left, then the tool name, then the file.
+pub(super) fn tool_nav(ui: &mut egui::Ui, title: &str, file: Option<&str>) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        let home = text_hit(ui, "Home", 16.0, true);
+        ui.add_space(8.0);
+        ui.label(RichText::new(title).size(15.0).color(CREAM_HEAD));
+        if let Some(file) = file.filter(|file| !file.is_empty()) {
+            ui.add_space(8.0);
+            ui.label(RichText::new(file).size(15.0).color(MUTED));
+        }
+        home
+    })
+    .inner
+}
+
 pub(super) fn recent_row(
     ui: &mut egui::Ui,
     name: &str,
@@ -354,4 +376,109 @@ pub(super) fn export_progress(ui: &mut egui::Ui, percent: f64) {
         galley,
         CREAM,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{home_tile, tool_nav};
+    use a1slice_core::types::ToolId;
+    use eframe::egui::{self, CursorIcon, Pos2};
+
+    fn probe(tile: egui::Rect, compact: bool, pos: Pos2) -> (bool, CursorIcon) {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 500.0));
+        let mut input = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(0.0),
+            ..Default::default()
+        };
+        let mut clicked = false;
+        let draw = |ctx: &egui::Context, clicked: &mut bool| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                *clicked = home_tile(
+                    ui,
+                    tile,
+                    "Transcribe",
+                    "Turn speech into a saved transcript.",
+                    ToolId::Transcribe,
+                    compact,
+                )
+                .clicked();
+            });
+        };
+        let _ = ctx.run(input.clone(), |ctx| draw(ctx, &mut clicked));
+
+        input.events.push(egui::Event::PointerMoved(pos));
+        input.time = Some(0.05);
+        let hover = ctx.run(input.clone(), |ctx| draw(ctx, &mut clicked));
+
+        input.events.clear();
+        input.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        input.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        input.time = Some(0.1);
+        clicked = false;
+        let _ = ctx.run(input, |ctx| draw(ctx, &mut clicked));
+        (clicked, hover.platform_output.cursor_icon)
+    }
+
+    fn assert_whole_card_clicks(tile: egui::Rect, compact: bool) {
+        let mut missed = Vec::new();
+        let mut y = tile.top() + 6.0;
+        while y < tile.bottom() - 6.0 {
+            let pos = egui::pos2(tile.center().x, y);
+            let (clicked, cursor) = probe(tile, compact, pos);
+            if !clicked || cursor != CursorIcon::PointingHand {
+                missed.push((y, clicked, format!("{cursor:?}")));
+            }
+            y += 12.0;
+        }
+        assert!(
+            missed.is_empty(),
+            "every point on the card, including the title, should click and show a hand. misses: {missed:?}"
+        );
+    }
+
+    #[test]
+    fn tool_nav_keeps_home_on_the_left() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(900.0, 200.0));
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        let mut home = egui::Rect::NOTHING;
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                home = tool_nav(ui, "Transcribe", Some("interview.mp4")).rect;
+            });
+        });
+        assert!(
+            home.left() < 40.0,
+            "Home starts at the left edge, got {}",
+            home.left()
+        );
+        assert!(
+            home.right() < screen.center().x,
+            "Home stays on the left half, got {}",
+            home.right()
+        );
+    }
+
+    #[test]
+    fn home_tile_clicks_through_the_title() {
+        let wide = egui::Rect::from_min_size(egui::pos2(30.0, 24.0), egui::vec2(440.0, 210.0));
+        assert_whole_card_clicks(wide, false);
+        let narrow = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(360.0, 160.0));
+        assert_whole_card_clicks(narrow, true);
+    }
 }

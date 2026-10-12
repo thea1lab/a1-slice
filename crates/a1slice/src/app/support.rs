@@ -17,6 +17,17 @@ pub(super) fn file_name(path: &str) -> String {
         .to_string()
 }
 
+pub(super) fn tool_bar_title(screen: Screen) -> &'static str {
+    match screen {
+        Screen::Home => "A1 Slice",
+        Screen::Transcribe | Screen::TranscribeDone => "Transcribe",
+        Screen::Find | Screen::Review => "Find best parts",
+        Screen::Export => "Export",
+        Screen::Reframe => "Reframe",
+        Screen::Captions | Screen::FixWords => "Captions",
+    }
+}
+
 pub(super) fn settings_of(state: &WizardState) -> AppSettings {
     AppSettings {
         provider: state.provider,
@@ -183,8 +194,8 @@ pub(super) fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::pr
 
 #[cfg(test)]
 mod tests {
-    use super::{caption_on_picture, file_name, normalize_hex};
-    use a1slice_core::types::TranscriptSegment;
+    use super::{caption_on_picture, file_name, normalize_hex, tool_bar_title};
+    use a1slice_core::types::{Screen, TranscriptSegment};
 
     fn cue(start_ms: i64, end_ms: i64, text: &str) -> TranscriptSegment {
         TranscriptSegment {
@@ -206,6 +217,18 @@ mod tests {
     fn file_name_keeps_the_last_path_piece() {
         assert_eq!(file_name("/tmp/interview.mp4"), "interview.mp4");
         assert_eq!(file_name("interview.mp4"), "interview.mp4");
+    }
+
+    #[test]
+    fn tool_bar_names_the_tool_on_every_screen() {
+        assert_eq!(tool_bar_title(Screen::Transcribe), "Transcribe");
+        assert_eq!(tool_bar_title(Screen::TranscribeDone), "Transcribe");
+        assert_eq!(tool_bar_title(Screen::Find), "Find best parts");
+        assert_eq!(tool_bar_title(Screen::Review), "Find best parts");
+        assert_eq!(tool_bar_title(Screen::Export), "Export");
+        assert_eq!(tool_bar_title(Screen::Reframe), "Reframe");
+        assert_eq!(tool_bar_title(Screen::Captions), "Captions");
+        assert_eq!(tool_bar_title(Screen::FixWords), "Captions");
     }
 
     #[test]

@@ -11,12 +11,19 @@ use super::support::normalize_hex;
 use super::theme::{HAIRLINE, HAIRLINE_HOVER, MUTED, ORANGE};
 use super::widgets::choice;
 
+/// Space between buttons in one group. The buttons themselves stay 44px tall.
+pub(super) const CHIP_GAP: f32 = 8.0;
+/// Space between Place, Size, and Font, so they read as three groups.
+const GROUP_GAP: f32 = 40.0;
+/// Space under a group label, tighter than the space between groups.
+const LABEL_GAP: f32 = 8.0;
+pub(super) const SECTION_GAP: f32 = 20.0;
+
 pub(super) fn color_row(ui: &mut egui::Ui, style: &mut CaptionStyle) -> bool {
     let mut changed = false;
     let current = caption_ink(style).hex;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-        row_label(ui, "Color");
+    labeled_group(ui, "Color", 32.0, |ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(CHIP_GAP, CHIP_GAP);
         for item in CAPTION_PALETTE {
             if swatch(
                 ui,
@@ -33,44 +40,73 @@ pub(super) fn color_row(ui: &mut egui::Ui, style: &mut CaptionStyle) -> bool {
             }
         }
         changed |= color_field(ui, style);
+        changed
     });
     changed
 }
 
 pub(super) fn style_row(ui: &mut egui::Ui, style: &mut CaptionStyle, wide: bool) -> bool {
-    let mut changed = false;
-    if wide {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            changed |= place_chips(ui, style);
-            ui.add_space(12.0);
-            changed |= size_chips(ui, style);
-            ui.add_space(12.0);
-            changed |= font_chips(ui, style);
-        });
-    } else {
-        changed |= chip_row(ui, |ui| place_chips(ui, style));
-        ui.add_space(12.0);
-        changed |= chip_row(ui, |ui| size_chips(ui, style));
-        ui.add_space(12.0);
-        changed |= chip_row(ui, |ui| font_chips(ui, style));
-    }
-    changed
+    arrange_style(ui, style, wide).0
 }
 
-/// A nested `horizontal` takes the whole cluster, so chips go straight into the row.
-fn chip_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> bool) -> bool {
+fn arrange_style(
+    ui: &mut egui::Ui,
+    style: &mut CaptionStyle,
+    wide: bool,
+) -> (bool, [egui::Rect; 3]) {
     let mut changed = false;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-        changed = add(ui);
-    });
-    changed
+    let mut rects = [egui::Rect::NOTHING; 3];
+    if wide {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = GROUP_GAP;
+            let (place_changed, place) =
+                labeled_group(ui, "Place", 44.0, |ui| place_chips(ui, style));
+            let (size_changed, size) = labeled_group(ui, "Size", 44.0, |ui| size_chips(ui, style));
+            let (font_changed, font) = labeled_group(ui, "Font", 44.0, |ui| font_chips(ui, style));
+            changed = place_changed || size_changed || font_changed;
+            rects = [place, size, font];
+        });
+    } else {
+        let (place_changed, place) = labeled_group(ui, "Place", 44.0, |ui| place_chips(ui, style));
+        ui.add_space(SECTION_GAP);
+        let (size_changed, size) = labeled_group(ui, "Size", 44.0, |ui| size_chips(ui, style));
+        ui.add_space(SECTION_GAP);
+        let (font_changed, font) = labeled_group(ui, "Font", 44.0, |ui| font_chips(ui, style));
+        changed = place_changed || size_changed || font_changed;
+        rects = [place, size, font];
+    }
+    (changed, rects)
+}
+
+/// Label above the buttons. The group stays as wide as its buttons, not the whole row.
+fn labeled_group(
+    ui: &mut egui::Ui,
+    label: &str,
+    row_h: f32,
+    add: impl FnOnce(&mut egui::Ui) -> bool,
+) -> (bool, egui::Rect) {
+    let mut changed = false;
+    let response = ui.allocate_ui_with_layout(
+        egui::Vec2::ZERO,
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.spacing_mut().item_spacing.y = LABEL_GAP;
+            row_label(ui, label);
+            ui.allocate_ui_with_layout(
+                egui::vec2(0.0, row_h),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = CHIP_GAP;
+                    changed = add(ui);
+                },
+            );
+        },
+    );
+    (changed, response.response.rect)
 }
 
 fn place_chips(ui: &mut egui::Ui, style: &mut CaptionStyle) -> bool {
     let mut changed = false;
-    row_label(ui, "Place");
     for (position, label) in [
         (CaptionPosition::Bottom, "Bottom"),
         (CaptionPosition::Middle, "Middle"),
@@ -86,7 +122,6 @@ fn place_chips(ui: &mut egui::Ui, style: &mut CaptionStyle) -> bool {
 
 fn size_chips(ui: &mut egui::Ui, style: &mut CaptionStyle) -> bool {
     let mut changed = false;
-    row_label(ui, "Size");
     for (size, label) in [
         (CaptionSize::Small, "Small"),
         (CaptionSize::Medium, "Medium"),
@@ -106,7 +141,6 @@ fn size_chips(ui: &mut egui::Ui, style: &mut CaptionStyle) -> bool {
 
 fn font_chips(ui: &mut egui::Ui, style: &mut CaptionStyle) -> bool {
     let mut changed = false;
-    row_label(ui, "Font");
     for (font, label) in [
         (CaptionFont::Sans, "Sans"),
         (CaptionFont::Serif, "Serif"),
@@ -121,7 +155,13 @@ fn font_chips(ui: &mut egui::Ui, style: &mut CaptionStyle) -> bool {
 }
 
 pub(super) fn row_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).size(14.0).color(MUTED));
+    // A shrink-wrapped group starts with no width. A wrapping label then
+    // stacks one letter per line, so the word stays on one line.
+    let _ = ui.add(
+        egui::Label::new(RichText::new(text).size(14.0).color(MUTED))
+            .selectable(false)
+            .wrap_mode(egui::TextWrapMode::Extend),
+    );
 }
 
 fn swatch(ui: &mut egui::Ui, hex: &str, label: &str, selected: bool) -> egui::Response {
@@ -275,41 +315,85 @@ fn hex_color(hex: &str) -> Color32 {
 
 #[cfg(test)]
 mod tests {
-    use super::style_row;
+    use super::arrange_style;
     use a1slice_core::types::*;
 
-    #[test]
-    fn wide_place_size_and_font_share_one_row() {
-        let ctx = egui::Context::default();
-        let mut style = CaptionStyle {
+    fn sample_style() -> CaptionStyle {
+        CaptionStyle {
             color: CaptionColor::White,
             custom_color: None,
             position: CaptionPosition::Bottom,
             size: CaptionSize::Large,
             font_size: None,
             font: CaptionFont::Sans,
-        };
-        let mut height = 0.0_f32;
+        }
+    }
+
+    fn show_style(wide: bool, width: f32) -> [egui::Rect; 3] {
+        let ctx = egui::Context::default();
+        let mut style = sample_style();
+        let mut rects = [egui::Rect::NOTHING; 3];
         let _ = ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1280.0, 800.0),
+                    egui::vec2(width + 80.0, 800.0),
                 )),
                 ..Default::default()
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.set_max_width(1000.0);
-                    let top = ui.cursor().min.y;
-                    let _ = style_row(ui, &mut style, true);
-                    height = ui.cursor().min.y - top;
+                    ui.set_max_width(width);
+                    rects = arrange_style(ui, &mut style, wide).1;
                 });
             },
         );
+        rects
+    }
+
+    #[test]
+    fn wide_groups_sit_apart_on_one_row() {
+        let [place, size, font] = show_style(true, 1000.0);
         assert!(
-            height < 70.0,
-            "place, size, and font should share one row, got {height}"
+            place.height() >= 60.0 && place.height() < 90.0,
+            "the label is one line above the 44px buttons, got {}",
+            place.height()
         );
+        assert!(
+            place.width() > 200.0 && size.width() > 240.0 && font.width() > 180.0,
+            "each group is as wide as its buttons, place {} size {} font {}",
+            place.width(),
+            size.width(),
+            font.width()
+        );
+        assert!(
+            size.left() >= place.right() + 32.0,
+            "size should sit apart from place, place {} size {}",
+            place.right(),
+            size.left()
+        );
+        assert!(
+            font.left() >= size.right() + 32.0,
+            "font should sit apart from size, size {} font {}",
+            size.right(),
+            font.left()
+        );
+        assert!(
+            font.right() <= 1008.0,
+            "the three groups stay inside the dock, font ends at {}",
+            font.right()
+        );
+        assert!(
+            (place.top() - size.top()).abs() < 2.0 && (size.top() - font.top()).abs() < 2.0,
+            "the groups share the row"
+        );
+    }
+
+    #[test]
+    fn narrow_groups_stack_with_air_between_them() {
+        let [place, size, font] = show_style(false, 420.0);
+        assert!(size.top() >= place.bottom() + 16.0);
+        assert!(font.top() >= size.bottom() + 16.0);
+        assert!((place.left() - size.left()).abs() < 2.0);
     }
 }

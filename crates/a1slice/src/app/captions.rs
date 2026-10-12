@@ -6,7 +6,7 @@ use a1slice_core::types::*;
 use a1slice_core::wizard::WizardAction;
 use eframe::egui::{self, RichText};
 
-use super::caption_controls::{color_row, row_label, style_row};
+use super::caption_controls::{color_row, row_label, style_row, CHIP_GAP, SECTION_GAP};
 use super::layout::{picture_room, viewport_height};
 use super::support::{active_cues, caption_project};
 use super::theme::{CREAM_HEAD, MUTED, ORANGE};
@@ -30,9 +30,9 @@ fn cluster_width(width: f32) -> f32 {
 /// First-frame guess. The next frame uses the height the dock actually took.
 fn caption_dock_estimate(wide: bool) -> f32 {
     if wide {
-        360.0
+        480.0
     } else {
-        560.0
+        700.0
     }
 }
 
@@ -54,11 +54,11 @@ fn place_export_actions(
         ui.set_min_width(ui.available_width());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             action(ui);
-            ui.add_space(28.0);
+            ui.add_space(40.0);
             ui.with_layout(
                 egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
                 |ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                    ui.spacing_mut().item_spacing = egui::vec2(CHIP_GAP, CHIP_GAP);
                     choices(ui);
                 },
             );
@@ -92,7 +92,7 @@ impl A1App {
         let room = picture_room(viewport_height(ui), reserve, 180.0);
         self.picture_limited(ui, ctx, avail_w, room);
         let dock_top = ui.cursor().min.y;
-        ui.add_space(8.0);
+        ui.add_space(20.0);
         let cluster = cluster_width(avail_w);
         let side = ((avail_w - cluster) * 0.5).max(0.0);
         ui.horizontal(|ui| {
@@ -104,28 +104,28 @@ impl A1App {
                 self.caption_controls(ui, wide);
             });
         });
-        ui.add_space(4.0);
+        ui.add_space(16.0);
         self.caption_dock_px = (ui.cursor().min.y - dock_top).max(0.0);
     }
 
     fn caption_controls(&mut self, ui: &mut egui::Ui, wide: bool) {
         let mut changed = false;
         ui.label(RichText::new("Set the words").size(18.0).color(CREAM_HEAD));
-        ui.add_space(4.0);
+        ui.add_space(8.0);
         let help = if self.caption_look == CaptionLook::Burn {
             "The picture shows the words where the exported video will put them."
         } else {
             "A sidecar leaves the picture as it is and writes an .srt next to the video."
         };
         ui.label(RichText::new(help).size(14.0).color(MUTED));
-        ui.add_space(12.0);
+        ui.add_space(SECTION_GAP);
 
         changed |= color_row(ui, &mut self.caption_style);
-        ui.add_space(8.0);
+        ui.add_space(SECTION_GAP);
         changed |= style_row(ui, &mut self.caption_style, wide);
-        ui.add_space(8.0);
+        ui.add_space(SECTION_GAP);
         changed |= self.words_row(ui);
-        ui.add_space(8.0);
+        ui.add_space(SECTION_GAP);
         self.export_row(ui);
         if changed {
             self.remember_captions();
@@ -134,9 +134,10 @@ impl A1App {
 
     fn words_row(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
+        row_label(ui, "Words");
+        ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            row_label(ui, "Words");
+            ui.spacing_mut().item_spacing = egui::vec2(CHIP_GAP, CHIP_GAP);
             if choice(
                 ui,
                 "Transcript",
@@ -161,7 +162,7 @@ impl A1App {
                 changed |= self.pick_caption_file();
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         ui.label(RichText::new(self.words_path()).size(13.0).color(MUTED));
         if active_cues(&self.state, self.caption_source).is_empty() {
             ui.add_space(4.0);
@@ -238,16 +239,18 @@ impl A1App {
         let mut open_fix = false;
         let mut cancel = false;
         let mut export = false;
+        row_label(ui, "Export");
+        ui.add_space(8.0);
         place_export_actions(
             ui,
             |ui| {
-                row_label(ui, "Export");
                 if choice(ui, "Burn into the picture", look == CaptionLook::Burn).clicked() {
                     next_look = Some(CaptionLook::Burn);
                 }
                 if choice(ui, "Sidecar .srt", look == CaptionLook::Srt).clicked() {
                     next_look = Some(CaptionLook::Srt);
                 }
+                ui.add_space(16.0);
                 if !busy && review_secondary(ui, "Fix the words").clicked() {
                     open_fix = true;
                 }

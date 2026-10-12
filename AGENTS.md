@@ -65,3 +65,9 @@ Screen drawing is covered by the geometry tests in `app/layout.rs`. Do not asser
 ## UI
 
 Follow `DESIGN.md`. Charcoal window `#161616`, cream text, orange `#fa520f` for the next action. No light theme. Fonts come from the Noto Sans and Noto Serif files on the machine. Buttons go through `app/widgets.rs`, not a one-off `ui.button`, unless a screen already has a reason to paint its own control.
+
+## Look at the window
+
+A change to what the window draws is not done until you have looked at a screenshot of that screen. Geometry tests do not show a label that has wrapped into a column. `cargo test --offline` still has to pass.
+
+Run `cargo run -p a1slice`, open the screen you changed, and save a picture of the window (on this machine, `import -window <id> /tmp/a1-shot.png`). Read that picture. Labels read across. Groups stay apart. Buttons keep their size. On a player screen the picture is still the main thing. If the picture is wrong, fix it and take another one before you finish.

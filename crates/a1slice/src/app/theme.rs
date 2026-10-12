@@ -6,6 +6,7 @@ const CANVAS: Color32 = Color32::from_rgb(0x16, 0x16, 0x16);
 pub(super) const CREAM: Color32 = Color32::from_rgb(0xf4, 0xf1, 0xea);
 pub(super) const CREAM_HEAD: Color32 = Color32::from_rgb(0xff, 0xf8, 0xe0);
 pub(super) const MUTED: Color32 = Color32::from_rgb(0xa8, 0xa8, 0xa8);
+pub(super) const STONE: Color32 = Color32::from_rgb(0x8a, 0x8a, 0x8a);
 pub(super) const ORANGE: Color32 = Color32::from_rgb(0xfa, 0x52, 0x0f);
 pub(super) const SURFACE: Color32 = Color32::from_rgb(0x1c, 0x1c, 0x1e);
 pub(super) const INK: Color32 = Color32::from_rgb(0x1f, 0x1f, 0x1f);

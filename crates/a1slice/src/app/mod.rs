@@ -35,9 +35,9 @@ use std::time::Instant;
 
 use paint::paint_sunset;
 use playback::FrameResult;
-use support::{default_style, load_recent, settings_of};
+use support::{default_style, file_name, load_recent, settings_of, tool_bar_title};
 use theme::{apply_theme, CREAM_HEAD};
-use widgets::text_hit;
+use widgets::tool_nav;
 
 enum ReviewTrim {
     Idle,
@@ -95,6 +95,10 @@ pub struct A1App {
     fix_words_per_line: String,
     fix_log: String,
     pending_lines: Option<Vec<TranscriptSegment>>,
+    /// The right-hand proposal stays closed after Reject, even while a job winds down.
+    fix_dismissed: bool,
+    /// Reject already threw the edit away, so a late reply must not reopen it.
+    fix_drop_result: bool,
     /// Lines sent to the agent, so an unchanged reply is not offered as a new edit.
     fix_basis: Option<Vec<TranscriptSegment>>,
     status: String,
@@ -166,6 +170,8 @@ impl A1App {
             fix_words_per_line: "8".to_string(),
             fix_log: String::new(),
             pending_lines: None,
+            fix_dismissed: false,
+            fix_drop_result: false,
             fix_basis: None,
             status: String::new(),
             review_index: 0,
@@ -204,18 +210,10 @@ impl A1App {
                 });
                 ui.add_space(4.0);
             } else {
-                ui.horizontal(|ui| {
-                    ui.add_space(8.0);
-                    if text_hit(ui, "A1 Slice", 15.0, false).clicked() {
-                        self.go_home();
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(8.0);
-                        if text_hit(ui, "Home", 16.0, true).clicked() {
-                            self.go_home();
-                        }
-                    });
-                });
+                let file = self.state.video_path.as_deref().map(file_name);
+                if tool_nav(ui, tool_bar_title(self.state.screen), file.as_deref()).clicked() {
+                    self.go_home();
+                }
             }
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
