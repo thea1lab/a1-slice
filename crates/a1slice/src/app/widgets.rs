@@ -82,10 +82,6 @@ pub(super) fn with_sheet(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {
     });
 }
 
-pub(super) fn primary(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    primary_sized(ui, label, 40.0, 14.0)
-}
-
 pub(super) fn primary_lg(ui: &mut egui::Ui, label: &str) -> egui::Response {
     primary_sized(ui, label, 48.0, 16.0)
 }

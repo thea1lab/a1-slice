@@ -5,7 +5,7 @@ use a1slice_core::types::{Ms, PipelineStage, ProgressUpdate, TranscriptSegment, 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use super::process::{run_ffmpeg, tail, whisper_binary};
@@ -49,6 +49,9 @@ pub fn transcribe_video(
         wav.display().to_string(),
     ];
     run_ffmpeg(&extract, cancel, child_slot)?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Stopped.".into());
+    }
     on_progress(ProgressUpdate {
         stage: PipelineStage::Transcribing,
         message: "Writing the words…".into(),
@@ -77,33 +80,35 @@ pub fn transcribe_video(
         args.push("-l".into());
         args.push(language.as_str().into());
     }
-    let child = Command::new(&binary)
+    let mut child = Command::new(&binary)
         .args(&args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
+    // Leave the process in the slot while stderr is read, so Cancel can kill it.
+    let mut stderr = child.stderr.take();
     {
         let mut slot = child_slot.lock().unwrap();
         *slot = Some(child);
     }
-    // Re-take the child to wait. The slot holds it.
+    let mut err = String::new();
+    if let Some(mut pipe) = stderr {
+        let _ = pipe.read_to_string(&mut err);
+    }
     let status = {
         let mut slot = child_slot.lock().unwrap();
-        let mut child = slot
-            .take()
-            .ok_or_else(|| "Whisper did not start.".to_string())?;
-        let mut err = String::new();
-        if let Some(mut pipe) = child.stderr.take() {
-            let _ = pipe.read_to_string(&mut err);
-        }
-        let status = child.wait().map_err(|e| e.to_string())?;
-        if !status.success() {
-            return Err(format!("Whisper stopped: {}", tail(&err)));
-        }
-        status
+        slot.take()
+            .map(|mut child| child.wait())
+            .transpose()
+            .map_err(|e| e.to_string())?
     };
-    let _ = status;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Stopped.".into());
+    }
+    if !status.is_some_and(|code| code.success()) {
+        return Err(format!("Whisper stopped: {}", tail(&err)));
+    }
     let json_path = PathBuf::from(format!("{}.json", output_base.display()));
     let json = std::fs::read_to_string(&json_path)
         .map_err(|_| "Whisper did not write a transcript.".to_string())?;

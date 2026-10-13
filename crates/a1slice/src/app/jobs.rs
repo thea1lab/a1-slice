@@ -138,6 +138,11 @@ impl A1App {
                 let screen = self.state.screen;
                 self.dispatch(WizardAction::TranscribeError(String::new()));
                 self.state.transcribe_error = None;
+                if screen == Screen::Transcribe {
+                    self.state.transcribe_stage = PipelineStage::Idle;
+                    self.state.transcribe_message.clear();
+                    self.state.transcribe_percent = 0.0;
+                }
                 self.state.analyzing = false;
                 self.state.analyze_error = None;
                 self.state.analyze_message.clear();
