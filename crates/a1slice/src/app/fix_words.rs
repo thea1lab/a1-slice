@@ -18,49 +18,46 @@ use super::A1App;
 const SAVE_CAPTIONS: &str = "Save the new captions";
 const COLUMN_GAP: f32 = 40.0;
 const TIME_W: f32 = 76.0;
+const BOTTOM_PAD: f32 = 24.0;
 
 impl A1App {
     pub(super) fn fix_words(&mut self, ui: &mut egui::Ui) {
         ui.add_space(12.0);
-        let open = self.proposal_open();
         let bounds = egui::Rect::from_min_size(ui.cursor().min, ui.available_size());
-        let frames = fix_frames(bounds, open);
+        let frames = fix_frames(bounds);
+        // The columns fill this viewport. The caption list then scrolls inside
+        // its own box, and the page scroll is left for the rest of the screen.
+        let view_h = column_height(ui.available_height());
         if let Some(right) = frames.right {
-            self.fix_columns(ui, frames.left, right);
+            self.fix_columns(ui, frames.left, right, view_h);
         } else {
-            self.fix_stack(ui, frames.left, open);
+            self.fix_stack(ui, frames.left, view_h);
         }
-        ui.add_space(24.0);
+        ui.add_space(BOTTOM_PAD);
     }
 
     fn proposal_open(&self) -> bool {
         !self.fix_dismissed && (self.pending_lines.is_some() || self.job.is_some())
     }
 
-    fn fix_columns(&mut self, ui: &mut egui::Ui, left: egui::Rect, right: egui::Rect) {
-        let view_h = (ui.available_height() - 16.0).max(420.0);
+    fn fix_columns(&mut self, ui: &mut egui::Ui, left: egui::Rect, right: egui::Rect, view_h: f32) {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             let shift = (left.left() - ui.cursor().min.x).max(0.0);
             ui.add_space(shift);
-            let column_top = ui.cursor().min.y;
             ui.vertical(|ui| {
                 ui.set_width(left.width());
                 self.fix_form(ui);
-                ui.add_space(20.0);
-                let used = ui.cursor().min.y - column_top;
-                let list_h = (view_h - used).max(200.0);
-                self.show_current(ui, list_h);
             });
             ui.add_space((right.left() - left.right()).max(0.0));
             ui.vertical(|ui| {
                 ui.set_width(right.width());
-                self.proposal_column(ui, view_h);
+                self.caption_side(ui, view_h);
             });
         });
     }
 
-    fn fix_stack(&mut self, ui: &mut egui::Ui, left: egui::Rect, open: bool) {
+    fn fix_stack(&mut self, ui: &mut egui::Ui, left: egui::Rect, view_h: f32) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             let shift = (left.left() - ui.cursor().min.x).max(0.0);
@@ -69,19 +66,23 @@ impl A1App {
                 ui.set_width(left.width());
                 self.fix_form(ui);
                 ui.add_space(20.0);
-                let room = ui.available_height();
-                let list_h = if room.is_finite() {
-                    room.clamp(240.0, if open { 320.0 } else { 480.0 })
-                } else {
-                    360.0
-                };
-                self.show_current(ui, list_h);
-                if open {
-                    ui.add_space(20.0);
-                    self.proposal_column(ui, 420.0);
-                }
+                self.caption_side(ui, view_h.min(520.0).max(280.0));
             });
         });
+    }
+
+    /// The form stays on the left. The captions fill the right, and a new edit sits under them.
+    fn caption_side(&mut self, ui: &mut egui::Ui, height: f32) {
+        let open = self.proposal_open();
+        if !open {
+            self.show_current(ui, (height - 36.0).max(200.0));
+            return;
+        }
+        let current_h = (height * 0.34).clamp(140.0, 240.0);
+        self.show_current(ui, current_h);
+        ui.add_space(16.0);
+        let below = (height - current_h - 52.0).max(220.0);
+        self.proposal_column(ui, below);
     }
 
     fn fix_form(&mut self, ui: &mut egui::Ui) {
@@ -371,41 +372,58 @@ struct FixFrames {
     right: Option<egui::Rect>,
 }
 
-/// Wide windows put the proposal beside the form. Narrow windows keep one column.
-fn fix_frames(bounds: egui::Rect, open: bool) -> FixFrames {
+/// Height of the two columns inside the page scroll.
+///
+/// The bottom pad is included, so a form that fits the window does not grow
+/// a scrollbar for the whole screen. A short window stays at least 280px tall
+/// and the page scroll moves that screen.
+fn column_height(room: f32) -> f32 {
+    const MIN_COLUMN: f32 = 280.0;
+    if room.is_finite() {
+        (room - BOTTOM_PAD).max(MIN_COLUMN)
+    } else {
+        640.0
+    }
+}
+
+/// Wide windows keep the form on the left and the captions on the right.
+fn fix_frames(bounds: egui::Rect) -> FixFrames {
     let inset = 20.0;
     let usable = (bounds.width() - inset * 2.0).max(160.0);
-    if open && usable >= 960.0 {
-        let col = ((usable - COLUMN_GAP) / 2.0).min(640.0);
-        let pair = col * 2.0 + COLUMN_GAP;
-        let x = bounds.left() + inset + ((usable - pair) * 0.5).max(0.0);
+    let top = bounds.top();
+    if usable >= 860.0 {
+        let left_w = 520.0_f32.min(usable * 0.46);
+        let right_w = (usable - left_w - COLUMN_GAP).max(280.0);
         let left = egui::Rect::from_min_size(
-            egui::pos2(x, bounds.top()),
-            egui::vec2(col, bounds.height()),
+            egui::pos2(bounds.left() + inset, top),
+            egui::vec2(left_w, bounds.height()),
         );
         let right = egui::Rect::from_min_size(
-            egui::pos2(left.right() + COLUMN_GAP, bounds.top()),
-            egui::vec2(col, bounds.height()),
+            egui::pos2(left.right() + COLUMN_GAP, top),
+            egui::vec2(right_w, bounds.height()),
         );
         FixFrames {
             left,
             right: Some(right),
         }
     } else {
-        let width = usable.min(760.0);
-        let x = bounds.left() + inset + ((usable - width) * 0.5).max(0.0);
         FixFrames {
             left: egui::Rect::from_min_size(
-                egui::pos2(x, bounds.top()),
-                egui::vec2(width, bounds.height()),
+                egui::pos2(bounds.left() + inset, top),
+                egui::vec2(usable, bounds.height()),
             ),
             right: None,
         }
     }
 }
 
-fn caption_scroll(ui: &mut egui::Ui, salt: &str, lines: &[TranscriptSegment], height: f32) {
-    egui::ScrollArea::vertical()
+fn caption_scroll(
+    ui: &mut egui::Ui,
+    salt: &str,
+    lines: &[TranscriptSegment],
+    height: f32,
+) -> egui::scroll_area::ScrollAreaOutput<()> {
+    let output = egui::ScrollArea::vertical()
         .id_salt(salt)
         .auto_shrink([false, false])
         .max_height(height)
@@ -413,6 +431,22 @@ fn caption_scroll(ui: &mut egui::Ui, salt: &str, lines: &[TranscriptSegment], he
             ui.set_width((ui.available_width() - 8.0).max(80.0));
             cue_rows(ui, lines);
         });
+    // The list uses the wheel while the pointer is over it, including when the
+    // list is already at the top or the bottom. The page scroll still moves
+    // the rest of the screen.
+    if output.content_size.y > output.inner_rect.height() + 1.0 {
+        let bar = ui.spacing().scroll.allocated_width();
+        let outer = egui::Rect::from_min_max(
+            output.inner_rect.min,
+            egui::pos2(output.inner_rect.right() + bar, output.inner_rect.bottom()),
+        );
+        if ui.rect_contains_pointer(outer) {
+            ui.ctx().input_mut(|input| {
+                input.smooth_scroll_delta.y = 0.0;
+            });
+        }
+    }
+    output
 }
 
 fn cue_rows(ui: &mut egui::Ui, lines: &[TranscriptSegment]) {
@@ -440,7 +474,10 @@ fn cue_rows(ui: &mut egui::Ui, lines: &[TranscriptSegment]) {
 }
 
 fn cue_row(ui: &mut egui::Ui, line: &TranscriptSegment) -> egui::Rect {
+    let width = ui.available_width().max(TIME_W + 48.0);
+    let text_w = (width - TIME_W - 16.0).max(40.0);
     ui.horizontal_top(|ui| {
+        ui.set_width(width);
         ui.spacing_mut().item_spacing.x = 16.0;
         ui.allocate_ui_with_layout(
             egui::vec2(TIME_W, 0.0),
@@ -449,10 +486,13 @@ fn cue_row(ui: &mut egui::Ui, line: &TranscriptSegment) -> egui::Rect {
                 ui.label(RichText::new(clock(line.start_ms)).size(14.0).color(MUTED));
             },
         );
-        ui.add(
-            egui::Label::new(RichText::new(line.text.trim()).size(16.0).color(CREAM))
-                .wrap_mode(egui::TextWrapMode::Wrap),
-        );
+        ui.vertical(|ui| {
+            ui.set_width(text_w);
+            ui.add(
+                egui::Label::new(RichText::new(line.text.trim()).size(16.0).color(CREAM))
+                    .wrap_mode(egui::TextWrapMode::Wrap),
+            );
+        });
     })
     .response
     .rect
@@ -541,8 +581,8 @@ fn field(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> egui::Response) -
 #[cfg(test)]
 mod tests {
     use super::{
-        cue_row, cue_rows, fix_frames, note_field, placed_words_per_line, proposal_actions,
-        read_words_per_line, SAVE_CAPTIONS,
+        caption_scroll, column_height, cue_row, cue_rows, fix_frames, note_field,
+        placed_words_per_line, proposal_actions, read_words_per_line, BOTTOM_PAD, SAVE_CAPTIONS,
     };
     use crate::app::theme::STONE;
     use a1slice_core::types::TranscriptSegment;
@@ -625,24 +665,33 @@ mod tests {
     }
 
     #[test]
-    fn a_wide_proposal_opens_on_the_right() {
+    fn a_wide_window_puts_the_captions_on_the_right() {
         let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
-        let frames = fix_frames(bounds, true);
-        let right = frames.right.expect("proposal");
+        let frames = fix_frames(bounds);
+        let right = frames.right.expect("captions");
+        assert!(
+            frames.left.left() < 30.0,
+            "the form starts at the left, got {}",
+            frames.left.left()
+        );
         assert!(
             right.left() >= frames.left.right() + 32.0,
-            "the new captions sit to the right, left {} right {}",
+            "captions sit to the right of the form, form {} captions {}",
             frames.left.right(),
             right.left()
         );
+        assert!(
+            right.right() >= bounds.right() - 30.0,
+            "captions reach the right side, got {}",
+            right.right()
+        );
         assert!((right.top() - frames.left.top()).abs() < 1.0);
-        assert!(right.right() <= bounds.right() - 19.0);
     }
 
     #[test]
     fn a_narrow_window_keeps_one_column() {
         let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 700.0));
-        let frames = fix_frames(bounds, true);
+        let frames = fix_frames(bounds);
         assert!(frames.right.is_none());
     }
 
@@ -707,6 +756,151 @@ mod tests {
             content_h > view_h + 20.0,
             "a long transcript scrolls inside the list, content {content_h} view {view_h}"
         );
+    }
+
+    #[test]
+    fn the_columns_fit_the_viewport() {
+        let room = 900.0_f32;
+        let top = 12.0_f32;
+        let content = top + column_height(room) + BOTTOM_PAD;
+        let viewport = top + room;
+        assert!(
+            (content - viewport).abs() < 0.1,
+            "a fitting form does not grow a page scrollbar, content {content} viewport {viewport}"
+        );
+    }
+
+    #[test]
+    fn a_short_window_still_scrolls_the_page() {
+        let room = 200.0_f32;
+        let content = 12.0 + column_height(room) + BOTTOM_PAD;
+        let viewport = 12.0 + room;
+        assert!(
+            content > viewport + 20.0,
+            "a short window keeps a page scroll, content {content} viewport {viewport}"
+        );
+    }
+
+    #[test]
+    fn scrolling_the_captions_leaves_the_page_still() {
+        let lines = sample_lines(30);
+        let ctx = egui::Context::default();
+        let input = wide_input();
+        let mut caption_rect = egui::Rect::NOTHING;
+        let _ = ctx.run(input.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                page_with_captions(ui, &lines, &mut caption_rect);
+            });
+        });
+        let (page_offset, caption_offset) = scroll_at(&ctx, caption_rect.center(), &lines);
+        assert!(
+            caption_offset > 1.0,
+            "the caption list moves, offset {caption_offset}"
+        );
+        assert!(
+            page_offset.abs() < 1.0,
+            "the page stays put, offset {page_offset}"
+        );
+    }
+
+    #[test]
+    fn scrolling_beside_the_captions_moves_the_page() {
+        let lines = sample_lines(30);
+        let ctx = egui::Context::default();
+        let input = wide_input();
+        let mut caption_rect = egui::Rect::NOTHING;
+        let _ = ctx.run(input.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                page_with_captions(ui, &lines, &mut caption_rect);
+            });
+        });
+        let beside = egui::pos2(24.0, caption_rect.center().y);
+        let (page_offset, caption_offset) = scroll_at(&ctx, beside, &lines);
+        assert!(
+            page_offset > 1.0,
+            "the page scrolls beside the list, offset {page_offset}"
+        );
+        assert!(
+            caption_offset.abs() < 1.0,
+            "the caption list stays put, offset {caption_offset}"
+        );
+    }
+
+    fn sample_lines(count: i64) -> Vec<TranscriptSegment> {
+        (0..count)
+            .map(|index| TranscriptSegment {
+                start_ms: index * 2_000,
+                end_ms: index * 2_000 + 1_500,
+                text: format!("Line {index} of the caption"),
+            })
+            .collect()
+    }
+
+    fn wide_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 360.0),
+            )),
+            predicted_dt: 1.0 / 60.0,
+            ..Default::default()
+        }
+    }
+
+    fn page_with_captions(
+        ui: &mut egui::Ui,
+        lines: &[TranscriptSegment],
+        caption_rect: &mut egui::Rect,
+    ) {
+        egui::ScrollArea::vertical()
+            .id_salt("page")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.add_space(180.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(280.0);
+                        *caption_rect = caption_scroll(ui, "caps", lines, 140.0).inner_rect;
+                    });
+                });
+                ui.add_space(700.0);
+            });
+    }
+
+    fn scroll_at(
+        ctx: &egui::Context,
+        pointer: egui::Pos2,
+        lines: &[TranscriptSegment],
+    ) -> (f32, f32) {
+        let mut input = wide_input();
+        input.events.push(egui::Event::PointerMoved(pointer));
+        input.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -6.0),
+            modifiers: egui::Modifiers::default(),
+        });
+        let mut page_offset = 0.0;
+        let mut caption_offset = 0.0;
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let page = egui::ScrollArea::vertical()
+                    .id_salt("page")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.horizontal_top(|ui| {
+                            ui.add_space(180.0);
+                            ui.vertical(|ui| {
+                                ui.set_width(280.0);
+                                let caps = caption_scroll(ui, "caps", lines, 140.0);
+                                caption_offset = caps.state.offset.y;
+                            });
+                        });
+                        ui.add_space(700.0);
+                    });
+                page_offset = page.state.offset.y;
+            });
+        });
+        (page_offset, caption_offset)
     }
 
     #[test]
