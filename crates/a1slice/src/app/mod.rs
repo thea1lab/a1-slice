@@ -115,6 +115,8 @@ pub struct A1App {
     reframe_dock_px: f32,
     /// Height of the caption controls last frame, so they stay above the stripe.
     caption_dock_px: f32,
+    screenshot_target: Option<std::path::PathBuf>,
+    screenshot_frames: usize,
 }
 
 impl A1App {
@@ -142,7 +144,7 @@ impl A1App {
             .map(|(id, label, _)| (id, label))
             .collect::<Vec<_>>();
         let agent_id = agents.first().map(|(id, _)| (*id).to_string());
-        Self {
+        let mut app = Self {
             state,
             recent: load_recent(),
             agents,
@@ -186,7 +188,46 @@ impl A1App {
             review_dock_px: 0.0,
             reframe_dock_px: 0.0,
             caption_dock_px: 0.0,
+            screenshot_target: None,
+            screenshot_frames: 0,
+        };
+
+        let mut args = std::env::args().skip(1);
+        let mut chosen_tool = ToolId::Find;
+        let mut chosen_path: Option<std::path::PathBuf> = None;
+        let mut auto_play = false;
+        while let Some(arg) = args.next() {
+            if arg == "--tool" {
+                if let Some(t) = args.next() {
+                    chosen_tool = match t.as_str() {
+                        "transcribe" => ToolId::Transcribe,
+                        "find" => ToolId::Find,
+                        "reframe" => ToolId::Reframe,
+                        "captions" => ToolId::Captions,
+                        _ => ToolId::Find,
+                    };
+                }
+            } else if arg == "--screenshot" {
+                if let Some(target) = args.next() {
+                    app.screenshot_target = Some(std::path::PathBuf::from(target));
+                }
+            } else if arg == "--play" {
+                auto_play = true;
+            } else if !arg.starts_with("--") {
+                chosen_path = Some(std::path::PathBuf::from(arg));
+            }
         }
+        if let Some(path) = chosen_path {
+            if path.is_file() {
+                app.open_video(chosen_tool, path);
+                if auto_play {
+                    app.playing = true;
+                    app.restart_playback();
+                }
+            }
+        }
+
+        app
     }
 
     fn dispatch(&mut self, action: WizardAction) {
@@ -308,5 +349,31 @@ impl eframe::App for A1App {
                 paint_sunset(ui.painter(), ui.max_rect());
             });
         self.draw(ctx);
+
+        if let Some(target) = self.screenshot_target.clone() {
+            for event in &ctx.input(|i| i.raw.events.clone()) {
+                if let egui::Event::Screenshot { image, .. } = event {
+                    let mut bytes = Vec::with_capacity(image.size[0] * image.size[1] * 4);
+                    for p in &image.pixels {
+                        bytes.extend_from_slice(&p.to_array());
+                    }
+                    let _ = image::save_buffer(
+                        &target,
+                        &bytes,
+                        image.size[0] as u32,
+                        image.size[1] as u32,
+                        image::ExtendedColorType::Rgba8,
+                    );
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            let min_frames = if self.playing { 45 } else { 20 };
+            if self.screenshot_frames >= min_frames {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            } else {
+                self.screenshot_frames += 1;
+                ctx.request_repaint();
+            }
+        }
     }
 }

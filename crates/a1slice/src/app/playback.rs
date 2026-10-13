@@ -22,9 +22,7 @@ impl A1App {
         if self.playing && !self.scrubbing {
             if self.video_stream.is_none() {
                 if let Some(path) = self.state.video_path.clone() {
-                    let size = (self.picture_px.0 > 0 && self.picture_px.1 > 0)
-                        .then_some(self.picture_px)
-                        .unwrap_or((0, 0));
+                    let size = self.picture_px;
                     if let Ok(stream) = backend::start_video_stream(
                         std::path::Path::new(&path),
                         self.playhead_ms,
@@ -48,13 +46,15 @@ impl A1App {
                         }
                     }
                 }
-                if let Some((w, h, rgba)) = latest {
+                if let Some((w, h, rgba, pts_ms)) = latest {
                     let image =
                         egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
-                    self.frame =
-                        Some(ctx.load_texture("frame", image, egui::TextureOptions::LINEAR));
+                    update_texture(&mut self.frame, ctx, image);
                     self.frame_err = None;
-                    self.shown_ms = self.playhead_ms;
+                    self.shown_ms = pts_ms;
+                    if (self.playhead_ms - pts_ms).abs() > 80 {
+                        self.playhead_ms = pts_ms;
+                    }
                 }
                 if disconnected {
                     self.video_stream = None;
@@ -75,8 +75,7 @@ impl A1App {
                 Ok((w, h, rgba)) => {
                     let image =
                         egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
-                    self.frame =
-                        Some(ctx.load_texture("frame", image, egui::TextureOptions::LINEAR));
+                    update_texture(&mut self.frame, ctx, image);
                     self.frame_err = None;
                     if let Some(path) = self.state.video_path.clone() {
                         self.frame_for = Some((path, ready.at_ms));
@@ -127,9 +126,7 @@ impl A1App {
         self.stop_video_stream();
         if self.playing {
             if let Some(path) = self.state.video_path.clone() {
-                let size = (self.picture_px.0 > 0 && self.picture_px.1 > 0)
-                    .then_some(self.picture_px)
-                    .unwrap_or((0, 0));
+                let size = self.picture_px;
                 match backend::start_video_stream(
                     std::path::Path::new(&path),
                     self.playhead_ms,
@@ -384,4 +381,18 @@ impl A1App {
         }
         kill_player_processes();
     }
+}
+
+fn update_texture(
+    slot: &mut Option<egui::TextureHandle>,
+    ctx: &egui::Context,
+    image: egui::ColorImage,
+) {
+    if let Some(texture) = slot {
+        if texture.size() == image.size {
+            texture.set(image, egui::TextureOptions::LINEAR);
+            return;
+        }
+    }
+    *slot = Some(ctx.load_texture("frame", image, egui::TextureOptions::LINEAR));
 }

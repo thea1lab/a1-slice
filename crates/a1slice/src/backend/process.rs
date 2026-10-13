@@ -76,7 +76,7 @@ pub fn whisper_binary() -> Option<PathBuf> {
     chosen.is_file().then_some(chosen)
 }
 
-pub fn probe(video: &Path) -> Result<(Ms, u32, u32), String> {
+pub fn probe_cli(video: &Path) -> Result<(Ms, u32, u32), String> {
     let duration = Command::new("ffprobe")
         .args([
             "-v",
@@ -92,11 +92,11 @@ pub fn probe(video: &Path) -> Result<(Ms, u32, u32), String> {
     let text = String::from_utf8_lossy(&duration.stdout);
     let ms = a1slice_core::ffmpeg_cmd::parse_ffprobe_duration(&text)
         .ok_or_else(|| format!("Could not read the length of {}", video.display()))?;
-    let (width, height) = probe_size(video)?;
+    let (width, height) = probe_size_cli(video)?;
     Ok((ms, width, height))
 }
 
-pub fn probe_size(video: &Path) -> Result<(u32, u32), String> {
+pub fn probe_size_cli(video: &Path) -> Result<(u32, u32), String> {
     let size = Command::new("ffprobe")
         .args([
             "-v",
@@ -120,12 +120,7 @@ pub fn probe_size(video: &Path) -> Result<(u32, u32), String> {
     Ok((width, height))
 }
 
-#[allow(dead_code)]
-pub fn grab_frame(video: &Path, at_ms: Ms, max_w: u32) -> Result<(u32, u32, Vec<u8>), String> {
-    grab_frame_sized(video, at_ms, max_w, None)
-}
-
-pub fn grab_frame_sized(
+pub fn grab_frame_sized_cli(
     video: &Path,
     at_ms: Ms,
     max_w: u32,
@@ -133,7 +128,7 @@ pub fn grab_frame_sized(
 ) -> Result<(u32, u32, Vec<u8>), String> {
     let (width, height) = match known_size {
         Some((w, h)) if w > 0 && h > 0 => (w, h),
-        _ => probe_size(video)?,
+        _ => probe_size_cli(video)?,
     };
     let scale_w = max_w.min(width).max(2) / 2 * 2;
     let scale_h = ((height as f64) * (scale_w as f64) / (width as f64))
@@ -165,115 +160,6 @@ pub fn grab_frame_sized(
         return Err("Could not read a frame from this video.".into());
     }
     Ok((scale_w, scale_h, output.stdout[..expected].to_vec()))
-}
-
-pub struct VideoStream {
-    child: std::process::Child,
-    pub frame_rx: std::sync::mpsc::Receiver<(u32, u32, Vec<u8>)>,
-    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl Drop for VideoStream {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
-        #[cfg(windows)]
-        {
-            let pid = self.child.id();
-            let mut kill_cmd = std::process::Command::new("taskkill");
-            kill_cmd
-                .args(["/F", "/T", "/PID", &pid.to_string()])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            {
-                use std::os::windows::process::CommandExt;
-                kill_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-            }
-            let _ = kill_cmd.status();
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-impl VideoStream {
-    pub fn stop(self) {
-        // Drop handles cleanup
-    }
-}
-
-pub fn start_video_stream(
-    video: &Path,
-    at_ms: Ms,
-    max_w: u32,
-    size: (u32, u32),
-) -> Result<VideoStream, String> {
-    let (width, height) = if size.0 > 0 && size.1 > 0 {
-        size
-    } else {
-        probe_size(video)?
-    };
-    if width == 0 || height == 0 {
-        return Err("This file has no picture.".into());
-    }
-    let scale_w = max_w.min(width).max(2) / 2 * 2;
-    let scale_h = ((height as f64) * (scale_w as f64) / (width as f64))
-        .round()
-        .max(2.0) as u32
-        / 2
-        * 2;
-    let sec = format!("{:.3}", (at_ms.max(0) as f64) / 1000.0);
-    let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-re", "-ss", &sec, "-i"])
-        .arg(video)
-        .args([
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgba",
-            "-vf",
-            &format!("scale={scale_w}:{scale_h}"),
-            "-v",
-            "error",
-            "pipe:1",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Could not start ffmpeg stream: {e}"))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Could not open ffmpeg pipe".to_string())?;
-    let frame_bytes = (scale_w * scale_h * 4) as usize;
-    let (tx, rx) = std::sync::mpsc::sync_channel(2);
-    let cancel = std::sync::Arc::new(AtomicBool::new(false));
-    let cancel_flag = cancel.clone();
-
-    std::thread::spawn(move || {
-        while !cancel_flag.load(Ordering::Relaxed) {
-            let mut buf = vec![0u8; frame_bytes];
-            if stdout.read_exact(&mut buf).is_err() {
-                break;
-            }
-            if tx.send((scale_w, scale_h, buf)).is_err() {
-                break;
-            }
-        }
-    });
-
-    Ok(VideoStream {
-        child,
-        frame_rx: rx,
-        cancel,
-    })
 }
 
 pub(super) fn run_ffmpeg(
@@ -419,21 +305,22 @@ mod tests {
     fn test_por_que_reunimos_file_if_present() {
         let mov = std::path::Path::new(r"C:\Users\water\Videos\por-que-reunimos.mov");
         if mov.is_file() {
-            let (ms, w, h) = probe(mov).expect("probe should succeed");
+            let (ms, w, h) = probe_cli(mov).expect("probe_cli should succeed");
             assert_eq!((w, h), (1920, 1080));
             assert!(ms > 0);
 
-            let (fw, fh, pixels) = grab_frame(mov, 0, 960).expect("grab_frame should succeed");
+            let (fw, fh, pixels) = grab_frame_sized_cli(mov, 0, 960, None)
+                .expect("grab_frame_sized_cli should succeed");
             assert_eq!((fw, fh), (960, 540));
             assert_eq!(pixels.len(), 960 * 540 * 4);
 
             let start = std::time::Instant::now();
-            let (sfw, sfh, spixels) = grab_frame_sized(mov, 1000, 960, Some((w, h)))
-                .expect("grab_frame_sized should succeed");
+            let (sfw, sfh, spixels) = grab_frame_sized_cli(mov, 1000, 960, Some((w, h)))
+                .expect("grab_frame_sized_cli should succeed");
             let elapsed = start.elapsed();
             assert_eq!((sfw, sfh), (960, 540));
             assert_eq!(spixels.len(), 960 * 540 * 4);
-            println!("grab_frame_sized elapsed: {elapsed:?}");
+            println!("grab_frame_sized_cli elapsed: {elapsed:?}");
         }
     }
 }

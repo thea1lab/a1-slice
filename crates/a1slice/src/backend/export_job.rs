@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::process::{probe, run_ffmpeg, run_ffmpeg_watch};
+use super::process::{run_ffmpeg, run_ffmpeg_watch};
+use super::video::probe;
 
 /// Percent of an encode, held under 100 until the file is actually written.
 pub(crate) fn encode_percent(time_ms: i64, duration_ms: i64) -> f64 {

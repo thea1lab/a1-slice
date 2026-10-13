@@ -9,15 +9,16 @@ mod job;
 mod process;
 mod spawn;
 mod transcribe;
+mod video;
 
 pub use agent_run::{find_clips, fix_words};
 pub use export_job::{export_captions, export_kept_clips, export_reframe};
 pub use job::{list_agents, JobDone, Running};
-#[allow(unused_imports)]
-pub use process::grab_frame;
-pub use process::{grab_frame_sized, probe, start_video_stream, which, VideoStream};
+pub use process::which;
 pub use spawn::{cancel_job, open_path, spawn_job};
 pub use transcribe::transcribe_video;
+#[allow(unused_imports)]
+pub use video::{grab_frame, grab_frame_sized, probe, probe_size, start_video_stream, VideoStream};
 
 #[cfg(test)]
 mod tests {

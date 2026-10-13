@@ -87,7 +87,7 @@ pub fn transcribe_video(
         .spawn()
         .map_err(|e| e.to_string())?;
     // Leave the process in the slot while stderr is read, so Cancel can kill it.
-    let mut stderr = child.stderr.take();
+    let stderr = child.stderr.take();
     {
         let mut slot = child_slot.lock().unwrap();
         *slot = Some(child);
