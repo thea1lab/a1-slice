@@ -79,8 +79,8 @@ fn ensure_linux_desktop_entry() {
     }
 
     let desktop_dest = apps_dir.join("a1slice.desktop");
-    let exe = std::env::current_exe()
-        .map(|p| p.to_string_lossy().to_string())
+    let exe = std::env::var("APPIMAGE")
+        .or_else(|_| std::env::current_exe().map(|p| p.to_string_lossy().to_string()))
         .unwrap_or_else(|_| "a1slice".to_string());
 
     let desktop_content = format!(

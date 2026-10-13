@@ -33,6 +33,9 @@ fn whisper_roots() -> Vec<PathBuf> {
             roots.push(parent.join("resources/bin"));
             if let Some(grandparent) = parent.parent() {
                 roots.push(grandparent.join("resources/bin"));
+                if let Some(great_grandparent) = grandparent.parent() {
+                    roots.push(great_grandparent.join("resources/bin"));
+                }
             }
         }
     }

@@ -181,4 +181,35 @@ mod tests {
         assert_eq!(parse_timestamp("01:02:03.004"), 3_723_004);
         assert_eq!(parse_timestamp("00:00:01,500"), 1500);
     }
+
+    #[test]
+    fn test_transcribe_video_if_present() {
+        let sample = std::env::temp_dir().join("short_sample.mov");
+        if sample.is_file() {
+            let cancel = AtomicBool::new(false);
+            let child_slot = Mutex::new(None);
+            let progress_count = std::sync::atomic::AtomicUsize::new(0);
+            let result = transcribe_video(
+                &sample,
+                VideoLanguage::Pt,
+                2.4,
+                -1,
+                5,
+                0.0,
+                &cancel,
+                &child_slot,
+                |_update| {
+                    progress_count.fetch_add(1, Ordering::Relaxed);
+                },
+            );
+            assert!(
+                result.is_ok(),
+                "transcription should succeed: {:?}",
+                result.err()
+            );
+            let segments = result.unwrap();
+            println!("Transcribed {} segments from sample", segments.len());
+            assert!(progress_count.load(Ordering::Relaxed) >= 2);
+        }
+    }
 }

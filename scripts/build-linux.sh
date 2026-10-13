@@ -63,6 +63,27 @@ strip "$APPDIR/usr/bin/a1slice"
 cp -r "$REPO_ROOT/resources"/* "$APPDIR/resources/"
 chmod +x "$APPDIR/resources/bin"/whisper-cli-* 2>/dev/null || true
 
+# Bundle ffmpeg & ffprobe CLI if available
+if command -v ffmpeg >/dev/null 2>&1; then
+  cp "$(command -v ffmpeg)" "$APPDIR/usr/bin/"
+fi
+if command -v ffprobe >/dev/null 2>&1; then
+  cp "$(command -v ffprobe)" "$APPDIR/usr/bin/"
+fi
+
+# Bundle FFmpeg dynamic libraries and shared dependencies
+cyan "Bundling shared library dependencies..."
+mkdir -p "$APPDIR/usr/lib"
+for bin in "$APPDIR/usr/bin/a1slice" "$APPDIR/usr/bin/ffmpeg" "$APPDIR/usr/bin/ffprobe"; do
+  if [[ -f "$bin" ]]; then
+    ldd "$bin" 2>/dev/null | grep -E "libav|libsw|libpostproc" | awk '{print $3}' | while read -r lib; do
+      if [[ -f "$lib" ]]; then
+        cp -u "$lib" "$APPDIR/usr/lib/" 2>/dev/null || cp "$lib" "$APPDIR/usr/lib/" 2>/dev/null || true
+      fi
+    done
+  fi
+done
+
 # Icons & Desktop
 cp "$REPO_ROOT/resources/icon.png" "$APPDIR/a1slice.png"
 cp "$REPO_ROOT/resources/icon.png" "$APPDIR/.DirIcon"
@@ -87,7 +108,7 @@ set -e
 HERE="$(dirname "$(readlink -f "${0}")")"
 export APPDIR="$HERE"
 export PATH="$HERE/usr/bin:$HERE/resources/bin:$PATH"
-export LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="$HERE/usr/lib:$HERE/resources/bin:${LD_LIBRARY_PATH:-}"
 export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 exec "$HERE/usr/bin/a1slice" "$@"
 EOF

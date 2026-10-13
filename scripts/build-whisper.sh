@@ -115,6 +115,17 @@ case "$OS" in
         --target whisper-cli -j"$NPROC"
       cp "$TMP_DIR/whisper.cpp/build-gpu/bin/whisper-cli" "$BIN_DIR/${NAME}-gpu"
       chmod +x "$BIN_DIR/${NAME}-gpu"
+
+      cuda_bin="$(dirname "$(command -v nvcc)")"
+      for dir in "$cuda_bin" "$(dirname "$cuda_bin")/lib64" "/usr/local/cuda/lib64"; do
+        if [[ -d "$dir" ]]; then
+          for so in "$dir"/libcudart.so* "$dir"/libcublas.so* "$dir"/libcublasLt.so*; do
+            if [[ -f "$so" ]]; then
+              cp -P "$so" "$BIN_DIR/" 2>/dev/null || true
+            fi
+          done
+        fi
+      done
     fi
     ;;
   MINGW*|MSYS*|CYGWIN*)
