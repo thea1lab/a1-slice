@@ -13,7 +13,9 @@ mod transcribe;
 pub use agent_run::{find_clips, fix_words};
 pub use export_job::{export_captions, export_kept_clips, export_reframe};
 pub use job::{list_agents, JobDone, Running};
-pub use process::{grab_frame, probe, which};
+#[allow(unused_imports)]
+pub use process::grab_frame;
+pub use process::{grab_frame_sized, probe, start_video_stream, which, VideoStream};
 pub use spawn::{cancel_job, open_path, spawn_job};
 pub use transcribe::transcribe_video;
 

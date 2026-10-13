@@ -9,7 +9,7 @@ use eframe::egui::{self};
 use std::sync::mpsc::{self};
 
 use super::layout::playhead_after_trim;
-use super::support::{start_audio, stop_child};
+use super::support::{kill_player_processes, start_audio, stop_child};
 use super::{A1App, ReviewTrim};
 
 pub(super) struct FrameResult {
@@ -19,16 +19,71 @@ pub(super) struct FrameResult {
 
 impl A1App {
     pub(super) fn poll_frame(&mut self, ctx: &egui::Context) {
+        if self.playing && !self.scrubbing {
+            if self.video_stream.is_none() {
+                if let Some(path) = self.state.video_path.clone() {
+                    let size = (self.picture_px.0 > 0 && self.picture_px.1 > 0)
+                        .then_some(self.picture_px)
+                        .unwrap_or((0, 0));
+                    if let Ok(stream) = backend::start_video_stream(
+                        std::path::Path::new(&path),
+                        self.playhead_ms,
+                        960,
+                        size,
+                    ) {
+                        self.video_stream = Some(stream);
+                    }
+                }
+            }
+            if let Some(ref mut stream) = self.video_stream {
+                let mut latest = None;
+                let mut disconnected = false;
+                loop {
+                    match stream.frame_rx.try_recv() {
+                        Ok(frame) => latest = Some(frame),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            disconnected = true;
+                            break;
+                        }
+                    }
+                }
+                if let Some((w, h, rgba)) = latest {
+                    let image =
+                        egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+                    self.frame =
+                        Some(ctx.load_texture("frame", image, egui::TextureOptions::LINEAR));
+                    self.frame_err = None;
+                    self.shown_ms = self.playhead_ms;
+                }
+                if disconnected {
+                    self.video_stream = None;
+                }
+            }
+            return;
+        }
+
+        if !self.playing {
+            self.stop_video_stream();
+        }
+
         let ready = self.frame_rx.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(ready) = ready {
             self.frame_rx = None;
             self.shown_ms = ready.at_ms;
-            if let Ok((w, h, rgba)) = ready.image {
-                let image =
-                    egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
-                self.frame = Some(ctx.load_texture("frame", image, egui::TextureOptions::LINEAR));
-                if let Some(path) = self.state.video_path.clone() {
-                    self.frame_for = Some((path, ready.at_ms));
+            match ready.image {
+                Ok((w, h, rgba)) => {
+                    let image =
+                        egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+                    self.frame =
+                        Some(ctx.load_texture("frame", image, egui::TextureOptions::LINEAR));
+                    self.frame_err = None;
+                    if let Some(path) = self.state.video_path.clone() {
+                        self.frame_for = Some((path, ready.at_ms));
+                    }
+                }
+                Err(err) => {
+                    self.frame_err = Some(err);
                 }
             }
         }
@@ -40,14 +95,15 @@ impl A1App {
             return;
         };
         let gap = (self.playhead_ms - self.shown_ms).abs();
-        if self.frame.is_some() && gap < 80 {
+        if (self.frame.is_some() || self.frame_err.is_some()) && gap < 80 {
             return;
         }
         let at_ms = self.playhead_ms;
         let (tx, rx) = mpsc::channel();
         self.frame_rx = Some(rx);
+        let size = (self.picture_px.0 > 0 && self.picture_px.1 > 0).then_some(self.picture_px);
         std::thread::spawn(move || {
-            let image = backend::grab_frame(std::path::Path::new(&path), at_ms, 960);
+            let image = backend::grab_frame_sized(std::path::Path::new(&path), at_ms, 960, size);
             let _ = tx.send(FrameResult { at_ms, image });
         });
         ctx.request_repaint();
@@ -55,7 +111,47 @@ impl A1App {
 
     pub(super) fn toggle_play(&mut self) {
         self.playing = !self.playing;
+        if self.playing {
+            self.restart_playback();
+        } else {
+            self.stop_playback();
+        }
+    }
+
+    pub(super) fn restart_playback(&mut self) {
         self.restart_audio();
+        self.restart_video_stream();
+    }
+
+    pub(super) fn restart_video_stream(&mut self) {
+        self.stop_video_stream();
+        if self.playing {
+            if let Some(path) = self.state.video_path.clone() {
+                let size = (self.picture_px.0 > 0 && self.picture_px.1 > 0)
+                    .then_some(self.picture_px)
+                    .unwrap_or((0, 0));
+                match backend::start_video_stream(
+                    std::path::Path::new(&path),
+                    self.playhead_ms,
+                    960,
+                    size,
+                ) {
+                    Ok(stream) => {
+                        self.video_stream = Some(stream);
+                        self.frame_err = None;
+                    }
+                    Err(err) => {
+                        self.frame_err = Some(err);
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn stop_video_stream(&mut self) {
+        if let Some(stream) = self.video_stream.take() {
+            stream.stop();
+        }
     }
 
     pub(super) fn restart_audio(&mut self) {
@@ -89,7 +185,9 @@ impl A1App {
             }
         }
         if self.playing {
-            self.restart_audio();
+            self.restart_playback();
+        } else {
+            self.stop_video_stream();
         }
     }
 
@@ -241,6 +339,7 @@ impl A1App {
         self.loop_at_clip = true;
         if self.playing {
             self.stop_audio();
+            self.stop_video_stream();
         }
     }
 
@@ -269,18 +368,20 @@ impl A1App {
         self.loop_at_clip = true;
         self.persist_clips();
         if self.playing {
-            self.restart_audio();
+            self.restart_playback();
         }
     }
 
     pub(super) fn stop_playback(&mut self) {
         self.playing = false;
         self.stop_audio();
+        self.stop_video_stream();
     }
 
     pub(super) fn stop_audio(&mut self) {
         if let Some(child) = self.audio.take() {
             stop_child(child);
         }
+        kill_player_processes();
     }
 }

@@ -31,10 +31,15 @@ impl A1App {
         let (row, _) = ui.allocate_exact_size(egui::vec2(max_w, fitted.y), egui::Sense::hover());
         let image = egui::Rect::from_center_size(row.center(), fitted);
         let Some(texture) = self.frame.clone() else {
+            let label = if self.frame_err.is_some() {
+                "Could not read a frame."
+            } else {
+                "Reading a frame…"
+            };
             ui.painter().text(
                 image.center(),
                 egui::Align2::CENTER_CENTER,
-                "Reading a frame…",
+                label,
                 egui::FontId::proportional(16.0),
                 MUTED,
             );
@@ -123,13 +128,19 @@ impl A1App {
                 self.playhead_ms = hit.ms;
                 if hit.dragging {
                     self.scrubbing = true;
+                    self.stop_audio();
+                    self.stop_video_stream();
                 } else {
                     self.scrubbing = false;
-                    self.restart_audio();
+                    if self.playing {
+                        self.restart_playback();
+                    }
                 }
             } else if self.scrubbing && ui.input(|i| i.pointer.any_released()) {
                 self.scrubbing = false;
-                self.restart_audio();
+                if self.playing {
+                    self.restart_playback();
+                }
             }
             paint_player_time(
                 ui,

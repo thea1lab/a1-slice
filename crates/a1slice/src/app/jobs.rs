@@ -14,6 +14,7 @@ use super::{A1App, ReviewTrim};
 
 impl A1App {
     pub(super) fn open_video(&mut self, tool: ToolId, path: PathBuf) {
+        self.stop_playback();
         let path_str = path.display().to_string();
         let _ = sidecars::write_remembered(&path_str);
         self.dispatch(WizardAction::OpenTool {
@@ -61,6 +62,7 @@ impl A1App {
         self.frame = None;
         self.frame_for = None;
         self.frame_rx = None;
+        self.frame_err = None;
         self.shown_ms = -1;
         self.scrubbing = false;
         self.recent = load_recent();

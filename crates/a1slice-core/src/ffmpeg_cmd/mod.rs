@@ -7,7 +7,8 @@ mod fonts;
 pub use args::{
     build_copy_clip_args, build_cut_clip_args, build_preview_clip_args, extract_audio_args,
     generate_srt, parse_ffmpeg_duration, parse_ffmpeg_progress, parse_ffmpeg_time_ms,
-    parse_ffmpeg_video_size, shift_subtitles, split_wav_args, VideoSize,
+    parse_ffmpeg_video_size, parse_ffprobe_dimensions, parse_ffprobe_duration, shift_subtitles,
+    split_wav_args, VideoSize,
 };
 pub use filters::{
     caption_burn_filter, escape_filter_path, format_srt_time, video_filter_for_export,
@@ -407,5 +408,32 @@ mod tests {
             shifted,
             vec![cue(0, 500, "overlap"), cue(1000, 1500, "inside")]
         );
+    }
+
+    #[test]
+    fn parse_ffprobe_dimensions_single_and_multi_line() {
+        assert_eq!(parse_ffprobe_dimensions("1920x1080"), Some((1920, 1080)));
+        assert_eq!(
+            parse_ffprobe_dimensions("1920x1080\r\n1920x1080\r\n"),
+            Some((1920, 1080))
+        );
+        assert_eq!(
+            parse_ffprobe_dimensions("\r\nN/AxN/A\r\n1280x720\r\n"),
+            Some((1280, 720))
+        );
+        assert_eq!(parse_ffprobe_dimensions(""), None);
+        assert_eq!(parse_ffprobe_dimensions("invalid"), None);
+    }
+
+    #[test]
+    fn parse_ffprobe_duration_single_and_multi_line() {
+        assert_eq!(parse_ffprobe_duration("3774.350000"), Some(3774350));
+        assert_eq!(
+            parse_ffprobe_duration("3774.350000\r\n3774.350000\r\n"),
+            Some(3774350)
+        );
+        assert_eq!(parse_ffprobe_duration("\r\n12.5\r\n"), Some(12500));
+        assert_eq!(parse_ffprobe_duration(""), None);
+        assert_eq!(parse_ffprobe_duration("invalid"), None);
     }
 }

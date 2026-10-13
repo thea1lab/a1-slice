@@ -109,7 +109,9 @@ impl A1App {
             && matches!(self.trim, ReviewTrim::Idle)
         {
             self.scrubbing = false;
-            self.restart_audio();
+            if self.playing {
+                self.restart_playback();
+            }
         }
         self.player_volume(ui, slots.speaker, slots.slider);
     }

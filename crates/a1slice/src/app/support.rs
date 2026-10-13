@@ -143,51 +143,125 @@ pub(super) fn load_recent() -> Vec<(String, String)> {
         .collect()
 }
 
+fn resolve_player_binary(name: &str) -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    {
+        if name == "ffplay" {
+            let choco_real = std::path::PathBuf::from(
+                r"C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin\ffplay.exe",
+            );
+            if choco_real.is_file() {
+                return Some(choco_real);
+            }
+        }
+    }
+    let found = backend::which(name)?;
+    #[cfg(windows)]
+    {
+        let path_str = found.to_string_lossy();
+        if path_str.contains("chocolatey\\bin") {
+            let candidate = found
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.join(format!("lib/ffmpeg/tools/ffmpeg/bin/{name}.exe")));
+            if let Some(target) = candidate {
+                if target.is_file() {
+                    return Some(target);
+                }
+            }
+        }
+    }
+    Some(found)
+}
+
+pub(super) fn kill_player_processes() {
+    #[cfg(windows)]
+    {
+        let mut kill_cmd = std::process::Command::new("taskkill");
+        kill_cmd
+            .args(["/F", "/IM", "ffplay.exe", "/IM", "mpv.exe"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        {
+            use std::os::windows::process::CommandExt;
+            kill_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let _ = kill_cmd.status();
+    }
+}
+
 /// End a playback process and wait until it is gone.
 ///
-/// Dropping a `Child` leaves ffplay or mpv running, so closing the window
-/// would keep the video's sound going.
+/// On Windows, shims or wrappers can spawn the actual player as a child
+/// process. Calling taskkill /F /T terminates the entire process tree so
+/// no audio keeps playing in the background.
 pub(super) fn stop_child(mut child: std::process::Child) {
+    #[cfg(windows)]
+    {
+        let pid = child.id();
+        let mut kill_cmd = std::process::Command::new("taskkill");
+        kill_cmd
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        {
+            use std::os::windows::process::CommandExt;
+            kill_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let _ = kill_cmd.status();
+    }
     let _ = child.kill();
     let _ = child.wait();
+    kill_player_processes();
 }
 
 pub(super) fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::process::Child> {
+    kill_player_processes();
     let sec = format!("{:.3}", at_ms.max(0) as f64 / 1000.0);
     let vol = ((volume.clamp(0.0, 1.0)) * 100.0) as i32;
-    if backend::which("ffplay").is_some() {
-        return std::process::Command::new("ffplay")
-            .args([
-                "-nodisp",
-                "-autoexit",
-                "-ss",
-                &sec,
-                "-volume",
-                &vol.to_string(),
-                "-loglevel",
-                "quiet",
-                path,
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .ok();
+    if let Some(player) = resolve_player_binary("ffplay") {
+        let mut cmd = std::process::Command::new(player);
+        cmd.args([
+            "-nodisp",
+            "-autoexit",
+            "-ss",
+            &sec,
+            "-volume",
+            &vol.to_string(),
+            "-loglevel",
+            "quiet",
+            path,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        return cmd.spawn().ok();
     }
-    if backend::which("mpv").is_some() {
-        return std::process::Command::new("mpv")
-            .args([
-                "--no-video",
-                "--really-quiet",
-                &format!("--start={sec}"),
-                &format!("--volume={vol}"),
-                path,
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .ok();
+    if let Some(player) = resolve_player_binary("mpv") {
+        let mut cmd = std::process::Command::new(player);
+        cmd.args([
+            "--no-video",
+            "--really-quiet",
+            &format!("--start={sec}"),
+            &format!("--volume={vol}"),
+            path,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        return cmd.spawn().ok();
     }
     None
 }
@@ -261,5 +335,29 @@ mod tests {
         assert_eq!(caption_on_picture(&cues, 0), Some("Later"));
         assert_eq!(caption_on_picture(&[], 0), None);
         assert_eq!(caption_on_picture(&[cue(0, 10, "  ")], 5), None);
+    }
+
+    #[test]
+    fn start_and_stop_audio_leaves_no_lingering_process() {
+        let mov = std::path::Path::new(r"C:\Users\water\Videos\por-que-reunimos.mov");
+        if mov.is_file() {
+            let child = super::start_audio(mov.to_str().unwrap(), 0, 0.0);
+            assert!(child.is_some(), "start_audio returned None!");
+            let child = child.unwrap();
+            let pid = child.id();
+            println!("Child PID: {pid}");
+            super::stop_child(child);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let proc_check = std::process::Command::new("tasklist")
+                .args(["/FI", "IMAGENAME eq ffplay.exe", "/NH"])
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&proc_check.stdout);
+            println!("Tasklist output: {text}");
+            assert!(
+                !text.contains("ffplay.exe"),
+                "ffplay was still running: {text}"
+            );
+        }
     }
 }

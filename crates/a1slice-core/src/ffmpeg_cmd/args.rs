@@ -56,6 +56,32 @@ pub fn parse_ffmpeg_duration(stderr: &str) -> Option<i64> {
     None
 }
 
+/// Parse video duration in milliseconds from ffprobe output.
+pub fn parse_ffprobe_duration(stdout: &str) -> Option<Ms> {
+    for line in stdout.lines() {
+        if let Ok(seconds) = line.trim().parse::<f64>() {
+            return Some((seconds * 1000.0).round() as Ms);
+        }
+    }
+    None
+}
+
+/// Parse video width and height from ffprobe stream output (e.g. `1920x1080`).
+/// Safely handles multi-line output produced by stream groups or multiple streams.
+pub fn parse_ffprobe_dimensions(stdout: &str) -> Option<(u32, u32)> {
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if let Some((w_str, h_str)) = trimmed.split_once('x') {
+            if let (Ok(w), Ok(h)) = (w_str.parse::<u32>(), h_str.parse::<u32>()) {
+                if w > 0 && h > 0 {
+                    return Some((w, h));
+                }
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoSize {
     pub width: i32,

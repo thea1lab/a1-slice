@@ -63,6 +63,8 @@ impl A1App {
             self.playhead_ms = ms.clamp(0, self.state.video_duration_ms.max(0));
             self.loop_at_clip = self.playhead_ms < live.end_ms;
             self.scrubbing = true;
+            self.stop_audio();
+            self.stop_video_stream();
         } else if response.clicked() || response.drag_stopped() {
             self.scrubbing = false;
             self.seek_playhead(ms);

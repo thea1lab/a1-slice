@@ -75,11 +75,13 @@ pub struct A1App {
     frame: Option<egui::TextureHandle>,
     frame_for: Option<(String, i64)>,
     frame_rx: Option<Receiver<FrameResult>>,
+    frame_err: Option<String>,
     shown_ms: i64,
     playhead_ms: i64,
     playing: bool,
     scrubbing: bool,
     audio: Option<std::process::Child>,
+    video_stream: Option<backend::VideoStream>,
     analyze_since: Option<Instant>,
     volume: f32,
     muted: bool,
@@ -151,11 +153,13 @@ impl A1App {
             frame: None,
             frame_for: None,
             frame_rx: None,
+            frame_err: None,
             shown_ms: -1,
             playhead_ms: 0,
             playing: false,
             scrubbing: false,
             audio: None,
+            video_stream: None,
             analyze_since: None,
             volume: 1.0,
             muted: false,
@@ -239,13 +243,13 @@ impl A1App {
 impl Drop for A1App {
     fn drop(&mut self) {
         // The player is a separate process. Closing the window must stop it.
-        self.stop_audio();
+        self.stop_playback();
     }
 }
 
 impl eframe::App for A1App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.stop_audio();
+        self.stop_playback();
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -272,10 +276,10 @@ impl eframe::App for A1App {
                     && self.playhead_ms >= clip.end_ms
                 {
                     self.playhead_ms = clip.start_ms;
-                    self.restart_audio();
+                    self.restart_playback();
                 } else if !self.loop_at_clip && self.playhead_ms >= view_end {
                     self.playhead_ms = view_start;
-                    self.restart_audio();
+                    self.restart_playback();
                 }
             } else {
                 let end = self.state.video_duration_ms.max(1);
