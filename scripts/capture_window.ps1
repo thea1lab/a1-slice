@@ -46,7 +46,13 @@ public class WindowCapture {
 
         using (Bitmap bmp = new Bitmap(width, height)) {
             using (Graphics g = Graphics.FromImage(bmp)) {
-                g.CopyFromScreen(rect.Left, rect.Top, 0, 0, new Size(width, height), CopyPixelOperation.SourceCopy);
+                try {
+                    g.CopyFromScreen(rect.Left, rect.Top, 0, 0, new Size(width, height), CopyPixelOperation.SourceCopy);
+                } catch {
+                    IntPtr hdc = g.GetHdc();
+                    PrintWindow(hWnd, hdc, 2);
+                    g.ReleaseHdc(hdc);
+                }
             }
             bmp.Save(filePath, ImageFormat.Png);
         }
@@ -91,7 +97,11 @@ if (-not ([System.Management.Automation.PSTypeName]'WindowCapture').Type) {
     Add-Type -TypeDefinition $code -ReferencedAssemblies System.Drawing
 }
 
-$p = Start-Process -FilePath "target\debug\a1slice.exe" -ArgumentList $AppArgs -PassThru
+$p = if ($AppArgs -and $AppArgs.Count -gt 0) {
+    Start-Process -FilePath "target\debug\a1slice.exe" -ArgumentList $AppArgs -PassThru
+} else {
+    Start-Process -FilePath "target\debug\a1slice.exe" -PassThru
+}
 $hwnd = [IntPtr]::Zero
 for ($i = 0; $i -lt 10; $i++) {
     Start-Sleep -Milliseconds 500

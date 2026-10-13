@@ -174,51 +174,13 @@ fn resolve_player_binary(name: &str) -> Option<std::path::PathBuf> {
     Some(found)
 }
 
-pub(super) fn kill_player_processes() {
-    #[cfg(windows)]
-    {
-        let mut kill_cmd = std::process::Command::new("taskkill");
-        kill_cmd
-            .args(["/F", "/IM", "ffplay.exe", "/IM", "mpv.exe"])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        {
-            use std::os::windows::process::CommandExt;
-            kill_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        let _ = kill_cmd.status();
-    }
-}
-
-/// End a playback process and wait until it is gone.
-///
-/// On Windows, shims or wrappers can spawn the actual player as a child
-/// process. Calling taskkill /F /T terminates the entire process tree so
-/// no audio keeps playing in the background.
+/// End a playback process immediately.
 pub(super) fn stop_child(mut child: std::process::Child) {
-    #[cfg(windows)]
-    {
-        let pid = child.id();
-        let mut kill_cmd = std::process::Command::new("taskkill");
-        kill_cmd
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        {
-            use std::os::windows::process::CommandExt;
-            kill_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        let _ = kill_cmd.status();
-    }
     let _ = child.kill();
     let _ = child.wait();
-    kill_player_processes();
 }
 
 pub(super) fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::process::Child> {
-    kill_player_processes();
     let sec = format!("{:.3}", at_ms.max(0) as f64 / 1000.0);
     let vol = ((volume.clamp(0.0, 1.0)) * 100.0) as i32;
     if let Some(player) = resolve_player_binary("ffplay") {

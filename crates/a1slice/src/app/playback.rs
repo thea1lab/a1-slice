@@ -9,7 +9,7 @@ use eframe::egui::{self};
 use std::sync::mpsc::{self};
 
 use super::layout::playhead_after_trim;
-use super::support::{kill_player_processes, start_audio, stop_child};
+use super::support::{start_audio, stop_child};
 use super::{A1App, ReviewTrim};
 
 pub(super) struct FrameResult {
@@ -52,9 +52,7 @@ impl A1App {
                     update_texture(&mut self.frame, ctx, image);
                     self.frame_err = None;
                     self.shown_ms = pts_ms;
-                    if (self.playhead_ms - pts_ms).abs() > 80 {
-                        self.playhead_ms = pts_ms;
-                    }
+                    self.playhead_ms = pts_ms;
                 }
                 if disconnected {
                     self.video_stream = None;
@@ -94,7 +92,8 @@ impl A1App {
             return;
         };
         let gap = (self.playhead_ms - self.shown_ms).abs();
-        if (self.frame.is_some() || self.frame_err.is_some()) && gap < 80 {
+        let min_gap = if self.scrubbing { 30 } else { 0 };
+        if (self.frame.is_some() || self.frame_err.is_some()) && gap <= min_gap {
             return;
         }
         let at_ms = self.playhead_ms;
@@ -379,7 +378,6 @@ impl A1App {
         if let Some(child) = self.audio.take() {
             stop_child(child);
         }
-        kill_player_processes();
     }
 }
 

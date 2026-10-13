@@ -127,9 +127,11 @@ impl A1App {
             ) {
                 self.playhead_ms = hit.ms;
                 if hit.dragging {
-                    self.scrubbing = true;
-                    self.stop_audio();
-                    self.stop_video_stream();
+                    if !self.scrubbing {
+                        self.scrubbing = true;
+                        self.stop_audio();
+                        self.stop_video_stream();
+                    }
                 } else {
                     self.scrubbing = false;
                     if self.playing {

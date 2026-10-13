@@ -89,24 +89,8 @@ pub fn grab_frame_sized(
     }
     if let Ok(mut decoder) = builder.build() {
         let target_ms = at_ms.max(0);
-        let _ = decoder.seek(target_ms.saturating_sub(1000));
-        let (time_base_num, time_base_den) = {
-            let tb = decoder.time_base();
-            (tb.numerator() as f64, tb.denominator() as f64)
-        };
-        let mut last_raw = None;
-        while let Ok(raw) = decoder.decode_raw() {
-            let pts_ms = raw
-                .pts()
-                .map(|pts| (pts as f64 * (time_base_num / time_base_den) * 1000.0).round() as i64)
-                .unwrap_or(target_ms);
-            let at_or_past = pts_ms >= target_ms;
-            last_raw = Some(raw);
-            if at_or_past {
-                break;
-            }
-        }
-        if let Some(raw) = last_raw {
+        let _ = decoder.seek(target_ms);
+        if let Ok(raw) = decoder.decode_raw() {
             let w = raw.width();
             let h = raw.height();
             let rgb = raw.data(0);
@@ -272,25 +256,6 @@ mod tests {
             assert_eq!((sfw, sfh), (960, 540));
             assert_eq!(spixels.len(), 960 * 540 * 4);
             println!("video-rs grab_frame_sized elapsed: {elapsed:?}");
-
-            // Check seek accuracy
-            let seek_target = 5123i64;
-            let mut decoder = video_rs::decode::Decoder::new(mov).unwrap();
-            let _ = decoder.seek(seek_target.saturating_sub(1000));
-            let tb = decoder.time_base();
-            let tb_ratio = tb.numerator() as f64 / tb.denominator() as f64;
-            let mut matched_pts = None;
-            while let Ok(raw) = decoder.decode_raw() {
-                let pts = raw
-                    .pts()
-                    .map(|p| (p as f64 * tb_ratio * 1000.0).round() as i64)
-                    .unwrap_or(0);
-                if pts >= seek_target {
-                    matched_pts = Some(pts);
-                    break;
-                }
-            }
-            println!("Target 5123ms matched frame pts: {matched_pts:?}");
         }
     }
 }

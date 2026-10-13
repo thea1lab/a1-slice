@@ -301,7 +301,11 @@ impl eframe::App for A1App {
         }
         if self.playing && !self.scrubbing {
             let dt = ctx.input(|i| i.stable_dt);
-            self.playhead_ms += (dt * 1000.0) as i64;
+            if self.video_stream.is_none() {
+                self.playhead_ms += (dt * 1000.0) as i64;
+            } else if self.playhead_ms < self.shown_ms + 35 {
+                self.playhead_ms += (dt * 1000.0) as i64;
+            }
             if let Some(clip) = self.review_clip() {
                 let view_start = self
                     .review_view
