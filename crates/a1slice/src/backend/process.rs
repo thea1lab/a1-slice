@@ -278,7 +278,10 @@ mod tests {
 
     #[test]
     fn whisper_names_include_gpu_variant() {
-        let (gpu, cpu) = whisper_names();
+        let (gpu, cpu) = a1slice_core::whisper::whisper_binary_names(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        );
         assert!(gpu.contains("gpu"));
         assert!(!cpu.contains("gpu"));
     }

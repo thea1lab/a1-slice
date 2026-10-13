@@ -77,7 +77,7 @@ Screen drawing is covered by the geometry tests in `app/layout.rs`. Do not asser
 
 ## UI
 
-Follow `DESIGN.md`. Charcoal window `#161616`, cream text, orange `#fa520f` for the next action. No light theme. Fonts come from the Noto Sans and Noto Serif files on the machine. Buttons go through `app/widgets.rs`, not a one-off `ui.button`, unless a screen already has a reason to paint its own control.
+Follow `DESIGN.md`. Charcoal window `#161616`, cream text, orange `#fa520f` for the next action. No light theme. Fonts (Noto Sans, Noto Serif, and Noto Sans Mono) are embedded into the app from `resources/fonts/`. Buttons go through `app/widgets.rs`, not a one-off `ui.button`, unless a screen already has a reason to paint its own control.
 
 ## Look at the window
 

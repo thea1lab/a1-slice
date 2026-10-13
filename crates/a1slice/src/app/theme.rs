@@ -38,38 +38,106 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     });
 }
 
+const NOTO_SANS: &[u8] = include_bytes!("../../../../resources/fonts/NotoSans-Regular.ttf");
+const NOTO_SANS_MEDIUM: &[u8] = include_bytes!("../../../../resources/fonts/NotoSans-Medium.ttf");
+const NOTO_SERIF: &[u8] = include_bytes!("../../../../resources/fonts/NotoSerif-Regular.ttf");
+const NOTO_SERIF_MEDIUM: &[u8] = include_bytes!("../../../../resources/fonts/NotoSerif-Medium.ttf");
+const NOTO_MONO: &[u8] = include_bytes!("../../../../resources/fonts/NotoSansMono-Regular.ttf");
+const NOTO_MONO_MEDIUM: &[u8] =
+    include_bytes!("../../../../resources/fonts/NotoSansMono-Medium.ttf");
+
 fn install_type(ctx: &egui::Context) {
-    let sans = "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf";
-    let serif = "/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf";
-    if let Ok(bytes) = std::fs::read(sans) {
-        ctx.add_font(egui::epaint::text::FontInsert::new(
-            "Noto Sans",
-            egui::FontData::from_owned(bytes),
-            vec![egui::epaint::text::InsertFontFamily {
+    ctx.add_font(egui::epaint::text::FontInsert::new(
+        "Noto Sans",
+        egui::FontData::from_static(NOTO_SANS),
+        vec![
+            egui::epaint::text::InsertFontFamily {
                 family: egui::FontFamily::Proportional,
                 priority: egui::epaint::text::FontPriority::Highest,
-            }],
-        ));
-    }
-    if let Ok(bytes) = std::fs::read(serif) {
-        ctx.add_font(egui::epaint::text::FontInsert::new(
-            "Noto Serif",
-            egui::FontData::from_owned(bytes),
-            vec![egui::epaint::text::InsertFontFamily {
-                family: egui::FontFamily::Name("Noto Serif".into()),
+            },
+            egui::epaint::text::InsertFontFamily {
+                family: egui::FontFamily::Name("Noto Sans".into()),
                 priority: egui::epaint::text::FontPriority::Highest,
-            }],
-        ));
-    }
-    let mono = "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf";
-    if let Ok(bytes) = std::fs::read(mono) {
-        ctx.add_font(egui::epaint::text::FontInsert::new(
-            "Noto Sans Mono",
-            egui::FontData::from_owned(bytes),
-            vec![egui::epaint::text::InsertFontFamily {
+            },
+            egui::epaint::text::InsertFontFamily {
+                family: egui::FontFamily::Name("Noto Serif".into()),
+                priority: egui::epaint::text::FontPriority::Lowest,
+            },
+        ],
+    ));
+    ctx.add_font(egui::epaint::text::FontInsert::new(
+        "Noto Sans Medium",
+        egui::FontData::from_static(NOTO_SANS_MEDIUM),
+        vec![egui::epaint::text::InsertFontFamily {
+            family: egui::FontFamily::Name("Noto Sans Medium".into()),
+            priority: egui::epaint::text::FontPriority::Highest,
+        }],
+    ));
+    ctx.add_font(egui::epaint::text::FontInsert::new(
+        "Noto Serif",
+        egui::FontData::from_static(NOTO_SERIF),
+        vec![egui::epaint::text::InsertFontFamily {
+            family: egui::FontFamily::Name("Noto Serif".into()),
+            priority: egui::epaint::text::FontPriority::Highest,
+        }],
+    ));
+    ctx.add_font(egui::epaint::text::FontInsert::new(
+        "Noto Serif Medium",
+        egui::FontData::from_static(NOTO_SERIF_MEDIUM),
+        vec![egui::epaint::text::InsertFontFamily {
+            family: egui::FontFamily::Name("Noto Serif Medium".into()),
+            priority: egui::epaint::text::FontPriority::Highest,
+        }],
+    ));
+    ctx.add_font(egui::epaint::text::FontInsert::new(
+        "Noto Sans Mono",
+        egui::FontData::from_static(NOTO_MONO),
+        vec![
+            egui::epaint::text::InsertFontFamily {
                 family: egui::FontFamily::Name("Noto Sans Mono".into()),
                 priority: egui::epaint::text::FontPriority::Highest,
-            }],
-        ));
+            },
+            egui::epaint::text::InsertFontFamily {
+                family: egui::FontFamily::Monospace,
+                priority: egui::epaint::text::FontPriority::Highest,
+            },
+        ],
+    ));
+    ctx.add_font(egui::epaint::text::FontInsert::new(
+        "Noto Sans Mono Medium",
+        egui::FontData::from_static(NOTO_MONO_MEDIUM),
+        vec![egui::epaint::text::InsertFontFamily {
+            family: egui::FontFamily::Name("Noto Sans Mono Medium".into()),
+            priority: egui::epaint::text::FontPriority::Highest,
+        }],
+    ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_theme_binds_all_noto_fonts() {
+        let ctx = egui::Context::default();
+        apply_theme(&ctx);
+        let families = [
+            "Noto Serif",
+            "Noto Serif Medium",
+            "Noto Sans",
+            "Noto Sans Medium",
+            "Noto Sans Mono",
+            "Noto Sans Mono Medium",
+        ];
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                for family in families {
+                    ui.label(egui::RichText::new("Test").font(egui::FontId::new(
+                        14.0,
+                        egui::FontFamily::Name(family.into()),
+                    )));
+                }
+            });
+        });
     }
 }

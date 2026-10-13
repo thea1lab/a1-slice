@@ -392,10 +392,7 @@ mod tests {
             choose_whisper_binary_name(
                 "windows",
                 "x86_64",
-                &[
-                    "whisper-cli-win-x64.exe",
-                    "whisper-cli-win-x64-gpu.exe",
-                ]
+                &["whisper-cli-win-x64.exe", "whisper-cli-win-x64-gpu.exe",]
             ),
             "whisper-cli-win-x64-gpu.exe"
         );

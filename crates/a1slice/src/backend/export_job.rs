@@ -198,6 +198,25 @@ pub fn export_reframe(
     Ok(out_dir)
 }
 
+fn font_dirs() -> Vec<String> {
+    let mut dirs = vec![
+        "resources/fonts".to_string(),
+        format!("{}/../../resources/fonts", env!("CARGO_MANIFEST_DIR")),
+    ];
+    if let Ok(appdir) = std::env::var("APPDIR") {
+        dirs.push(format!("{}/resources/fonts", appdir));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            dirs.push(parent.join("resources/fonts").display().to_string());
+            if let Some(grandparent) = parent.parent() {
+                dirs.push(grandparent.join("resources/fonts").display().to_string());
+            }
+        }
+    }
+    dirs
+}
+
 pub fn export_captions(
     video: &Path,
     cues: &[TranscriptSegment],
@@ -228,7 +247,9 @@ pub fn export_captions(
     let file = out_dir.join(format!("{stem}.mp4"));
     let srt = std::env::temp_dir().join(format!("a1slice-{stamp}.srt"));
     std::fs::write(&srt, generate_srt(cues)).map_err(|e| e.to_string())?;
-    let font = find_caption_font(style.font, &[])
+    let dirs = font_dirs();
+    let dir_refs: Vec<&str> = dirs.iter().map(String::as_str).collect();
+    let font = find_caption_font(style.font, &dir_refs)
         .ok_or_else(|| "No caption font found on this computer".to_string())?;
     let filter = caption_burn_filter(
         &srt.display().to_string(),
