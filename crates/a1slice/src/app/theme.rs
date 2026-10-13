@@ -16,6 +16,11 @@ pub(super) const HAIRLINE_HOVER: Color32 = Color32::from_rgb(0xc7, 0xc7, 0xc7);
 pub(super) const HOLD_ARM_SECS: f64 = 0.280;
 pub(super) const HOLD_STEP_SECS: f64 = 0.340;
 
+/// Placeholder copy inside a field. Stone, so it does not read as typed text.
+pub(super) fn placeholder(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text.into()).color(STONE)
+}
+
 pub(super) fn apply_theme(ctx: &egui::Context) {
     install_type(ctx);
     let mut visuals = egui::Visuals::dark();
@@ -29,6 +34,8 @@ pub(super) fn apply_theme(ctx: &egui::Context) {
     visuals.selection.bg_fill = ORANGE;
     visuals.hyperlink_color = ORANGE;
     visuals.widgets.active.bg_fill = ORANGE;
+    // Hint text uses this. Typed text stays cream through override_text_color.
+    visuals.weak_text_color = Some(STONE);
     ctx.set_visuals(visuals);
     ctx.style_mut(|style| {
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);
@@ -139,5 +146,12 @@ mod tests {
                 }
             });
         });
+    }
+
+    #[test]
+    fn placeholder_color_is_stone() {
+        let ctx = egui::Context::default();
+        apply_theme(&ctx);
+        assert_eq!(ctx.style().visuals.weak_text_color(), STONE);
     }
 }

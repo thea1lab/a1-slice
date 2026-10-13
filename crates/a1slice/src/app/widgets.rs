@@ -4,7 +4,9 @@ use a1slice_core::types::*;
 use eframe::egui::{self, Color32, RichText, Stroke};
 
 use super::paint::paint_tool_icon;
-use super::theme::{BEIGE, CREAM, CREAM_HEAD, HAIRLINE, HAIRLINE_HOVER, MUTED, ORANGE, SURFACE};
+use super::theme::{
+    BEIGE, CREAM, CREAM_HEAD, HAIRLINE, HAIRLINE_HOVER, MUTED, ORANGE, STONE, SURFACE,
+};
 
 pub(super) fn home_tile(
     ui: &mut egui::Ui,
@@ -66,6 +68,36 @@ pub(super) fn home_tile(
 
 fn tile_caption(text: &str, size: f32, color: Color32) -> egui::Label {
     egui::Label::new(RichText::new(text).size(size).color(color)).selectable(false)
+}
+
+/// The shared text-field chrome. Placeholder copy still has to use `placeholder`.
+pub(super) fn input_field(
+    ui: &mut egui::Ui,
+    add: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> egui::Response {
+    ui.scope(|ui| {
+        {
+            let look = ui.style_mut();
+            let input = Color32::from_rgb(0x14, 0x14, 0x14);
+            let edge = Color32::from_rgb(0x3a, 0x3a, 0x3a);
+            for visuals in [
+                &mut look.visuals.widgets.inactive,
+                &mut look.visuals.widgets.hovered,
+                &mut look.visuals.widgets.active,
+            ] {
+                visuals.corner_radius = egui::CornerRadius::same(8);
+                visuals.bg_fill = input;
+            }
+            look.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, edge);
+            look.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ORANGE);
+            look.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, ORANGE);
+            look.visuals.extreme_bg_color = input;
+            look.visuals.override_text_color = Some(CREAM);
+            look.visuals.weak_text_color = Some(STONE);
+        }
+        add(ui)
+    })
+    .inner
 }
 
 pub(super) fn with_sheet(ui: &mut egui::Ui, body: impl FnOnce(&mut egui::Ui)) {

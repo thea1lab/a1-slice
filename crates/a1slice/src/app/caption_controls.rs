@@ -8,8 +8,8 @@ use a1slice_core::types::*;
 use eframe::egui::{self, Color32, RichText, Stroke};
 
 use super::support::normalize_hex;
-use super::theme::{HAIRLINE, HAIRLINE_HOVER, MUTED, ORANGE};
-use super::widgets::choice;
+use super::theme::{placeholder, HAIRLINE, HAIRLINE_HOVER, MUTED, ORANGE};
+use super::widgets::{choice, input_field};
 
 /// Space between buttons in one group. The buttons themselves stay 44px tall.
 pub(super) const CHIP_GAP: f32 = 8.0;
@@ -271,25 +271,8 @@ fn text_field(
     height: f32,
     hint: &str,
 ) -> egui::Response {
-    ui.scope(|ui| {
-        {
-            let look = ui.style_mut();
-            let input = Color32::from_rgb(0x14, 0x14, 0x14);
-            let edge = Color32::from_rgb(0x3a, 0x3a, 0x3a);
-            for visuals in [
-                &mut look.visuals.widgets.inactive,
-                &mut look.visuals.widgets.hovered,
-                &mut look.visuals.widgets.active,
-            ] {
-                visuals.corner_radius = egui::CornerRadius::same(8);
-                visuals.bg_fill = input;
-            }
-            look.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, edge);
-            look.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ORANGE);
-            look.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, ORANGE);
-            look.visuals.extreme_bg_color = input;
-        }
-        let font = if height >= 40.0 { 16.0 } else { 14.0 };
+    let font = if height >= 40.0 { 16.0 } else { 14.0 };
+    input_field(ui, |ui| {
         ui.add(
             egui::TextEdit::singleline(text)
                 .desired_width(width)
@@ -297,11 +280,10 @@ fn text_field(
                 .margin(egui::Margin::symmetric(8, 0))
                 .horizontal_align(egui::Align::Center)
                 .vertical_align(egui::Align::Center)
-                .hint_text(hint)
+                .hint_text(placeholder(hint))
                 .font(egui::FontId::proportional(font)),
         )
     })
-    .inner
 }
 
 fn hex_color(hex: &str) -> Color32 {
@@ -395,5 +377,48 @@ mod tests {
         assert!(size.top() >= place.bottom() + 16.0);
         assert!(font.top() >= size.bottom() + 16.0);
         assert!((place.left() - size.left()).abs() < 2.0);
+    }
+
+    #[test]
+    fn the_color_placeholder_is_stone() {
+        let ctx = egui::Context::default();
+        crate::app::theme::apply_theme(&ctx);
+        let mut text = String::new();
+        let output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                super::text_field(ui, &mut text, 96.0, 32.0, "#ffb83e");
+            });
+        });
+        let mut sections = Vec::new();
+        for clipped in output.shapes {
+            hint_sections(&clipped.shape, &mut sections);
+        }
+        let placeholder = sections
+            .iter()
+            .find(|(text, _)| text.contains("ffb83e"))
+            .map(|(_, color)| *color);
+        assert_eq!(
+            placeholder,
+            Some(crate::app::theme::STONE),
+            "placeholder should be stone gray, got {sections:?}"
+        );
+    }
+
+    fn hint_sections(shape: &egui::Shape, sections: &mut Vec<(String, egui::Color32)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                let job = &text.galley.job;
+                for section in &job.sections {
+                    let slice = job.text[section.byte_range.clone()].to_string();
+                    sections.push((slice, section.format.color));
+                }
+            }
+            egui::Shape::Vec(children) => {
+                for child in children {
+                    hint_sections(child, sections);
+                }
+            }
+            _ => {}
+        }
     }
 }

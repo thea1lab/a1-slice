@@ -195,6 +195,7 @@ components:
   text-input:
     backgroundColor: "{colors.surface-input}"
     textColor: "{colors.cream-text}"
+    placeholderColor: "{colors.stone}"
     typography: "{typography.body-md}"
     rounded: "{rounded.md}"
     padding: "12px 14px"
@@ -202,6 +203,7 @@ components:
   text-input-focused:
     backgroundColor: "{colors.surface-input}"
     textColor: "{colors.cream-text}"
+    placeholderColor: "{colors.stone}"
     border: "1px solid {colors.primary}"
   icon-tile:
     backgroundColor: "{colors.cream}"
@@ -275,7 +277,7 @@ The stripe runs `{colors.primary}` → `{colors.sunshine-800}` → `{colors.suns
 - **Cream text** (`{colors.cream-text}`): body copy and button labels
 - **Cream muted** (`{colors.cream-muted}`): a quieter warm tone when cream text is too strong
 - **Muted** (`{colors.muted}`): help text, file names in the title bar, timestamps
-- **Stone** (`{colors.stone}`): disabled labels
+- **Stone** (`{colors.stone}`): disabled labels, and placeholder text inside a field
 - **Ink** (`{colors.ink}`): text and icons that sit on a cream tile
 
 ### Surfaces
@@ -442,8 +444,9 @@ Pressed and selected states are specified. Hover only lightens a border or a qui
 **`text-input`** — a text field or a number field.
 
 - Background `{colors.surface-input}`, text `{colors.cream-text}`, border `1px solid {colors.hairline-strong}`, radius `{rounded.md}`, padding `12px 14px`
+- Placeholder text is `{colors.stone}` on every field. It stays stone while the field is focused. Typed text stays `{colors.cream-text}`
 
-**`text-input-focused`** — the border becomes `{colors.primary}`.
+**`text-input-focused`** — the border becomes `{colors.primary}`. The placeholder color does not change.
 
 A number that people rarely change sits in a collapsed group. The summary says when to open it. Each row names the setting in plain language and puts the field on the right.
 

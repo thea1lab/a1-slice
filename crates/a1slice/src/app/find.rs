@@ -5,9 +5,22 @@ use a1slice_core::wizard::{ReturnTo, WizardAction};
 use eframe::egui::{self, Color32, RichText, Stroke};
 
 use super::support::clock;
-use super::theme::{CREAM, CREAM_HEAD, HAIRLINE, MUTED, SURFACE};
-use super::widgets::{choice, danger, primary_lg, progress, secondary, with_sheet};
+use super::theme::{placeholder, CREAM, CREAM_HEAD, HAIRLINE, MUTED, SURFACE};
+use super::widgets::{choice, danger, input_field, primary_lg, progress, secondary, with_sheet};
 use super::A1App;
+
+const LOOK_FOR_HINT: &str = "Two clips about the demo, or the part where the bug shows up.";
+
+fn look_for_field(ui: &mut egui::Ui, hint: &mut String) -> egui::Response {
+    input_field(ui, |ui| {
+        ui.add(
+            egui::TextEdit::multiline(hint)
+                .desired_rows(3)
+                .hint_text(placeholder(LOOK_FOR_HINT))
+                .desired_width(f32::INFINITY),
+        )
+    })
+}
 
 impl A1App {
     pub(super) fn find(&mut self, ui: &mut egui::Ui) {
@@ -117,12 +130,7 @@ impl A1App {
             );
             ui.add_space(8.0);
             let mut hint = self.state.user_hint.clone();
-            let hint_edit = ui.add(
-                egui::TextEdit::multiline(&mut hint)
-                    .desired_rows(3)
-                    .hint_text("Two clips about the demo, or the part where the bug shows up.")
-                    .desired_width(f32::INFINITY),
-            );
+            let hint_edit = look_for_field(ui, &mut hint);
             if hint_edit.changed() {
                 self.dispatch(WizardAction::SetUserHint(hint));
             }
@@ -189,5 +197,54 @@ impl A1App {
             }
         });
         ui.add_space(80.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::look_for_field;
+    use crate::app::theme::{self, STONE};
+
+    #[test]
+    fn the_look_for_placeholder_is_stone() {
+        let ctx = egui::Context::default();
+        theme::apply_theme(&ctx);
+        let mut hint = String::new();
+        let output = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                look_for_field(ui, &mut hint);
+            });
+        });
+        let mut sections = Vec::new();
+        for clipped in output.shapes {
+            hint_sections(&clipped.shape, &mut sections);
+        }
+        let placeholder = sections
+            .iter()
+            .find(|(text, _)| text.contains("bug shows up"))
+            .map(|(_, color)| *color);
+        assert_eq!(
+            placeholder,
+            Some(STONE),
+            "placeholder should be stone gray, got {sections:?}"
+        );
+    }
+
+    fn hint_sections(shape: &egui::Shape, sections: &mut Vec<(String, egui::Color32)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                let job = &text.galley.job;
+                for section in &job.sections {
+                    let slice = job.text[section.byte_range.clone()].to_string();
+                    sections.push((slice, section.format.color));
+                }
+            }
+            egui::Shape::Vec(children) => {
+                for child in children {
+                    hint_sections(child, sections);
+                }
+            }
+            _ => {}
+        }
     }
 }

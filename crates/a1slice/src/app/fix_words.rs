@@ -7,12 +7,12 @@ use a1slice_core::caption_edit::{
 use a1slice_core::sidecars;
 use a1slice_core::types::*;
 use a1slice_core::wizard::WizardAction;
-use eframe::egui::{self, Color32, RichText, Stroke};
+use eframe::egui::{self, RichText};
 
 use super::support::{active_cues, caption_project, clock};
 
-use super::theme::{CREAM, CREAM_HEAD, HAIRLINE, MUTED, ORANGE, STONE, SURFACE};
-use super::widgets::{choice, primary_lg, review_secondary};
+use super::theme::{placeholder, CREAM, CREAM_HEAD, HAIRLINE, MUTED, SURFACE};
+use super::widgets::{choice, input_field, primary_lg, review_secondary};
 use super::A1App;
 
 const SAVE_CAPTIONS: &str = "Save the new captions";
@@ -528,7 +528,7 @@ fn placed_words_per_line(ui: &mut egui::Ui, text: &mut String) -> (egui::Respons
 }
 
 fn number_field(ui: &mut egui::Ui, text: &mut String) -> egui::Response {
-    field(ui, |ui| {
+    input_field(ui, |ui| {
         ui.add(
             egui::TextEdit::singleline(text)
                 .desired_width(64.0)
@@ -542,40 +542,15 @@ fn number_field(ui: &mut egui::Ui, text: &mut String) -> egui::Response {
 }
 
 fn note_field(ui: &mut egui::Ui, text: &mut String) {
-    field(ui, |ui| {
+    input_field(ui, |ui| {
         ui.add(
             egui::TextEdit::multiline(text)
                 .desired_width(f32::INFINITY)
                 .desired_rows(2)
-                .hint_text(RichText::new("For example: the name is Anna, not Ana").color(STONE))
+                .hint_text(placeholder("For example: the name is Anna, not Ana"))
                 .font(egui::FontId::proportional(16.0)),
         )
     });
-}
-
-fn field(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> egui::Response) -> egui::Response {
-    ui.scope(|ui| {
-        {
-            let look = ui.style_mut();
-            let input = Color32::from_rgb(0x14, 0x14, 0x14);
-            let edge = Color32::from_rgb(0x3a, 0x3a, 0x3a);
-            for visuals in [
-                &mut look.visuals.widgets.inactive,
-                &mut look.visuals.widgets.hovered,
-                &mut look.visuals.widgets.active,
-            ] {
-                visuals.corner_radius = egui::CornerRadius::same(8);
-                visuals.bg_fill = input;
-            }
-            look.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, edge);
-            look.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ORANGE);
-            look.visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, ORANGE);
-            look.visuals.extreme_bg_color = input;
-            look.visuals.override_text_color = Some(CREAM);
-        }
-        add(ui)
-    })
-    .inner
 }
 
 #[cfg(test)]
@@ -625,6 +600,7 @@ mod tests {
     #[test]
     fn the_note_placeholder_is_gray() {
         let ctx = egui::Context::default();
+        crate::app::theme::apply_theme(&ctx);
         let mut text = String::new();
         let output = ctx.run(screen(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
