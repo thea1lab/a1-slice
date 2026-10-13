@@ -145,7 +145,6 @@ pub fn start_video_stream(
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_flag = cancel.clone();
     let (tx, rx) = sync_channel(2);
-    let start_wall = Instant::now();
 
     std::thread::spawn(move || {
         let mut builder = DecoderBuilder::new(path_buf.as_path());
@@ -168,6 +167,7 @@ pub fn start_video_stream(
 
         let mut ready_to_play = false;
         let mut frame_count = 0i64;
+        let mut stream_clock: Option<(Instant, i64)> = None;
 
         while !cancel_flag.load(Ordering::Relaxed) {
             let raw = match decoder.decode_raw() {
@@ -187,9 +187,18 @@ pub fn start_video_stream(
                 ready_to_play = true;
             }
 
-            let elapsed_stream_ms = (pts_ms - start_seek_ms).max(0);
+            let (clock_start, base_pts) = match stream_clock {
+                Some(pair) => pair,
+                None => {
+                    let now = Instant::now();
+                    stream_clock = Some((now, pts_ms));
+                    (now, pts_ms)
+                }
+            };
+
+            let elapsed_stream_ms = (pts_ms - base_pts).max(0);
             let target_duration = std::time::Duration::from_millis(elapsed_stream_ms as u64);
-            let wall_elapsed = start_wall.elapsed();
+            let wall_elapsed = clock_start.elapsed();
 
             if wall_elapsed < target_duration {
                 let to_sleep = target_duration - wall_elapsed;
@@ -256,6 +265,24 @@ mod tests {
             assert_eq!((sfw, sfh), (960, 540));
             assert_eq!(spixels.len(), 960 * 540 * 4);
             println!("video-rs grab_frame_sized elapsed: {elapsed:?}");
+
+            let stream = start_video_stream(mov, 59200, 960, (1920, 1080)).expect("stream start");
+            let mut frames = Vec::new();
+            let stream_recv_start = std::time::Instant::now();
+            while frames.len() < 10 {
+                if let Ok((_, _, _, pts)) = stream
+                    .frame_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                {
+                    frames.push((pts, stream_recv_start.elapsed()));
+                }
+            }
+            assert_eq!(frames.len(), 10);
+            assert_eq!(frames[0].0, 59200);
+            assert!(frames[9].0 >= 59340);
+            for (i, (pts, el)) in frames.iter().enumerate() {
+                println!("Frame {i}: pts={pts}ms, recv_elapsed={el:?}");
+            }
         }
     }
 }

@@ -185,20 +185,27 @@ pub(super) fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::pr
     let vol = ((volume.clamp(0.0, 1.0)) * 100.0) as i32;
     if let Some(player) = resolve_player_binary("ffplay") {
         let mut cmd = std::process::Command::new(player);
-        cmd.args([
-            "-nodisp",
-            "-autoexit",
-            "-ss",
-            &sec,
-            "-volume",
-            &vol.to_string(),
-            "-loglevel",
-            "quiet",
-            path,
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        let mut args = vec![
+            "-nodisp".to_string(),
+            "-autoexit".to_string(),
+            "-ss".to_string(),
+            sec.clone(),
+        ];
+        if at_ms > 0 {
+            args.push("-af".to_string());
+            args.push(format!("atrim=start={sec}"));
+        }
+        args.extend([
+            "-volume".to_string(),
+            vol.to_string(),
+            "-loglevel".to_string(),
+            "quiet".to_string(),
+            path.to_string(),
+        ]);
+        cmd.args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -211,6 +218,7 @@ pub(super) fn start_audio(path: &str, at_ms: i64, volume: f32) -> Option<std::pr
         cmd.args([
             "--no-video",
             "--really-quiet",
+            "--hr-seek=yes",
             &format!("--start={sec}"),
             &format!("--volume={vol}"),
             path,
